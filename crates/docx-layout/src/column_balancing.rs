@@ -54,10 +54,8 @@ fn get_balanced_section_height(
             (&mb.block, &mb.measure)
         {
             total_height += get_spacing_before(block);
-            let mut measured_line_height = 0.0_f64;
             for (line_index, line) in measure.lines.iter().enumerate() {
                 let line_height = line.line_height + line.float_skip_before.unwrap_or(0.0);
-                measured_line_height += line_height;
                 total_height += line_height;
                 let lines_after = measure.lines.len() - line_index - 1;
                 let legal_inside = block.attrs.as_ref().and_then(|attrs| attrs.keep_lines)
@@ -68,7 +66,6 @@ fn get_balanced_section_height(
                     legal_breaks.push(total_height);
                 }
             }
-            total_height += (measure.total_height - measured_line_height).max(0.0);
             total_height += get_spacing_after(block);
             if block.attrs.as_ref().and_then(|attrs| attrs.keep_next) != Some(true) {
                 legal_breaks.push(total_height);
@@ -303,12 +300,22 @@ mod tests {
         assert_eq!(get_spacing_after(&block), 6.0);
 
         // A two-line paragraph has no legal internal widow boundary, so the
-        // whole 56px paragraph stays in the first column.
+        // whole 56px paragraph stays in the first column. The measurer folds
+        // spacing into totalHeight, so it reads 10 + 2 x 20 + 6.
         let measured = vec![MeasuredBlock {
             block: LayoutBlock::Paragraph(block),
             measure: BlockExtent::Paragraph(ParagraphExtent {
-                lines: vec![TypesetRow::default(), TypesetRow::default()],
-                total_height: 40.0,
+                lines: vec![
+                    TypesetRow {
+                        line_height: 20.0,
+                        ..Default::default()
+                    },
+                    TypesetRow {
+                        line_height: 20.0,
+                        ..Default::default()
+                    },
+                ],
+                total_height: 56.0,
             }),
         }];
         let mut paginator = MockPaginator::new(2.0, 100.0, 400.0);

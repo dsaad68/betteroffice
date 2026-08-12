@@ -32,7 +32,7 @@
 use crate::LayoutError;
 use crate::hooks;
 use crate::page_flow::{PageFlowGeometry, Paginator};
-use crate::paragraph_spacing::{get_spacing_after, get_spacing_before};
+use crate::paragraph_spacing::{get_spacing_after, get_spacing_before, lines_height};
 use crate::prescan::{LayoutPlan, SectionLayoutConfig, default_columns, prescan};
 use crate::resolve_lines::{ResolvedLine, resolve_line_segments, utf16_len};
 use crate::section_breaks::resolve_page_margins;
@@ -843,9 +843,7 @@ fn layout_paragraph(
 
     let space_before = get_spacing_before(block);
     let space_after = get_spacing_after(block);
-    let paragraph_height = lines.iter().fold(0.0, |sum, line| {
-        sum + line.line_height + line.float_skip_before.unwrap_or(0.0)
-    });
+    let paragraph_height = lines_height(lines);
     let widow_control = lines.len() >= 4
         && block
             .attrs
@@ -1254,6 +1252,15 @@ mod pagination_rule_tests {
         height: f64,
         attrs: serde_json::Value,
     ) -> serde_json::Value {
+        // like the measurer, totalHeight carries the paragraph's spacing
+        let spacing = |edge: &str| {
+            attrs
+                .get("spacing")
+                .and_then(|spacing| spacing.get(edge))
+                .and_then(serde_json::Value::as_f64)
+                .unwrap_or(0.0)
+        };
+        let total_height = lines as f64 * height + spacing("before") + spacing("after");
         json!({
             "block": {
                 "kind": "paragraph", "id": id,
@@ -1263,7 +1270,7 @@ mod pagination_rule_tests {
             "measure": {
                 "kind": "paragraph",
                 "lines": vec![line(height); lines],
-                "totalHeight": lines as f64 * height,
+                "totalHeight": total_height,
             },
         })
     }
@@ -1474,6 +1481,32 @@ mod pagination_rule_tests {
         assert_eq!(paragraph_slices(&default, 3.0), vec![(1, 0, 1), (2, 1, 2)]);
         assert_eq!(disabled.pages.len(), 2);
         assert_eq!(paragraph_slices(&disabled, 3.0), vec![(1, 0, 2)]);
+    }
+
+    #[test]
+    fn keep_with_next_group_holds_the_page_its_spacing_fits_once() {
+        let spaced_heading = json!({
+            "keepNext": true,
+            "spacing": { "before": 10.0, "after": 10.0 },
+        });
+        let fits = layout(vec![
+            paragraph(1, 1, 40.0, json!({})),
+            paragraph(2, 1, 20.0, spaced_heading.clone()),
+            paragraph(3, 1, 20.0, json!({})),
+        ]);
+        let does_not_fit = layout(vec![
+            paragraph(1, 1, 60.0, json!({})),
+            paragraph(2, 1, 20.0, spaced_heading),
+            paragraph(3, 1, 20.0, json!({})),
+        ]);
+
+        assert_eq!(fits.pages.len(), 1);
+        assert_eq!(paragraph_slices(&fits, 2.0), vec![(0, 0, 1)]);
+        assert_eq!(paragraph_slices(&fits, 3.0), vec![(0, 0, 1)]);
+
+        assert_eq!(does_not_fit.pages.len(), 2);
+        assert_eq!(paragraph_slices(&does_not_fit, 2.0), vec![(1, 0, 1)]);
+        assert_eq!(paragraph_slices(&does_not_fit, 3.0), vec![(1, 0, 1)]);
     }
 
     #[test]

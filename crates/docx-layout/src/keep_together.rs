@@ -6,19 +6,20 @@
 //! the placement walk can skip blocks a group already accounted for.
 //!
 //! [`measure_keep_with_next_group`] turns a group into the height the contract
-//! actually demands: every member paragraph in full (spacing before, measured
-//! height, spacing after) plus one witness slice of the follower — never the
-//! follower in full, since the binding is only to where it begins. The witness
-//! is a paragraph's first line, a table's first row, the whole height of an
-//! image or text box, and nothing at all for any other follower kind.
+//! actually demands: every member paragraph at its flow height plus one witness
+//! slice of the follower — never the follower in full, since the binding is only
+//! to where it begins. The witness is a paragraph's first line, a table's first
+//! row, the whole height of an image or text box, and nothing at all for any
+//! other follower kind.
 //!
-//! Spacing is read through the shared paragraph-spacing helpers, which suppress
-//! style-inherited spacing on empty paragraphs, so a chain of blank paragraphs
-//! does not inflate the budget with spacing that never paints.
+//! Member height comes from the shared paragraph-spacing helpers, so the budget
+//! is exactly what placement will consume: spacing counted once, and
+//! style-inherited spacing on a blank paragraph dropped the way placement drops
+//! it.
 
 use std::collections::{BTreeMap, BTreeSet};
 
-use crate::paragraph_spacing::{get_spacing_after, get_spacing_before};
+use crate::paragraph_spacing::paragraph_flow_height;
 use crate::types::{BlockExtent, LayoutBlock, MeasuredBlock};
 
 /// A maximal keep-with-next run and its follower.
@@ -144,7 +145,7 @@ pub fn measure_keep_with_next_group(group: &KeepWithNextGroup, measured: &[Measu
         else {
             continue;
         };
-        budget += get_spacing_before(block) + measure.total_height + get_spacing_after(block);
+        budget += paragraph_flow_height(block, measure);
     }
 
     budget
@@ -284,6 +285,48 @@ mod tests {
             measure_keep_with_next_group(group.unwrap(), &measured),
             40.0
         );
+    }
+
+    // the measurer folds spacing into totalHeight, so a member must not be
+    // charged for it twice
+    fn make_spaced_paragraph(spacing: (f64, f64)) -> LayoutBlock {
+        paragraph(
+            vec![text_run("Heading")],
+            Some(ParagraphAttrs {
+                keep_next: Some(true),
+                spacing: Some(ParagraphSpacing {
+                    before: Some(spacing.0),
+                    after: Some(spacing.1),
+                    ..Default::default()
+                }),
+                ..Default::default()
+            }),
+        )
+    }
+
+    #[test]
+    fn counts_member_spacing_once_when_the_measure_already_carries_it() {
+        let blocks = vec![
+            make_spaced_paragraph((10.0, 10.0)),
+            make_paragraph_block("Follower", false),
+        ];
+        let measures = vec![
+            BlockExtent::Paragraph(ParagraphExtent {
+                lines: vec![make_line(20.0)],
+                total_height: 40.0,
+            }),
+            make_paragraph_measure(vec![make_line(20.0)]),
+        ];
+        let measured = to_measured_blocks(blocks, measures);
+
+        let scan = analyze_keep_with_next(&measured);
+        let group = scan
+            .groups_by_head
+            .get(&0)
+            .expect("group headed at block 0");
+
+        // 10 before + 20 line + 10 after + 20 witness line
+        assert_eq!(measure_keep_with_next_group(group, &measured), 60.0);
     }
 
     #[test]
