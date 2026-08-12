@@ -14,13 +14,17 @@
 //! - at a paragraph's end, unless it sets `w:keepNext`;
 //! - after every table row, and after an image or text box.
 //!
+//! The range stacks through the shared [`FlowStack`], so the depth it balances
+//! is the depth placement will produce: the gap between two blocks is the
+//! larger of the spacings that meet there, not their sum.
+//!
 //! Balancing is abandoned — leaving the region at full height — when the
 //! section has no content, when the range holds any block kind other than those
 //! above (section breaks are simply skipped), when there is a single column,
 //! when the content cannot fit the region even across all columns, or when the
 //! snapped height is not actually shorter than the region.
 
-use crate::paragraph_spacing::{get_spacing_after, get_spacing_before};
+use crate::paragraph_spacing::{FlowStack, get_spacing_after, get_spacing_before};
 use crate::types::{BlockExtent, ColumnLayout, LayoutBlock, MeasuredBlock};
 
 /// Page-flow operations required by column balancing.
@@ -45,7 +49,7 @@ fn get_balanced_section_height(
     start: usize,
     end: usize,
 ) -> Option<SectionBalance> {
-    let mut total_height = 0.0_f64;
+    let mut stack = FlowStack::default();
     let mut has_content = false;
     let mut legal_breaks = Vec::new();
 
@@ -53,22 +57,21 @@ fn get_balanced_section_height(
         if let (LayoutBlock::Paragraph(block), BlockExtent::Paragraph(measure)) =
             (&mb.block, &mb.measure)
         {
-            total_height += get_spacing_before(block);
+            stack.open(get_spacing_before(block));
             for (line_index, line) in measure.lines.iter().enumerate() {
-                let line_height = line.line_height + line.float_skip_before.unwrap_or(0.0);
-                total_height += line_height;
+                stack.advance(line.line_height + line.float_skip_before.unwrap_or(0.0));
                 let lines_after = measure.lines.len() - line_index - 1;
                 let legal_inside = block.attrs.as_ref().and_then(|attrs| attrs.keep_lines)
                     != Some(true)
                     && line_index >= 1
                     && lines_after >= 2;
                 if legal_inside {
-                    legal_breaks.push(total_height);
+                    legal_breaks.push(stack.height());
                 }
             }
-            total_height += get_spacing_after(block);
+            stack.close(get_spacing_after(block));
             if block.attrs.as_ref().and_then(|attrs| attrs.keep_next) != Some(true) {
-                legal_breaks.push(total_height);
+                legal_breaks.push(stack.height_with_trailing());
             }
             has_content = has_content || !measure.lines.is_empty();
             continue;
@@ -81,19 +84,19 @@ fn get_balanced_section_height(
         match &mb.measure {
             BlockExtent::Table(table) => {
                 for row in &table.rows {
-                    total_height += row.height;
-                    legal_breaks.push(total_height);
+                    stack.push(0.0, row.height, 0.0);
+                    legal_breaks.push(stack.height());
                 }
                 has_content = has_content || !table.rows.is_empty();
             }
             BlockExtent::Image(image) => {
-                total_height += image.height;
-                legal_breaks.push(total_height);
+                stack.push(0.0, image.height, 0.0);
+                legal_breaks.push(stack.height());
                 has_content = true;
             }
             BlockExtent::TextBox(text_box) => {
-                total_height += text_box.height;
-                legal_breaks.push(total_height);
+                stack.push(0.0, text_box.height, 0.0);
+                legal_breaks.push(stack.height());
                 has_content = true;
             }
             _ => return None,
@@ -102,7 +105,7 @@ fn get_balanced_section_height(
 
     if has_content {
         Some(SectionBalance {
-            total_height,
+            total_height: stack.height_with_trailing(),
             legal_breaks,
         })
     } else {
@@ -239,6 +242,38 @@ mod tests {
         }
     }
 
+    /// Like [`text_paragraph`] with authored spacing, folded into `totalHeight`
+    /// the way the measurer folds it.
+    fn spaced_text_paragraph(
+        line_count: usize,
+        line_height: f64,
+        spacing: (f64, f64),
+    ) -> MeasuredBlock {
+        let block = para_block(
+            vec![text_run("x")],
+            Some(ParagraphAttrs {
+                spacing: Some(ParagraphSpacing {
+                    before: Some(spacing.0),
+                    after: Some(spacing.1),
+                    ..Default::default()
+                }),
+                ..Default::default()
+            }),
+        );
+        MeasuredBlock {
+            block: LayoutBlock::Paragraph(block),
+            measure: BlockExtent::Paragraph(ParagraphExtent {
+                lines: (0..line_count)
+                    .map(|_| TypesetRow {
+                        line_height,
+                        ..Default::default()
+                    })
+                    .collect(),
+                total_height: line_count as f64 * line_height + spacing.0 + spacing.1,
+            }),
+        }
+    }
+
     fn section_break() -> MeasuredBlock {
         MeasuredBlock {
             block: LayoutBlock::SectionBreak(SectionBreakBlock {
@@ -321,6 +356,22 @@ mod tests {
         let mut paginator = MockPaginator::new(2.0, 100.0, 400.0);
         balance_terminal_continuous_text_columns(&measured, &mut paginator, 0, measured.len());
         assert_eq!(paginator.set_calls, vec![156.0]);
+    }
+
+    #[test]
+    fn adjacent_paragraph_spacing_meets_once_in_the_balanced_height() {
+        // 3 x (2 lines of 20) with a 20 after on the first and a 20 before on
+        // the second: they meet at one 20px gap, so the range is 140 tall and
+        // the second paragraph's end (100) is the first legal break past the
+        // 70px ideal — summing both edges would stack 160 and snap to 120.
+        let measured = vec![
+            spaced_text_paragraph(2, 20.0, (0.0, 20.0)),
+            spaced_text_paragraph(2, 20.0, (20.0, 0.0)),
+            spaced_text_paragraph(2, 20.0, (0.0, 0.0)),
+        ];
+        let mut paginator = MockPaginator::new(2.0, 100.0, 400.0);
+        balance_terminal_continuous_text_columns(&measured, &mut paginator, 0, measured.len());
+        assert_eq!(paginator.set_calls, vec![200.0]);
     }
 
     #[test]

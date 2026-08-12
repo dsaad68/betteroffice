@@ -62,10 +62,66 @@ pub fn lines_height(lines: &[TypesetRow]) -> f64 {
     })
 }
 
-/// Vertical space a paragraph consumes in flow: effective spacing around its
-/// lines. `ParagraphExtent::total_height` is not this height — the measurer
-/// folds authored spacing into it unconditionally, while placement drops
-/// style-inherited spacing on an empty paragraph.
-pub fn paragraph_flow_height(block: &ParagraphBlock, measure: &ParagraphExtent) -> f64 {
-    get_spacing_before(block) + lines_height(&measure.lines) + get_spacing_after(block)
+/// Stacks blocks the way [`crate::page_flow::Paginator::add_fragment`] does, so
+/// an estimate and the placement it predicts cannot disagree: the gap between
+/// two adjacent blocks is the larger of the trailing and the leading spacing,
+/// never their sum, and `ParagraphExtent::total_height` — which folds authored
+/// spacing in unconditionally — is never the height of anything.
+#[derive(Debug, Clone, Default)]
+pub struct FlowStack {
+    height: f64,
+    deferred: f64,
+}
+
+impl FlowStack {
+    /// Starts at a cursor already carrying `deferred` trailing spacing.
+    pub fn resuming(deferred: f64) -> Self {
+        FlowStack {
+            height: 0.0,
+            deferred,
+        }
+    }
+
+    /// Charges the gap above a block whose leading spacing is `before`.
+    pub fn open(&mut self, before: f64) {
+        self.height += before.max(self.deferred);
+        self.deferred = 0.0;
+    }
+
+    /// Grows the open block by `body`.
+    pub fn advance(&mut self, body: f64) {
+        self.height += body;
+    }
+
+    /// Closes the open block, deferring `after` to the next gap.
+    pub fn close(&mut self, after: f64) {
+        self.deferred = after;
+    }
+
+    /// A block measured in one piece.
+    pub fn push(&mut self, before: f64, body: f64, after: f64) {
+        self.open(before);
+        self.advance(body);
+        self.close(after);
+    }
+
+    /// A measured paragraph at its effective spacing and line height.
+    pub fn push_paragraph(&mut self, block: &ParagraphBlock, measure: &ParagraphExtent) {
+        self.push(
+            get_spacing_before(block),
+            lines_height(&measure.lines),
+            get_spacing_after(block),
+        );
+    }
+
+    /// Height down to the last block's bottom. Trailing spacing is deferred,
+    /// and a page or column break drops it, so it is not charged here.
+    pub fn height(&self) -> f64 {
+        self.height
+    }
+
+    /// Height including the spacing left deferred below the last block.
+    pub fn height_with_trailing(&self) -> f64 {
+        self.height + self.deferred
+    }
 }

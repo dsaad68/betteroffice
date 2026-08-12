@@ -1,6 +1,6 @@
 //! Pre-placement break policy.
 
-use crate::keep_together::paragraph_breaks_before;
+use crate::keep_together::{KeepWithNextHeight, paragraph_breaks_before};
 use crate::types::LayoutBlock;
 
 /// Whether a block forces a fresh page before it is placed. Today only a
@@ -10,12 +10,13 @@ pub fn breaks_before_block(block: &LayoutBlock) -> bool {
 }
 
 /// Geometry a keep-with-next group is weighed against at the page cursor.
-/// `group_height` is the space the whole group (plus its follower's first
-/// line) needs; `available_height` is what remains in the current column; and
-/// `page_content_height` is the content height of a blank page/column.
+/// `height` is the space the whole group (plus its follower's first line)
+/// needs, measured for both geometries below; `available_height` is what
+/// remains in the current column; and `page_content_height` is the content
+/// height of a blank page/column.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct KeepWithNextFit {
-    pub group_height: f64,
+    pub height: KeepWithNextHeight,
     pub available_height: f64,
     pub page_content_height: f64,
     pub page_has_content: bool,
@@ -37,13 +38,18 @@ pub struct KeepWithNextFit {
 /// - at the top of an empty page/column the cursor cannot retreat any further;
 ///   there is nothing above the group to detach from, and advancing would only
 ///   emit a blank page, so Word splits in place
+///
+/// Each clause reads the height for its own geometry: whether an intact
+/// placement exists is a question about a fresh page, while finishing here is a
+/// question about the cursor, where spacing above the group collapses into the
+/// gap the group opens with.
 pub fn keep_with_next_group_must_advance(fit: KeepWithNextFit) -> bool {
-    let intact_placement_exists = fit.group_height <= fit.page_content_height;
+    let intact_placement_exists = fit.height.on_fresh_page <= fit.page_content_height;
     if !intact_placement_exists {
         return false;
     }
 
-    let finishes_at_cursor = fit.group_height <= fit.available_height;
+    let finishes_at_cursor = fit.height.at_cursor <= fit.available_height;
     if finishes_at_cursor {
         return false;
     }
@@ -55,6 +61,15 @@ pub fn keep_with_next_group_must_advance(fit: KeepWithNextFit) -> bool {
 mod tests {
     use super::*;
     use crate::types::{BlockId, ParagraphAttrs, ParagraphBlock};
+
+    // a group whose two geometries agree, when the case under test is not
+    // about the spacing deferred above it
+    fn both(height: f64) -> KeepWithNextHeight {
+        KeepWithNextHeight {
+            at_cursor: height,
+            on_fresh_page: height,
+        }
+    }
 
     // minimal block stubs — the predicates only read the kind and a couple of attrs
     fn paragraph(attrs: Option<ParagraphAttrs>) -> LayoutBlock {
@@ -97,7 +112,7 @@ mod tests {
     fn advances_an_intact_group_off_a_straddled_boundary() {
         // fits a blank page, does not fit the remaining space, page has content
         assert!(keep_with_next_group_must_advance(KeepWithNextFit {
-            group_height: 400.0,
+            height: both(400.0),
             available_height: 200.0,
             page_content_height: 600.0,
             page_has_content: true,
@@ -108,7 +123,7 @@ mod tests {
     fn lets_an_oversized_group_split_rather_than_loop_forever() {
         // taller than a whole page — the fit clause fails, so it is NOT advanced
         assert!(!keep_with_next_group_must_advance(KeepWithNextFit {
-            group_height: 700.0,
+            height: both(700.0),
             available_height: 200.0,
             page_content_height: 600.0,
             page_has_content: true,
@@ -118,7 +133,7 @@ mod tests {
     #[test]
     fn stays_put_when_the_group_already_fits_the_remaining_space() {
         assert!(!keep_with_next_group_must_advance(KeepWithNextFit {
-            group_height: 150.0,
+            height: both(150.0),
             available_height: 200.0,
             page_content_height: 600.0,
             page_has_content: true,
@@ -128,7 +143,7 @@ mod tests {
     #[test]
     fn does_not_advance_when_the_page_is_still_empty() {
         assert!(!keep_with_next_group_must_advance(KeepWithNextFit {
-            group_height: 400.0,
+            height: both(400.0),
             available_height: 200.0,
             page_content_height: 600.0,
             page_has_content: false,
@@ -139,7 +154,32 @@ mod tests {
     fn treats_a_group_exactly_the_page_height_as_fitting_boundary() {
         // group_height == page_content_height satisfies the <= fit clause
         assert!(keep_with_next_group_must_advance(KeepWithNextFit {
-            group_height: 600.0,
+            height: both(600.0),
+            available_height: 200.0,
+            page_content_height: 600.0,
+            page_has_content: true,
+        }));
+    }
+
+    #[test]
+    fn weighs_each_height_against_the_geometry_it_was_measured_for() {
+        // spacing deferred above the group makes it too tall here, but a page
+        // of its own defers nothing and holds it
+        assert!(keep_with_next_group_must_advance(KeepWithNextFit {
+            height: KeepWithNextHeight {
+                at_cursor: 250.0,
+                on_fresh_page: 180.0,
+            },
+            available_height: 200.0,
+            page_content_height: 600.0,
+            page_has_content: true,
+        }));
+        // that collapse cannot rescue a group no page can hold intact
+        assert!(!keep_with_next_group_must_advance(KeepWithNextFit {
+            height: KeepWithNextHeight {
+                at_cursor: 650.0,
+                on_fresh_page: 610.0,
+            },
             available_height: 200.0,
             page_content_height: 600.0,
             page_has_content: true,
@@ -150,7 +190,7 @@ mod tests {
     fn does_not_advance_when_the_group_exactly_fits_the_remaining_space_boundary() {
         // group_height == available_height fails the strict > clause
         assert!(!keep_with_next_group_must_advance(KeepWithNextFit {
-            group_height: 200.0,
+            height: both(200.0),
             available_height: 200.0,
             page_content_height: 600.0,
             page_has_content: true,

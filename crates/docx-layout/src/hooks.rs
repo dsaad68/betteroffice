@@ -22,7 +22,7 @@ fn unsupported(feature: &str) -> LayoutError {
 
 // the scan types live with their producer; re-exported so the spine's
 // `prescan`/`place` keep importing them from the hooks seam
-pub use crate::keep_together::{KeepWithNextGroup, KeepWithNextScan};
+pub use crate::keep_together::{KeepWithNextGroup, KeepWithNextHeight, KeepWithNextScan};
 
 pub fn breaks_before_block(block: &LayoutBlock) -> Result<bool, LayoutError> {
     Ok(break_policy::breaks_before_block(block))
@@ -35,19 +35,24 @@ pub fn analyze_keep_with_next(measured: &[MeasuredBlock]) -> Result<KeepWithNext
 pub fn measure_keep_with_next_group(
     group: &KeepWithNextGroup,
     measured: &[MeasuredBlock],
-) -> Result<f64, LayoutError> {
-    Ok(keep_together::measure_keep_with_next_group(group, measured))
+    deferred_spacing: f64,
+) -> Result<KeepWithNextHeight, LayoutError> {
+    Ok(keep_together::measure_keep_with_next_group(
+        group,
+        measured,
+        deferred_spacing,
+    ))
 }
 
 pub fn keep_with_next_group_must_advance(
-    group_height: f64,
+    height: KeepWithNextHeight,
     available_height: f64,
     page_content_height: f64,
     page_has_content: bool,
 ) -> Result<bool, LayoutError> {
     Ok(break_policy::keep_with_next_group_must_advance(
         break_policy::KeepWithNextFit {
-            group_height,
+            height,
             available_height,
             page_content_height,
             page_has_content,

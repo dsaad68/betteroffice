@@ -553,7 +553,11 @@ fn place(
             let page_content_height =
                 paginator.state(state_idx).content_limit - paginator.state(state_idx).content_top;
             let page_has_content = paginator.page_fragment_count(state_idx) > 0;
-            let group_height = hooks::measure_keep_with_next_group(group, measured)?;
+            let group_height = hooks::measure_keep_with_next_group(
+                group,
+                measured,
+                paginator.state(state_idx).deferred_spacing,
+            )?;
             let must_advance = hooks::keep_with_next_group_must_advance(
                 group_height,
                 paginator.get_available_height(),
@@ -1246,13 +1250,19 @@ mod pagination_rule_tests {
         })
     }
 
-    fn paragraph(
+    fn skipped_line(height: f64, skip: f64) -> serde_json::Value {
+        let mut value = line(height);
+        value["floatSkipBefore"] = json!(skip);
+        value
+    }
+
+    fn measured_paragraph(
         id: u32,
-        lines: usize,
-        height: f64,
+        lines: Vec<serde_json::Value>,
         attrs: serde_json::Value,
     ) -> serde_json::Value {
-        // like the measurer, totalHeight carries the paragraph's spacing
+        // like the measurer, totalHeight carries the paragraph's spacing and
+        // the float skips its lines opened with
         let spacing = |edge: &str| {
             attrs
                 .get("spacing")
@@ -1260,7 +1270,16 @@ mod pagination_rule_tests {
                 .and_then(serde_json::Value::as_f64)
                 .unwrap_or(0.0)
         };
-        let total_height = lines as f64 * height + spacing("before") + spacing("after");
+        let lines_height: f64 = lines
+            .iter()
+            .map(|line| {
+                line["lineHeight"].as_f64().unwrap_or(0.0)
+                    + line
+                        .get("floatSkipBefore")
+                        .and_then(serde_json::Value::as_f64)
+                        .unwrap_or(0.0)
+            })
+            .sum();
         json!({
             "block": {
                 "kind": "paragraph", "id": id,
@@ -1269,10 +1288,19 @@ mod pagination_rule_tests {
             },
             "measure": {
                 "kind": "paragraph",
-                "lines": vec![line(height); lines],
-                "totalHeight": total_height,
+                "lines": lines,
+                "totalHeight": lines_height + spacing("before") + spacing("after"),
             },
         })
+    }
+
+    fn paragraph(
+        id: u32,
+        lines: usize,
+        height: f64,
+        attrs: serde_json::Value,
+    ) -> serde_json::Value {
+        measured_paragraph(id, vec![line(height); lines], attrs)
     }
 
     fn layout(measured: Vec<serde_json::Value>) -> Layout {
@@ -1507,6 +1535,91 @@ mod pagination_rule_tests {
         assert_eq!(does_not_fit.pages.len(), 2);
         assert_eq!(paragraph_slices(&does_not_fit, 2.0), vec![(1, 0, 1)]);
         assert_eq!(paragraph_slices(&does_not_fit, 3.0), vec![(1, 0, 1)]);
+    }
+
+    /// Page index each of the listed blocks was placed on.
+    fn pages_of(layout: &Layout, ids: &[f64]) -> Vec<usize> {
+        ids.iter()
+            .map(|id| {
+                paragraph_slices(layout, *id)
+                    .first()
+                    .map(|(page, _, _)| *page)
+                    .unwrap_or_else(|| panic!("block {id} was placed"))
+            })
+            .collect()
+    }
+
+    #[test]
+    fn keep_with_next_group_collapses_the_gap_between_its_members() {
+        // 25 filler leaves 75; the members meet at one 10px gap, not two
+        let result = layout(vec![
+            paragraph(1, 1, 25.0, json!({})),
+            paragraph(
+                2,
+                1,
+                20.0,
+                json!({ "keepNext": true, "spacing": { "after": 10.0 } }),
+            ),
+            paragraph(
+                3,
+                1,
+                20.0,
+                json!({ "keepNext": true, "spacing": { "before": 10.0 } }),
+            ),
+            paragraph(4, 1, 20.0, json!({})),
+        ]);
+
+        assert_eq!(result.pages.len(), 1);
+        assert_eq!(pages_of(&result, &[2.0, 3.0, 4.0]), vec![0, 0, 0]);
+    }
+
+    #[test]
+    fn keep_with_next_group_charges_the_gap_its_follower_opens() {
+        // the follower's 20 before outweighs the heading's 10 after, so the
+        // group needs 70 of the 65 left and must move whole
+        let result = layout(vec![
+            paragraph(1, 1, 35.0, json!({})),
+            paragraph(
+                2,
+                1,
+                20.0,
+                json!({ "keepNext": true, "spacing": { "before": 10.0, "after": 10.0 } }),
+            ),
+            paragraph(3, 1, 20.0, json!({ "spacing": { "before": 20.0 } })),
+        ]);
+
+        assert_eq!(result.pages.len(), 2);
+        assert_eq!(pages_of(&result, &[2.0, 3.0]), vec![1, 1]);
+    }
+
+    #[test]
+    fn keep_with_next_group_charges_the_float_skip_above_its_witness() {
+        let result = layout(vec![
+            paragraph(1, 1, 50.0, json!({})),
+            paragraph(2, 1, 20.0, json!({ "keepNext": true })),
+            measured_paragraph(3, vec![skipped_line(20.0, 20.0)], json!({})),
+        ]);
+
+        assert_eq!(result.pages.len(), 2);
+        assert_eq!(pages_of(&result, &[2.0, 3.0]), vec![1, 1]);
+    }
+
+    #[test]
+    fn keep_with_next_group_charges_the_spacing_deferred_above_it() {
+        // the filler defers 30, which outweighs the heading's own 5
+        let result = layout(vec![
+            paragraph(1, 1, 40.0, json!({ "spacing": { "after": 30.0 } })),
+            paragraph(
+                2,
+                1,
+                20.0,
+                json!({ "keepNext": true, "spacing": { "before": 5.0 } }),
+            ),
+            paragraph(3, 1, 20.0, json!({})),
+        ]);
+
+        assert_eq!(result.pages.len(), 2);
+        assert_eq!(pages_of(&result, &[2.0, 3.0]), vec![1, 1]);
     }
 
     #[test]

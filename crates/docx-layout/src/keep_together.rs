@@ -6,20 +6,23 @@
 //! the placement walk can skip blocks a group already accounted for.
 //!
 //! [`measure_keep_with_next_group`] turns a group into the height the contract
-//! actually demands: every member paragraph at its flow height plus one witness
-//! slice of the follower — never the follower in full, since the binding is only
-//! to where it begins. The witness is a paragraph's first line, a table's first
-//! row, the whole height of an image or text box, and nothing at all for any
-//! other follower kind.
+//! actually demands: every member paragraph plus one witness slice of the
+//! follower — never the follower in full, since the binding is only to where it
+//! begins. The witness is a paragraph's first line, a table's first row, the
+//! whole height of an image or text box, and nothing at all for any other
+//! follower kind.
 //!
-//! Member height comes from the shared paragraph-spacing helpers, so the budget
-//! is exactly what placement will consume: spacing counted once, and
-//! style-inherited spacing on a blank paragraph dropped the way placement drops
-//! it.
+//! The group is stacked through [`FlowStack`], so the budget is what placement
+//! will consume rather than a sum of parts: every gap — above the head, between
+//! members, and above the witness — collapses to the larger of the two spacings
+//! that meet there, and style-inherited spacing on a blank paragraph is dropped
+//! the way placement drops it. A paragraph follower brings its own leading
+//! spacing to that last gap; a table, image or text box is placed with none of
+//! its own, so there the gap is whatever the tail deferred.
 
 use std::collections::{BTreeMap, BTreeSet};
 
-use crate::paragraph_spacing::paragraph_flow_height;
+use crate::paragraph_spacing::{FlowStack, get_spacing_before};
 use crate::types::{BlockExtent, LayoutBlock, MeasuredBlock};
 
 /// A maximal keep-with-next run and its follower.
@@ -121,34 +124,63 @@ pub fn analyze_keep_with_next(measured: &[MeasuredBlock]) -> KeepWithNextScan {
     }
 }
 
-/// Vertical space (px) the group needs for its keepNext contract to hold on a
-/// single page: the members in full plus the follower's witness slice.
-pub fn measure_keep_with_next_group(group: &KeepWithNextGroup, measured: &[MeasuredBlock]) -> f64 {
-    // follower's witness line first: zero when there is no follower, or when
-    // it is not a laid-out paragraph
-    let follower_measure = group
-        .follower
-        .and_then(|index| measured.get(index))
-        .map(|mb| &mb.measure);
-    let witness_line = match follower_measure {
-        Some(BlockExtent::Paragraph(p)) if !p.lines.is_empty() => p.lines[0].line_height,
-        Some(BlockExtent::Table(t)) => t.rows.first().map_or(0.0, |row| row.height),
-        Some(BlockExtent::Image(image)) => image.height,
-        Some(BlockExtent::TextBox(text_box)) => text_box.height,
-        _ => 0.0,
-    };
+/// The height a keep-with-next group needs, in each of the two geometries the
+/// break policy weighs it against.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct KeepWithNextHeight {
+    /// From the cursor, where the head's leading spacing collapses against
+    /// whatever the block above deferred.
+    pub at_cursor: f64,
+    /// At the top of a fresh page or column, where nothing is deferred.
+    pub on_fresh_page: f64,
+}
 
-    let mut budget = witness_line;
+/// Vertical space (px) the group needs for its keepNext contract to hold on a
+/// single page, from a cursor carrying `deferred_spacing`.
+pub fn measure_keep_with_next_group(
+    group: &KeepWithNextGroup,
+    measured: &[MeasuredBlock],
+    deferred_spacing: f64,
+) -> KeepWithNextHeight {
+    KeepWithNextHeight {
+        at_cursor: stack_group(group, measured, deferred_spacing),
+        on_fresh_page: stack_group(group, measured, 0.0),
+    }
+}
+
+fn stack_group(group: &KeepWithNextGroup, measured: &[MeasuredBlock], deferred: f64) -> f64 {
+    let mut stack = FlowStack::resuming(deferred);
     for &index in &group.members {
         let MeasuredBlock { block, measure } = &measured[index];
         let (LayoutBlock::Paragraph(block), BlockExtent::Paragraph(measure)) = (block, measure)
         else {
             continue;
         };
-        budget += paragraph_flow_height(block, measure);
+        stack.push_paragraph(block, measure);
     }
+    if let Some(follower) = group.follower.and_then(|index| measured.get(index)) {
+        let (before, witness) = witness_slice(follower);
+        stack.push(before, witness, 0.0);
+    }
+    stack.height()
+}
 
-    budget
+/// The follower's own leading spacing and the first slice bound to the group.
+/// Tables, images and text boxes are placed with no leading spacing of their
+/// own, so their gap is whatever the tail deferred.
+fn witness_slice(follower: &MeasuredBlock) -> (f64, f64) {
+    match (&follower.block, &follower.measure) {
+        (LayoutBlock::Paragraph(block), BlockExtent::Paragraph(measure)) => (
+            get_spacing_before(block),
+            measure.lines.first().map_or(0.0, |line| {
+                line.line_height + line.float_skip_before.unwrap_or(0.0)
+            }),
+        ),
+        (_, BlockExtent::Table(table)) => (0.0, table.rows.first().map_or(0.0, |row| row.height)),
+        (_, BlockExtent::Image(image)) => (0.0, image.height),
+        (_, BlockExtent::TextBox(text_box)) => (0.0, text_box.height),
+        _ => (0.0, 0.0),
+    }
 }
 
 /// Whether a paragraph forbids splitting its own lines across a page (keepLines).
@@ -211,6 +243,22 @@ mod tests {
         )
     }
 
+    /// A paragraph carrying authored spacing, optionally bound to what follows.
+    fn spaced_paragraph(spacing: (f64, f64), keep_next: bool) -> LayoutBlock {
+        paragraph(
+            vec![text_run("text")],
+            Some(ParagraphAttrs {
+                keep_next: keep_next.then_some(true),
+                spacing: Some(ParagraphSpacing {
+                    before: Some(spacing.0),
+                    after: Some(spacing.1),
+                    ..Default::default()
+                }),
+                ..Default::default()
+            }),
+        )
+    }
+
     fn make_line(line_height: f64) -> TypesetRow {
         TypesetRow {
             line_height,
@@ -218,12 +266,12 @@ mod tests {
         }
     }
 
-    fn make_paragraph_measure(lines: Vec<TypesetRow>) -> BlockExtent {
-        let total_height = lines.iter().map(|l| l.line_height).sum();
-        BlockExtent::Paragraph(ParagraphExtent {
-            lines,
-            total_height,
-        })
+    fn skipped_line(line_height: f64, float_skip_before: f64) -> TypesetRow {
+        TypesetRow {
+            line_height,
+            float_skip_before: Some(float_skip_before),
+            ..Default::default()
+        }
     }
 
     // empty keepNext paragraph whose spacing is style-inherited (spacingExplicit
@@ -250,125 +298,207 @@ mod tests {
         )
     }
 
+    /// Measures blocks the way the measurer does: `totalHeight` folds the
+    /// paragraph's authored spacing in whether or not placement will paint it.
     fn to_measured_blocks(
         blocks: Vec<LayoutBlock>,
-        measures: Vec<BlockExtent>,
+        lines: Vec<Vec<TypesetRow>>,
     ) -> Vec<MeasuredBlock> {
-        assert_eq!(blocks.len(), measures.len());
+        assert_eq!(blocks.len(), lines.len());
         blocks
             .into_iter()
-            .zip(measures)
-            .map(|(block, measure)| MeasuredBlock { block, measure })
+            .zip(lines)
+            .map(|(block, lines)| {
+                let (before, after) = match &block {
+                    LayoutBlock::Paragraph(p) => p
+                        .attrs
+                        .as_ref()
+                        .and_then(|attrs| attrs.spacing.as_ref())
+                        .map_or((0.0, 0.0), |spacing| {
+                            (spacing.before.unwrap_or(0.0), spacing.after.unwrap_or(0.0))
+                        }),
+                    _ => (0.0, 0.0),
+                };
+                let total_height = lines
+                    .iter()
+                    .map(|line| line.line_height + line.float_skip_before.unwrap_or(0.0))
+                    .sum::<f64>()
+                    + before
+                    + after;
+                MeasuredBlock {
+                    block,
+                    measure: BlockExtent::Paragraph(ParagraphExtent {
+                        lines,
+                        total_height,
+                    }),
+                }
+            })
             .collect()
+    }
+
+    fn group_height(measured: &[MeasuredBlock], head: usize, deferred: f64) -> KeepWithNextHeight {
+        let scan = analyze_keep_with_next(measured);
+        let group = scan
+            .groups_by_head
+            .get(&head)
+            .unwrap_or_else(|| panic!("group headed at block {head}"));
+        measure_keep_with_next_group(group, measured, deferred)
     }
 
     #[test]
     fn ignores_style_inherited_spacing_on_an_empty_member_like_placement_does() {
-        let blocks = vec![
-            make_paragraph_block("Heading", true),
-            make_empty_spaced_paragraph((150.0, 150.0), None),
-            make_paragraph_block("Follower", false),
-        ];
-        let measures = vec![
-            make_paragraph_measure(vec![make_line(20.0)]),
-            make_paragraph_measure(vec![]),
-            make_paragraph_measure(vec![make_line(20.0)]),
-        ];
-        let measured = to_measured_blocks(blocks, measures);
-
-        let scan = analyze_keep_with_next(&measured);
-        let group = scan.groups_by_head.get(&0);
-        assert!(group.is_some());
+        let measured = to_measured_blocks(
+            vec![
+                make_paragraph_block("Heading", true),
+                make_empty_spaced_paragraph((150.0, 150.0), None),
+                make_paragraph_block("Follower", false),
+            ],
+            vec![vec![make_line(20.0)], vec![], vec![make_line(20.0)]],
+        );
 
         // heading line (20) + empty member (0, spacing suppressed) + follower first line (20)
-        assert_eq!(
-            measure_keep_with_next_group(group.unwrap(), &measured),
-            40.0
-        );
-    }
-
-    // the measurer folds spacing into totalHeight, so a member must not be
-    // charged for it twice
-    fn make_spaced_paragraph(spacing: (f64, f64)) -> LayoutBlock {
-        paragraph(
-            vec![text_run("Heading")],
-            Some(ParagraphAttrs {
-                keep_next: Some(true),
-                spacing: Some(ParagraphSpacing {
-                    before: Some(spacing.0),
-                    after: Some(spacing.1),
-                    ..Default::default()
-                }),
-                ..Default::default()
-            }),
-        )
-    }
-
-    #[test]
-    fn counts_member_spacing_once_when_the_measure_already_carries_it() {
-        let blocks = vec![
-            make_spaced_paragraph((10.0, 10.0)),
-            make_paragraph_block("Follower", false),
-        ];
-        let measures = vec![
-            BlockExtent::Paragraph(ParagraphExtent {
-                lines: vec![make_line(20.0)],
-                total_height: 40.0,
-            }),
-            make_paragraph_measure(vec![make_line(20.0)]),
-        ];
-        let measured = to_measured_blocks(blocks, measures);
-
-        let scan = analyze_keep_with_next(&measured);
-        let group = scan
-            .groups_by_head
-            .get(&0)
-            .expect("group headed at block 0");
-
-        // 10 before + 20 line + 10 after + 20 witness line
-        assert_eq!(measure_keep_with_next_group(group, &measured), 60.0);
+        assert_eq!(group_height(&measured, 0, 0.0).at_cursor, 40.0);
     }
 
     #[test]
     fn keeps_counting_explicit_spacing_on_an_empty_member() {
-        let blocks = vec![
-            make_paragraph_block("Heading", true),
-            make_empty_spaced_paragraph((150.0, 150.0), Some((true, true))),
-            make_paragraph_block("Follower", false),
-        ];
-        let measures = vec![
-            make_paragraph_measure(vec![make_line(20.0)]),
-            make_paragraph_measure(vec![]),
-            make_paragraph_measure(vec![make_line(20.0)]),
-        ];
-        let measured = to_measured_blocks(blocks, measures);
-
-        let scan = analyze_keep_with_next(&measured);
-        let group = scan.groups_by_head.get(&0);
-        assert!(group.is_some());
-
-        // direct formatting survives on empty paragraphs: 20 + (150 + 0 + 150) + 20
-        assert_eq!(
-            measure_keep_with_next_group(group.unwrap(), &measured),
-            340.0
+        let measured = to_measured_blocks(
+            vec![
+                make_paragraph_block("Heading", true),
+                make_empty_spaced_paragraph((150.0, 150.0), Some((true, true))),
+                make_paragraph_block("Follower", false),
+            ],
+            vec![vec![make_line(20.0)], vec![], vec![make_line(20.0)]],
         );
+
+        // direct formatting survives on empty paragraphs: 20 + 150 + 0 + 150 + 20
+        assert_eq!(group_height(&measured, 0, 0.0).at_cursor, 340.0);
+    }
+
+    #[test]
+    fn counts_member_spacing_once_when_the_measure_already_carries_it() {
+        let measured = to_measured_blocks(
+            vec![
+                spaced_paragraph((10.0, 10.0), true),
+                make_paragraph_block("Follower", false),
+            ],
+            vec![vec![make_line(20.0)], vec![make_line(20.0)]],
+        );
+        let BlockExtent::Paragraph(head) = &measured[0].measure else {
+            panic!("paragraph measure");
+        };
+        assert_eq!(head.total_height, 40.0);
+
+        // 10 before + 20 line + 10 after + 20 witness — not 10 + 40 + 10 + 20
+        assert_eq!(group_height(&measured, 0, 0.0).at_cursor, 60.0);
+    }
+
+    #[test]
+    fn collapses_the_gap_between_two_members() {
+        let measured = to_measured_blocks(
+            vec![
+                spaced_paragraph((0.0, 10.0), true),
+                spaced_paragraph((10.0, 0.0), true),
+                make_paragraph_block("Follower", false),
+            ],
+            vec![
+                vec![make_line(20.0)],
+                vec![make_line(20.0)],
+                vec![make_line(20.0)],
+            ],
+        );
+
+        // the 10 between the members meets once, not twice: 20 + 10 + 20 + 20
+        assert_eq!(group_height(&measured, 0, 0.0).at_cursor, 70.0);
+    }
+
+    #[test]
+    fn charges_the_follower_the_larger_of_its_gap_and_the_tail_spacing() {
+        let wider_follower = to_measured_blocks(
+            vec![
+                spaced_paragraph((0.0, 10.0), true),
+                spaced_paragraph((30.0, 0.0), false),
+            ],
+            vec![vec![make_line(20.0)], vec![make_line(20.0)]],
+        );
+        let wider_tail = to_measured_blocks(
+            vec![
+                spaced_paragraph((0.0, 30.0), true),
+                spaced_paragraph((10.0, 0.0), false),
+            ],
+            vec![vec![make_line(20.0)], vec![make_line(20.0)]],
+        );
+
+        assert_eq!(group_height(&wider_follower, 0, 0.0).at_cursor, 70.0);
+        assert_eq!(group_height(&wider_tail, 0, 0.0).at_cursor, 70.0);
+    }
+
+    #[test]
+    fn charges_the_float_skip_above_the_witness_line() {
+        let measured = to_measured_blocks(
+            vec![
+                make_paragraph_block("Heading", true),
+                make_paragraph_block("Follower", false),
+            ],
+            vec![vec![make_line(20.0)], vec![skipped_line(20.0, 15.0)]],
+        );
+
+        // placement charges the witness its float skip, so the budget must too
+        assert_eq!(group_height(&measured, 0, 0.0).at_cursor, 55.0);
+    }
+
+    #[test]
+    fn collapses_the_spacing_deferred_above_the_head() {
+        let measured = to_measured_blocks(
+            vec![
+                spaced_paragraph((5.0, 0.0), true),
+                make_paragraph_block("Follower", false),
+            ],
+            vec![vec![make_line(20.0)], vec![make_line(20.0)]],
+        );
+
+        let height = group_height(&measured, 0, 30.0);
+        assert_eq!(height.at_cursor, 70.0);
+        assert_eq!(height.on_fresh_page, 45.0);
+    }
+
+    #[test]
+    fn charges_a_table_follower_only_the_gap_its_tail_defers() {
+        let mut measured = to_measured_blocks(
+            vec![spaced_paragraph((0.0, 12.0), true)],
+            vec![vec![make_line(20.0)]],
+        );
+        measured.push(
+            serde_json::from_value(serde_json::json!({
+                "block": { "kind": "table", "id": 9, "rows": [], "columnWidths": [] },
+                "measure": {
+                    "kind": "table", "columnWidths": [], "totalWidth": 0, "totalHeight": 65,
+                    "rows": [{ "height": 25, "cells": [] }, { "height": 40, "cells": [] }],
+                },
+            }))
+            .expect("table measured block"),
+        );
+
+        // 20 line + 12 deferred + the first row only
+        assert_eq!(group_height(&measured, 0, 0.0).at_cursor, 57.0);
     }
 
     #[test]
     fn does_not_advance_a_group_that_fits_once_inherited_empty_paragraph_spacing_is_dropped() {
-        let blocks = vec![
-            make_paragraph_block("Filler", false),
-            make_paragraph_block("Heading", true),
-            make_empty_spaced_paragraph((150.0, 150.0), None),
-            make_paragraph_block("Follower", false),
-        ];
-        let measures = vec![
-            make_paragraph_measure(vec![make_line(620.0)]),
-            make_paragraph_measure(vec![make_line(20.0)]),
-            make_paragraph_measure(vec![]),
-            make_paragraph_measure(vec![make_line(20.0)]),
-        ];
-        let measured = to_measured_blocks(blocks, measures);
+        let measured = to_measured_blocks(
+            vec![
+                make_paragraph_block("Filler", false),
+                make_paragraph_block("Heading", true),
+                make_empty_spaced_paragraph((150.0, 150.0), None),
+                make_paragraph_block("Follower", false),
+            ],
+            vec![
+                vec![make_line(620.0)],
+                vec![make_line(20.0)],
+                vec![],
+                vec![make_line(20.0)],
+            ],
+        );
 
         let scan = analyze_keep_with_next(&measured);
         let group = scan
@@ -378,12 +508,12 @@ mod tests {
         assert_eq!(group.members, vec![1, 2]);
         assert_eq!(group.follower, Some(3));
 
-        let group_height = measure_keep_with_next_group(group, &measured);
-        assert_eq!(group_height, 40.0);
+        let height = measure_keep_with_next_group(group, &measured, 0.0);
+        assert_eq!(height.at_cursor, 40.0);
 
         // content height 864 (1056 - 2*96); the 620px filler leaves 244 available
         assert!(!keep_with_next_group_must_advance(KeepWithNextFit {
-            group_height,
+            height,
             available_height: 244.0,
             page_content_height: 864.0,
             page_has_content: true,
