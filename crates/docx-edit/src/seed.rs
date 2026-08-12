@@ -3093,45 +3093,69 @@ mod tests {
         );
     }
 
-    #[test]
-    fn widow_control_is_seeded_from_doc_defaults_the_style_and_direct_formatting() {
+    fn widow_control_styles() -> Value {
         // Styles arrive with their basedOn chain already merged, so Body carries
-        // the off Normal authored.
-        let styles = StyleResolver::new(Some(&json!({
+        // the off Normal authored; docDefaults sits under a style that leaves
+        // the toggle alone.
+        json!({
             "docDefaults": { "pPr": { "widowControl": false } },
             "styles": [
-                {
-                    "styleId": "Normal", "type": "paragraph", "default": true,
-                    "pPr": { "widowControl": false }
-                },
+                { "styleId": "Normal", "type": "paragraph", "default": true, "pPr": {} },
                 { "styleId": "Body", "type": "paragraph", "pPr": { "widowControl": false } },
                 { "styleId": "Quote", "type": "paragraph", "pPr": { "widowControl": true } }
             ]
-        })));
-        let seeded = |formatting: Value| {
-            paragraph_attrs(
-                &json!({ "formatting": formatting, "content": [] }),
-                &styles,
-                &[],
-                &[],
-                None,
-            )
-            .get("widowControl")
-            .cloned()
-        };
+        })
+    }
 
-        assert_eq!(seeded(json!({})), Some(Value::Bool(false)));
+    fn seeded_widow_control(styles: &StyleResolver, formatting: Value) -> Option<Value> {
+        paragraph_attrs(
+            &json!({ "formatting": formatting, "content": [] }),
+            styles,
+            &[],
+            &[],
+            None,
+        )
+        .get("widowControl")
+        .cloned()
+    }
+
+    #[test]
+    fn widow_control_is_seeded_from_doc_defaults_the_style_and_direct_formatting() {
+        let styles = StyleResolver::new(Some(&widow_control_styles()));
+
         assert_eq!(
-            seeded(json!({ "styleId": "Body" })),
+            seeded_widow_control(&styles, json!({})),
+            Some(Value::Bool(false)),
+            "docDefaults reaches a paragraph whose style is silent"
+        );
+        assert_eq!(
+            seeded_widow_control(&styles, json!({ "styleId": "Body" })),
             Some(Value::Bool(false))
         );
         assert_eq!(
-            seeded(json!({ "styleId": "Quote" })),
+            seeded_widow_control(&styles, json!({ "styleId": "Quote" })),
             Some(Value::Bool(true))
         );
         assert_eq!(
-            seeded(json!({ "styleId": "Body", "widowControl": true })),
+            seeded_widow_control(&styles, json!({ "styleId": "Body", "widowControl": true })),
             Some(Value::Bool(true))
         );
+        assert_eq!(
+            seeded_widow_control(
+                &styles,
+                json!({ "styleId": "Quote", "widowControl": false })
+            ),
+            Some(Value::Bool(false)),
+            "a direct off overrides a style that turns the toggle back on"
+        );
+    }
+
+    #[test]
+    fn widow_control_left_unauthored_anywhere_seeds_null() {
+        let styles = StyleResolver::new(Some(&json!({
+            "styles": [{ "styleId": "Normal", "type": "paragraph", "default": true, "pPr": {} }]
+        })));
+
+        assert_eq!(seeded_widow_control(&styles, json!({})), Some(Value::Null));
     }
 }

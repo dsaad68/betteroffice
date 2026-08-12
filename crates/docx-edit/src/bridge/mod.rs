@@ -4130,6 +4130,11 @@ mod tests {
 
         assert_eq!(attrs(&doc).get("widowControl"), None);
 
+        // the seed writes null for every paragraph that authors nothing
+        doc.set_paragraph_attr(&para, "widowControl", Any::Null)
+            .unwrap();
+        assert_eq!(attrs(&doc).get("widowControl"), None);
+
         doc.set_paragraph_attr(&para, "widowControl", Any::Bool(true))
             .unwrap();
         assert_eq!(attrs(&doc).get("widowControl"), None);
