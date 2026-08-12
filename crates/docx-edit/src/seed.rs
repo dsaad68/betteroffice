@@ -1663,6 +1663,7 @@ fn paragraph_attrs(
             "pageBreakBefore",
             "keepNext",
             "keepLines",
+            "widowControl",
             "contextualSpacing",
             "outlineLevel",
             "bidi",
@@ -1744,6 +1745,7 @@ fn paragraph_attrs(
             "pageBreakBefore",
             "keepNext",
             "keepLines",
+            "widowControl",
             "outlineLevel",
             "bidi",
         ] {
@@ -3088,6 +3090,48 @@ mod tests {
         assert_eq!(
             source_json(&value, &source),
             r#"{"type":"shape","z":1,"nested":{"b":2,"a":3}}"#
+        );
+    }
+
+    #[test]
+    fn widow_control_is_seeded_from_doc_defaults_the_style_and_direct_formatting() {
+        // Styles arrive with their basedOn chain already merged, so Body carries
+        // the off Normal authored.
+        let styles = StyleResolver::new(Some(&json!({
+            "docDefaults": { "pPr": { "widowControl": false } },
+            "styles": [
+                {
+                    "styleId": "Normal", "type": "paragraph", "default": true,
+                    "pPr": { "widowControl": false }
+                },
+                { "styleId": "Body", "type": "paragraph", "pPr": { "widowControl": false } },
+                { "styleId": "Quote", "type": "paragraph", "pPr": { "widowControl": true } }
+            ]
+        })));
+        let seeded = |formatting: Value| {
+            paragraph_attrs(
+                &json!({ "formatting": formatting, "content": [] }),
+                &styles,
+                &[],
+                &[],
+                None,
+            )
+            .get("widowControl")
+            .cloned()
+        };
+
+        assert_eq!(seeded(json!({})), Some(Value::Bool(false)));
+        assert_eq!(
+            seeded(json!({ "styleId": "Body" })),
+            Some(Value::Bool(false))
+        );
+        assert_eq!(
+            seeded(json!({ "styleId": "Quote" })),
+            Some(Value::Bool(true))
+        );
+        assert_eq!(
+            seeded(json!({ "styleId": "Body", "widowControl": true })),
+            Some(Value::Bool(true))
         );
     }
 }

@@ -448,6 +448,8 @@ export type ParagraphAttrs = {
   indent?: ParagraphIndent;
   keepNext?: boolean;
   keepLines?: boolean;
+  /** w:widowControl, a toggle defaulting on: only an authored off is carried. */
+  widowControl?: boolean;
   pageBreakBefore?: boolean;
   styleId?: string;
   contextualSpacing?: boolean;
