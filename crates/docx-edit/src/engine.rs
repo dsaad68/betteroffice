@@ -815,9 +815,11 @@ impl EngineSession {
                 format!("{prefix}:{}", content.id)
             }));
             for story in stories {
-                let mut story_blocks = self
-                    .with_lowered_story(&story, &render_env, <[LayoutBlock]>::to_vec)
-                    .map_err(|error| error.to_string())?;
+                let Ok(mut story_blocks) =
+                    self.with_lowered_story(&story, &render_env, <[LayoutBlock]>::to_vec)
+                else {
+                    continue;
+                };
                 blocks.append(&mut story_blocks);
             }
         }
@@ -1106,9 +1108,13 @@ impl EngineSession {
                 let Some(r_id) = r_id else {
                     continue;
                 };
-                let blocks = self
-                    .with_lowered_story(&format!("hf:{r_id}"), render_env, <[LayoutBlock]>::to_vec)
-                    .map_err(|error| error.to_string())?;
+                let Ok(blocks) = self.with_lowered_story(
+                    &format!("hf:{r_id}"),
+                    render_env,
+                    <[LayoutBlock]>::to_vec,
+                ) else {
+                    continue;
+                };
                 let metrics = HeaderFooterMetrics {
                     kind,
                     page_size: &page_size,
@@ -2658,6 +2664,45 @@ mod tests {
         assert!(requirements[0].get("blocks").is_none());
         assert_eq!(engine.stats().layout_epoch, 0);
         assert_eq!(engine.stats().retained_measured_blocks, 0);
+    }
+
+    #[test]
+    fn region_layout_skips_a_missing_header_footer_story() {
+        const FONT: &[u8] =
+            include_bytes!("../../ooxml-text/tests/fonts/LiberationSans-Regular.ttf");
+        docx_layout::clear_measure_fonts();
+        let font_id = docx_layout::register_measure_font(FONT).unwrap();
+        let engine = EngineSession::new(137);
+        engine
+            .doc()
+            .create_story("body", "Resident body", "Normal", "left")
+            .unwrap();
+        let mut request = serde_json::json!({
+            "bodyStory": "body",
+            "regions": {"sections": [{
+                "headerFooterRefs": {"headerDefault": "missing"}
+            }]},
+            "renderEnv": {}
+        });
+
+        engine
+            .layout_font_requirements_json(&request.to_string())
+            .unwrap();
+        request["measurement"] = serde_json::json!({
+            "fontChains": {"calibri|0|0": [font_id]},
+            "defaults": {"fontSize": 11, "fontFamily": "Calibri"},
+            "authoritativeShaping": true
+        });
+        let output: serde_json::Value = serde_json::from_str(
+            &engine
+                .layout_document_with_regions_json(&request.to_string())
+                .unwrap(),
+        )
+        .unwrap();
+
+        assert_eq!(output["measured"][0]["block"]["kind"], "paragraph");
+        assert_eq!(output["layout"]["pages"].as_array().unwrap().len(), 1);
+        assert!(output.get("headersFooters").is_none());
     }
 
     #[test]
