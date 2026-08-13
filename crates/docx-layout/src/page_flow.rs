@@ -188,6 +188,22 @@ impl Paginator {
         self.page_size.h - self.margins.bottom
     }
 
+    fn footnote_reserved_height(&self, page_number: u32) -> f64 {
+        self.footnote_reserved_heights
+            .as_ref()
+            .and_then(|values| values.get(&page_number.to_string()).copied())
+            .unwrap_or(0.0)
+    }
+
+    /// Content height the next physical page will expose after pending geometry
+    /// and that page's footnote reservation are applied.
+    pub fn fresh_page_content_height(&self) -> f64 {
+        let page_size = self.pending_page_size.as_ref().unwrap_or(&self.page_size);
+        let margins = self.pending_margins.as_ref().unwrap_or(&self.margins);
+        let page_number = self.start_page_number + self.pages.len() as u32;
+        page_size.h - margins.top - margins.bottom - self.footnote_reserved_height(page_number)
+    }
+
     /// Returns the active section's content width.
     pub fn get_content_width(&self) -> f64 {
         self.page_size.w - self.margins.left - self.margins.right
@@ -227,11 +243,7 @@ impl Paginator {
         let content_limit = self.get_content_bottom();
 
         // reduce content bottom by the footnote reserved height for this page
-        let footnote_height = self
-            .footnote_reserved_heights
-            .as_ref()
-            .and_then(|m| m.get(&page_number.to_string()).copied())
-            .unwrap_or(0.0);
+        let footnote_height = self.footnote_reserved_height(page_number);
         let page_content_bottom = content_limit - footnote_height;
 
         let page = Page {
@@ -541,6 +553,11 @@ impl crate::column_balancing::ColumnBalancePaginator for Paginator {
     fn content_limit(&mut self) -> f64 {
         let idx = self.get_current();
         self.states[idx].content_limit
+    }
+
+    fn deferred_spacing(&mut self) -> f64 {
+        let idx = self.get_current();
+        self.states[idx].deferred_spacing
     }
 
     fn set_content_limit(&mut self, value: f64) {

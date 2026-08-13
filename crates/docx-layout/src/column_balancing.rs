@@ -32,6 +32,7 @@ pub trait ColumnBalancePaginator {
     fn columns(&self) -> ColumnLayout;
     fn pen_y(&mut self) -> f64;
     fn content_limit(&mut self) -> f64;
+    fn deferred_spacing(&mut self) -> f64;
     fn set_content_limit(&mut self, value: f64);
 }
 
@@ -48,8 +49,9 @@ fn get_balanced_section_height(
     measured: &[MeasuredBlock],
     start: usize,
     end: usize,
+    deferred_spacing: f64,
 ) -> Option<SectionBalance> {
-    let mut stack = FlowStack::default();
+    let mut stack = FlowStack::resuming(deferred_spacing);
     let mut has_content = false;
     let mut legal_breaks = Vec::new();
 
@@ -152,7 +154,8 @@ pub fn balance_terminal_continuous_text_columns<P: ColumnBalancePaginator>(
     start: usize,
     end: usize,
 ) {
-    if let Some(balance) = get_balanced_section_height(measured, start, end) {
+    let deferred_spacing = paginator.deferred_spacing();
+    if let Some(balance) = get_balanced_section_height(measured, start, end, deferred_spacing) {
         balance_current_column_region(paginator, balance.total_height, &balance.legal_breaks);
     }
 }
@@ -169,6 +172,7 @@ mod tests {
         columns: ColumnLayout,
         pen_y: f64,
         content_limit: f64,
+        deferred_spacing: f64,
         set_calls: Vec<f64>,
     }
 
@@ -184,6 +188,7 @@ mod tests {
                 },
                 pen_y,
                 content_limit,
+                deferred_spacing: 0.0,
                 set_calls: Vec::new(),
             }
         }
@@ -198,6 +203,9 @@ mod tests {
         }
         fn content_limit(&mut self) -> f64 {
             self.content_limit
+        }
+        fn deferred_spacing(&mut self) -> f64 {
+            self.deferred_spacing
         }
         fn set_content_limit(&mut self, value: f64) {
             self.content_limit = value;

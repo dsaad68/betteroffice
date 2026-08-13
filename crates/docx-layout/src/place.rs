@@ -550,8 +550,7 @@ fn place(
             && !plan.keep_with_next.interior_members.contains(&i)
         {
             let state_idx = paginator.get_current();
-            let page_content_height =
-                paginator.state(state_idx).content_limit - paginator.state(state_idx).content_top;
+            let page_content_height = paginator.fresh_page_content_height();
             let page_has_content = paginator.page_fragment_count(state_idx) > 0;
             let group_height = hooks::measure_keep_with_next_group(
                 group,
@@ -1303,16 +1302,60 @@ mod pagination_rule_tests {
         measured_paragraph(id, vec![line(height); lines], attrs)
     }
 
-    fn layout(measured: Vec<serde_json::Value>) -> Layout {
+    fn layout_with_options(measured: Vec<serde_json::Value>, options: serde_json::Value) -> Layout {
         let mut input: Input = serde_json::from_value(json!({
             "measured": measured,
-            "options": {
-                "pageSize": { "w": 200, "h": 120 },
-                "margins": { "top": 10, "right": 10, "bottom": 10, "left": 10 },
-            },
+            "options": options,
         }))
         .unwrap();
         layout_document(&mut input).unwrap()
+    }
+
+    fn layout(measured: Vec<serde_json::Value>) -> Layout {
+        layout_with_options(
+            measured,
+            json!({
+                "pageSize": { "w": 200, "h": 120 },
+                "margins": { "top": 10, "right": 10, "bottom": 10, "left": 10 },
+            }),
+        )
+    }
+
+    fn measured_object(id: u32, kind: &str, height: f64) -> serde_json::Value {
+        match kind {
+            "shape" => json!({
+                "block": {
+                    "kind": "shape", "id": id, "shapeType": "rect", "geometryPath": [],
+                    "width": 20, "height": height, "children": [],
+                },
+                "measure": { "kind": "shape", "width": 20, "height": height },
+            }),
+            "chart" => json!({
+                "block": {
+                    "kind": "chart", "id": id, "chart": {}, "width": 20, "height": height,
+                },
+                "measure": { "kind": "chart", "width": 20, "height": height },
+            }),
+            _ => panic!("unsupported test object"),
+        }
+    }
+
+    fn object_page(layout: &Layout, id: f64) -> usize {
+        layout
+            .pages
+            .iter()
+            .position(|page| {
+                page.fragments.iter().any(|fragment| match fragment {
+                    Fragment::Shape(value) => {
+                        matches!(value.block_id, crate::types::BlockId::Num(found) if found == id)
+                    }
+                    Fragment::Chart(value) => {
+                        matches!(value.block_id, crate::types::BlockId::Num(found) if found == id)
+                    }
+                    _ => false,
+                })
+            })
+            .unwrap_or_else(|| panic!("object {id} was placed"))
     }
 
     fn input(measured: Vec<serde_json::Value>) -> Input {
@@ -1535,6 +1578,123 @@ mod pagination_rule_tests {
         assert_eq!(does_not_fit.pages.len(), 2);
         assert_eq!(paragraph_slices(&does_not_fit, 2.0), vec![(1, 0, 1)]);
         assert_eq!(paragraph_slices(&does_not_fit, 3.0), vec![(1, 0, 1)]);
+    }
+
+    #[test]
+    fn keep_with_next_witness_respects_widow_control_on_a_multiline_follower() {
+        let result = layout(vec![
+            paragraph(1, 1, 60.0, json!({})),
+            paragraph(2, 1, 20.0, json!({ "keepNext": true })),
+            paragraph(3, 4, 20.0, json!({})),
+        ]);
+
+        assert_eq!(result.pages.len(), 2);
+        assert_eq!(paragraph_slices(&result, 1.0), vec![(0, 0, 1)]);
+        assert_eq!(paragraph_slices(&result, 2.0), vec![(1, 0, 1)]);
+        assert_eq!(paragraph_slices(&result, 3.0), vec![(1, 0, 4)]);
+    }
+
+    #[test]
+    fn keep_with_next_witness_respects_a_keep_lines_follower() {
+        let result = layout(vec![
+            paragraph(1, 1, 60.0, json!({})),
+            paragraph(2, 1, 20.0, json!({ "keepNext": true })),
+            paragraph(3, 2, 20.0, json!({ "keepLines": true })),
+        ]);
+
+        assert_eq!(result.pages.len(), 2);
+        assert_eq!(paragraph_slices(&result, 2.0), vec![(1, 0, 1)]);
+        assert_eq!(paragraph_slices(&result, 3.0), vec![(1, 0, 2)]);
+    }
+
+    #[test]
+    fn keep_with_next_witness_includes_shape_and_chart_followers() {
+        for kind in ["shape", "chart"] {
+            let result = layout(vec![
+                paragraph(1, 1, 60.0, json!({})),
+                paragraph(2, 1, 20.0, json!({ "keepNext": true })),
+                measured_object(3, kind, 30.0),
+            ]);
+
+            assert_eq!(paragraph_slices(&result, 2.0), vec![(1, 0, 1)]);
+            assert_eq!(object_page(&result, 3.0), 1);
+        }
+    }
+
+    #[test]
+    fn terminal_column_balance_carries_spacing_from_the_preceding_paragraph() {
+        let result = layout_with_options(
+            vec![
+                paragraph(1, 1, 40.0, json!({ "spacing": { "after": 30.0 } })),
+                json!({
+                    "block": {
+                        "kind": "sectionBreak", "id": 2, "type": "continuous",
+                        "pageSize": { "w": 200, "h": 120 },
+                        "margins": { "top": 10, "right": 10, "bottom": 10, "left": 10 },
+                        "columns": { "count": 1, "gap": 0 },
+                    },
+                    "measure": { "kind": "sectionBreak" },
+                }),
+                paragraph(3, 1, 20.0, json!({})),
+                paragraph(4, 1, 20.0, json!({})),
+            ],
+            json!({
+                "pageSize": { "w": 200, "h": 120 },
+                "margins": { "top": 10, "right": 10, "bottom": 10, "left": 10 },
+                "columns": { "count": 2, "gap": 0 },
+            }),
+        );
+
+        assert_eq!(result.pages.len(), 1);
+        assert_eq!(pages_of(&result, &[1.0, 3.0, 4.0]), vec![0, 0, 0]);
+    }
+
+    #[test]
+    fn keep_with_next_uses_pending_geometry_for_the_fresh_page_capacity() {
+        let result = layout_with_options(
+            vec![
+                paragraph(1, 1, 70.0, json!({})),
+                json!({
+                    "block": {
+                        "kind": "sectionBreak", "id": 9, "type": "continuous",
+                        "pageSize": { "w": 200, "h": 120 },
+                        "margins": { "top": 10, "right": 10, "bottom": 10, "left": 10 },
+                        "columns": { "count": 1, "gap": 0 },
+                    },
+                    "measure": { "kind": "sectionBreak" },
+                }),
+                paragraph(2, 1, 20.0, json!({ "keepNext": true })),
+                paragraph(3, 1, 20.0, json!({})),
+            ],
+            json!({
+                "pageSize": { "w": 200, "h": 120 },
+                "margins": { "top": 10, "right": 10, "bottom": 10, "left": 10 },
+                "finalPageSize": { "w": 200, "h": 120 },
+                "finalMargins": { "top": 45, "right": 10, "bottom": 45, "left": 10 },
+            }),
+        );
+
+        assert_eq!(result.pages.len(), 2);
+        assert_eq!(pages_of(&result, &[1.0, 2.0, 3.0]), vec![0, 0, 1]);
+    }
+
+    #[test]
+    fn keep_with_next_uses_next_page_footnotes_for_the_fresh_page_capacity() {
+        let result = layout_with_options(
+            vec![
+                paragraph(1, 1, 70.0, json!({})),
+                paragraph(2, 1, 20.0, json!({ "keepNext": true })),
+                paragraph(3, 1, 20.0, json!({})),
+            ],
+            json!({
+                "pageSize": { "w": 200, "h": 120 },
+                "margins": { "top": 10, "right": 10, "bottom": 10, "left": 10 },
+                "footnoteReservedHeights": { "2": 70 },
+            }),
+        );
+
+        assert_eq!(result.pages.len(), 2);
+        assert_eq!(pages_of(&result, &[1.0, 2.0, 3.0]), vec![0, 0, 1]);
     }
 
     /// Page index each of the listed blocks was placed on.

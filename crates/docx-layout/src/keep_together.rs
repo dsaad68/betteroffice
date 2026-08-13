@@ -6,11 +6,10 @@
 //! the placement walk can skip blocks a group already accounted for.
 //!
 //! [`measure_keep_with_next_group`] turns a group into the height the contract
-//! actually demands: every member paragraph plus one witness slice of the
-//! follower — never the follower in full, since the binding is only to where it
-//! begins. The witness is a paragraph's first line, a table's first row, the
-//! whole height of an image or text box, and nothing at all for any other
-//! follower kind.
+//! actually demands: every member paragraph plus the follower slice placement
+//! requires before it can begin. The witness is one paragraph line normally,
+//! two under widow control, every line under `w:keepLines`, a table's first row,
+//! or the whole height of an in-flow object.
 //!
 //! The group is stacked through [`FlowStack`], so the budget is what placement
 //! will consume rather than a sum of parts: every gap — above the head, between
@@ -22,7 +21,7 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
-use crate::paragraph_spacing::{FlowStack, get_spacing_before};
+use crate::paragraph_spacing::{FlowStack, get_spacing_before, lines_height};
 use crate::types::{BlockExtent, LayoutBlock, MeasuredBlock};
 
 /// A maximal keep-with-next run and its follower.
@@ -170,21 +169,35 @@ fn stack_group(group: &KeepWithNextGroup, measured: &[MeasuredBlock], deferred: 
 /// own, so their gap is whatever the tail deferred.
 fn witness_slice(follower: &MeasuredBlock) -> (f64, f64) {
     match (&follower.block, &follower.measure) {
-        (LayoutBlock::Paragraph(block), BlockExtent::Paragraph(measure)) => (
-            get_spacing_before(block),
-            measure.lines.first().map_or(0.0, |line| {
-                line.line_height + line.float_skip_before.unwrap_or(0.0)
-            }),
-        ),
+        (LayoutBlock::Paragraph(block), BlockExtent::Paragraph(measure)) => {
+            let witness_lines = if paragraph_keeps_lines(&follower.block) {
+                measure.lines.len()
+            } else if measure.lines.len() >= 4
+                && block
+                    .attrs
+                    .as_ref()
+                    .and_then(|attrs| attrs.widow_control)
+                    .unwrap_or(true)
+            {
+                2
+            } else {
+                measure.lines.len().min(1)
+            };
+            (
+                get_spacing_before(block),
+                lines_height(&measure.lines[..witness_lines]),
+            )
+        }
         (_, BlockExtent::Table(table)) => (0.0, table.rows.first().map_or(0.0, |row| row.height)),
         (_, BlockExtent::Image(image)) => (0.0, image.height),
+        (_, BlockExtent::Shape(shape)) => (0.0, shape.height),
+        (_, BlockExtent::Chart(chart)) => (0.0, chart.height),
         (_, BlockExtent::TextBox(text_box)) => (0.0, text_box.height),
         _ => (0.0, 0.0),
     }
 }
 
 /// Whether a paragraph forbids splitting its own lines across a page (keepLines).
-#[allow(dead_code)]
 pub fn paragraph_keeps_lines(block: &LayoutBlock) -> bool {
     match block {
         LayoutBlock::Paragraph(p) => p.attrs.as_ref().and_then(|a| a.keep_lines) == Some(true),
