@@ -550,7 +550,9 @@ fn place(
             && !plan.keep_with_next.interior_members.contains(&i)
         {
             let state_idx = paginator.get_current();
-            let page_content_height = paginator.fresh_page_content_height();
+            let next_column_content_height = paginator.next_column_content_height(state_idx);
+            let fresh_content_height =
+                next_column_content_height.unwrap_or_else(|| paginator.fresh_page_content_height());
             let page_has_content = paginator.page_fragment_count(state_idx) > 0;
             let group_height = hooks::measure_keep_with_next_group(
                 group,
@@ -560,11 +562,15 @@ fn place(
             let must_advance = hooks::keep_with_next_group_must_advance(
                 group_height,
                 paginator.get_available_height(),
-                page_content_height,
+                fresh_content_height,
                 page_has_content,
             )?;
             if must_advance {
-                paginator.force_page_break();
+                if next_column_content_height.is_some() {
+                    paginator.force_column_break();
+                } else {
+                    paginator.force_page_break();
+                }
             }
         }
 
@@ -1647,6 +1653,58 @@ mod pagination_rule_tests {
 
         assert_eq!(result.pages.len(), 1);
         assert_eq!(pages_of(&result, &[1.0, 3.0, 4.0]), vec![0, 0, 0]);
+    }
+
+    #[test]
+    fn keep_with_next_advances_into_an_unused_terminal_column() {
+        let result = layout_with_options(
+            vec![
+                paragraph(1, 1, 20.0, json!({})),
+                json!({
+                    "block": {
+                        "kind": "sectionBreak", "id": 2, "type": "continuous",
+                        "pageSize": { "w": 200, "h": 200 },
+                        "margins": { "top": 10, "right": 10, "bottom": 10, "left": 10 },
+                        "columns": { "count": 1, "gap": 0 },
+                    },
+                    "measure": { "kind": "sectionBreak" },
+                }),
+                paragraph(
+                    3,
+                    1,
+                    100.0,
+                    json!({ "spacing": { "before": 10.0, "after": 10.0 } }),
+                ),
+                paragraph(
+                    4,
+                    1,
+                    20.0,
+                    json!({
+                        "keepNext": true,
+                        "spacing": { "before": 10.0, "after": 10.0 },
+                    }),
+                ),
+                paragraph(5, 4, 20.0, json!({ "spacing": { "before": 10.0 } })),
+            ],
+            json!({
+                "pageSize": { "w": 200, "h": 200 },
+                "margins": { "top": 10, "right": 10, "bottom": 10, "left": 10 },
+                "columns": { "count": 2, "gap": 0 },
+            }),
+        );
+
+        assert_eq!(result.pages.len(), 1);
+        assert_eq!(pages_of(&result, &[1.0, 3.0, 4.0, 5.0]), vec![0, 0, 0, 0]);
+        let x_positions: Vec<f64> = result.pages[0]
+            .fragments
+            .iter()
+            .filter_map(|fragment| match fragment {
+                Fragment::Paragraph(paragraph) => Some(paragraph.x),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(x_positions, vec![10.0, 10.0, 100.0, 100.0]);
+        assert_eq!(paragraph_slices(&result, 5.0), vec![(0, 0, 4)]);
     }
 
     #[test]

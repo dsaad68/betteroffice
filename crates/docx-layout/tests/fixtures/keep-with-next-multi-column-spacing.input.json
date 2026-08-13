@@ -1,0 +1,154 @@
+{
+  "measured": [
+    {
+      "block": {
+        "kind": "paragraph",
+        "id": 1,
+        "runs": [{ "kind": "text", "text": "Intro" }],
+        "attrs": {}
+      },
+      "measure": {
+        "kind": "paragraph",
+        "lines": [
+          {
+            "headRun": 0,
+            "headChar": 0,
+            "tailRun": 0,
+            "tailChar": 5,
+            "width": 40,
+            "ascent": 16,
+            "descent": 4,
+            "lineHeight": 20
+          }
+        ],
+        "totalHeight": 20
+      }
+    },
+    {
+      "block": {
+        "kind": "sectionBreak",
+        "id": 2,
+        "type": "continuous",
+        "pageSize": { "w": 200, "h": 200 },
+        "margins": { "top": 10, "right": 10, "bottom": 10, "left": 10 },
+        "columns": { "count": 1, "gap": 0 }
+      },
+      "measure": { "kind": "sectionBreak" }
+    },
+    {
+      "block": {
+        "kind": "paragraph",
+        "id": 3,
+        "runs": [{ "kind": "text", "text": "Filler" }],
+        "attrs": {
+          "spacing": { "before": 10, "after": 10 }
+        }
+      },
+      "measure": {
+        "kind": "paragraph",
+        "lines": [
+          {
+            "headRun": 0,
+            "headChar": 0,
+            "tailRun": 0,
+            "tailChar": 6,
+            "width": 50,
+            "ascent": 80,
+            "descent": 20,
+            "lineHeight": 100
+          }
+        ],
+        "totalHeight": 120
+      }
+    },
+    {
+      "block": {
+        "kind": "paragraph",
+        "id": 4,
+        "runs": [{ "kind": "text", "text": "Heading" }],
+        "attrs": {
+          "keepNext": true,
+          "spacing": { "before": 10, "after": 10 }
+        }
+      },
+      "measure": {
+        "kind": "paragraph",
+        "lines": [
+          {
+            "headRun": 0,
+            "headChar": 0,
+            "tailRun": 0,
+            "tailChar": 7,
+            "width": 60,
+            "ascent": 16,
+            "descent": 4,
+            "lineHeight": 20
+          }
+        ],
+        "totalHeight": 40
+      }
+    },
+    {
+      "block": {
+        "kind": "paragraph",
+        "id": 5,
+        "runs": [{ "kind": "text", "text": "Line one line two line three line four" }],
+        "attrs": {
+          "spacing": { "before": 10 }
+        }
+      },
+      "measure": {
+        "kind": "paragraph",
+        "lines": [
+          {
+            "headRun": 0,
+            "headChar": 0,
+            "tailRun": 0,
+            "tailChar": 8,
+            "width": 64,
+            "ascent": 16,
+            "descent": 4,
+            "lineHeight": 20
+          },
+          {
+            "headRun": 0,
+            "headChar": 9,
+            "tailRun": 0,
+            "tailChar": 17,
+            "width": 64,
+            "ascent": 16,
+            "descent": 4,
+            "lineHeight": 20
+          },
+          {
+            "headRun": 0,
+            "headChar": 18,
+            "tailRun": 0,
+            "tailChar": 28,
+            "width": 80,
+            "ascent": 16,
+            "descent": 4,
+            "lineHeight": 20
+          },
+          {
+            "headRun": 0,
+            "headChar": 29,
+            "tailRun": 0,
+            "tailChar": 38,
+            "width": 72,
+            "ascent": 16,
+            "descent": 4,
+            "lineHeight": 20
+          }
+        ],
+        "totalHeight": 90
+      }
+    }
+  ],
+  "options": {
+    "pageSize": { "w": 200, "h": 200 },
+    "margins": { "top": 10, "right": 10, "bottom": 10, "left": 10 },
+    "columns": { "count": 2, "gap": 0 },
+    "pageGap": 20
+  }
+}

@@ -204,6 +204,12 @@ impl Paginator {
         page_size.h - margins.top - margins.bottom - self.footnote_reserved_height(page_number)
     }
 
+    /// Content height of the next unused column in the current region.
+    pub fn next_column_content_height(&self, idx: usize) -> Option<f64> {
+        ((self.states[idx].column_index as f64) < self.columns.count - 1.0)
+            .then(|| self.states[idx].content_limit - self.column_region_top)
+    }
+
     /// Returns the active section's content width.
     pub fn get_content_width(&self) -> f64 {
         self.page_size.w - self.margins.left - self.margins.right
