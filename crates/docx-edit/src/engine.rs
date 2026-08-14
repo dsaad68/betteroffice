@@ -3176,4 +3176,37 @@ mod tests {
         assert!(paragraph_slices(&on, 1).iter().all(|(page, ..)| *page > 0));
         assert_eq!(paragraph_slices(&on, 1)[0].1, 0);
     }
+
+    #[test]
+    fn keep_with_next_spacing_survives_a_docx_round_trip_into_pagination() {
+        let styles = r#"<w:style w:type="paragraph" w:default="1" w:styleId="Normal"><w:name w:val="Normal"/><w:pPr><w:spacing w:before="0" w:after="0"/></w:pPr></w:style>
+<w:style w:type="paragraph" w:styleId="Heading1"><w:name w:val="heading 1"/><w:basedOn w:val="Normal"/><w:pPr><w:keepNext/><w:spacing w:before="200" w:after="200"/></w:pPr></w:style>
+<w:style w:type="paragraph" w:styleId="Body"><w:name w:val="Body"/><w:basedOn w:val="Normal"/><w:pPr><w:spacing w:before="1200"/></w:pPr></w:style>"#;
+        let document = r#"<w:p><w:pPr><w:pStyle w:val="Normal"/></w:pPr><w:r><w:t>Filler</w:t></w:r></w:p>
+<w:p><w:pPr><w:pStyle w:val="Heading1"/></w:pPr><w:r><w:t>Heading</w:t></w:r></w:p>
+<w:p><w:pPr><w:pStyle w:val="Body"/></w:pPr><w:r><w:t>Follower</w:t></w:r></w:p>"#;
+        let bytes = docx_bytes(styles, document);
+
+        let probe = layout_pages(&bytes, 204, 4000.0);
+        let line = line_height(&probe, 0);
+        let spacing = |index: usize, edge: &str| {
+            probe["measured"][index]["block"]["attrs"]["spacing"][edge]
+                .as_f64()
+                .unwrap_or(0.0)
+        };
+        let (heading_gap, follower_gap) = (spacing(1, "before"), spacing(2, "before"));
+        assert!(follower_gap > spacing(1, "after"), "follower opens the gap");
+
+        let layout = layout_pages(&bytes, 205, heading_gap + follower_gap + line * 2.5);
+
+        let heading = paragraph_slices(&layout, 1);
+        let follower = paragraph_slices(&layout, 2);
+        assert_eq!(heading.len(), 1);
+        assert_eq!(follower.len(), 1);
+        assert_eq!(
+            heading[0].0, follower[0].0,
+            "keepNext must land the heading on the follower's page"
+        );
+        assert_eq!(heading[0].0, 1);
+    }
 }
