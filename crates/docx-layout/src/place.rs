@@ -30,6 +30,7 @@
 //! layout, so an edit late in a document does not re-place everything above it.
 
 use crate::LayoutError;
+use crate::floating_objects::{is_anchored_image_block, is_floating_text_box_block};
 use crate::hooks;
 use crate::page_flow::{PageFlowGeometry, Paginator};
 use crate::paragraph_spacing::{get_spacing_after, get_spacing_before, lines_height};
@@ -173,21 +174,6 @@ fn get_paragraph_fragment_pm_range(
     }
 
     (pm_start, pm_end)
-}
-
-fn is_floating_wrap_type(wrap_type: Option<&str>) -> bool {
-    matches!(
-        wrap_type,
-        Some("square") | Some("tight") | Some("through") | Some("behind") | Some("inFront")
-    )
-}
-
-/// A text box floats when it declares float display, a floating wrap type, or
-/// `topAndBottom` wrapping.
-fn is_floating_text_box_block(block: &TextBoxBlock) -> bool {
-    block.display_mode.as_deref() == Some("float")
-        || is_floating_wrap_type(block.wrap_type.as_deref())
-        || block.wrap_type.as_deref() == Some("topAndBottom")
 }
 
 /// Suppresses spacing between adjacent same-style contextual paragraphs.
@@ -986,12 +972,7 @@ fn layout_paragraph(
 
 /// Places inline images in flow and anchored images over the page.
 fn layout_image(block: &ImageBlock, measure: &ImageExtent, paginator: &mut Paginator) {
-    if block
-        .anchor
-        .as_ref()
-        .and_then(|a| a.is_anchored)
-        .unwrap_or(false)
-    {
+    if is_anchored_image_block(block) {
         layout_anchored_image(block, measure, paginator);
         return;
     }
@@ -1353,6 +1334,29 @@ mod pagination_rule_tests {
         }
     }
 
+    fn measured_image(id: u32, height: f64, is_anchored: bool) -> serde_json::Value {
+        json!({
+            "block": {
+                "kind": "image", "id": id, "src": "embedded", "width": 20,
+                "height": height,
+                "anchor": is_anchored.then(|| json!({ "isAnchored": true })),
+            },
+            "measure": { "kind": "image", "width": 20, "height": height },
+        })
+    }
+
+    fn measured_text_box(id: u32, height: f64, is_floating: bool) -> serde_json::Value {
+        json!({
+            "block": {
+                "kind": "textBox", "id": id, "width": 20, "height": height,
+                "content": [], "displayMode": is_floating.then_some("float"),
+            },
+            "measure": {
+                "kind": "textBox", "width": 20, "height": height, "innerMeasures": [],
+            },
+        })
+    }
+
     fn object_page(layout: &Layout, id: f64) -> usize {
         layout
             .pages
@@ -1363,6 +1367,12 @@ mod pagination_rule_tests {
                         matches!(value.block_id, crate::types::BlockId::Num(found) if found == id)
                     }
                     Fragment::Chart(value) => {
+                        matches!(value.block_id, crate::types::BlockId::Num(found) if found == id)
+                    }
+                    Fragment::Image(value) => {
+                        matches!(value.block_id, crate::types::BlockId::Num(found) if found == id)
+                    }
+                    Fragment::TextBox(value) => {
                         matches!(value.block_id, crate::types::BlockId::Num(found) if found == id)
                     }
                     _ => false,
@@ -1650,6 +1660,68 @@ mod pagination_rule_tests {
             assert_eq!(paragraph_slices(&result, 2.0), vec![(1, 0, 1)]);
             assert_eq!(object_page(&result, 3.0), 1);
         }
+    }
+
+    #[test]
+    fn keep_with_next_distinguishes_anchored_and_inline_image_followers() {
+        let anchored = layout(vec![
+            paragraph(1, 1, 70.0, json!({})),
+            paragraph(2, 1, 20.0, json!({ "keepNext": true })),
+            measured_image(3, 80.0, true),
+        ]);
+        let inline = layout(vec![
+            paragraph(1, 1, 70.0, json!({})),
+            paragraph(2, 1, 20.0, json!({ "keepNext": true })),
+            measured_image(3, 80.0, false),
+        ]);
+
+        assert_eq!(
+            (
+                anchored.pages.len(),
+                paragraph_slices(&anchored, 2.0),
+                object_page(&anchored, 3.0),
+            ),
+            (1, vec![(0, 0, 1)], 0),
+        );
+        assert_eq!(
+            (
+                inline.pages.len(),
+                paragraph_slices(&inline, 2.0),
+                object_page(&inline, 3.0),
+            ),
+            (2, vec![(1, 0, 1)], 1),
+        );
+    }
+
+    #[test]
+    fn keep_with_next_distinguishes_floating_and_inline_text_box_followers() {
+        let floating = layout(vec![
+            paragraph(1, 1, 70.0, json!({})),
+            paragraph(2, 1, 20.0, json!({ "keepNext": true })),
+            measured_text_box(3, 80.0, true),
+        ]);
+        let inline = layout(vec![
+            paragraph(1, 1, 70.0, json!({})),
+            paragraph(2, 1, 20.0, json!({ "keepNext": true })),
+            measured_text_box(3, 80.0, false),
+        ]);
+
+        assert_eq!(
+            (
+                floating.pages.len(),
+                paragraph_slices(&floating, 2.0),
+                object_page(&floating, 3.0),
+            ),
+            (1, vec![(0, 0, 1)], 0),
+        );
+        assert_eq!(
+            (
+                inline.pages.len(),
+                paragraph_slices(&inline, 2.0),
+                object_page(&inline, 3.0),
+            ),
+            (2, vec![(1, 0, 1)], 1),
+        );
     }
 
     #[test]

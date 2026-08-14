@@ -16,11 +16,13 @@
 //! members, and above the witness — collapses to the larger of the two spacings
 //! that meet there, and style-inherited spacing on a blank paragraph is dropped
 //! the way placement drops it. A paragraph follower brings its own leading
-//! spacing to that last gap; a table, image or text box is placed with none of
-//! its own, so there the gap is whatever the tail deferred.
+//! spacing to that last gap; an in-flow object is placed with none of its own,
+//! so there the gap is whatever the tail deferred. Overlay followers add no
+//! witness because placement leaves the pen unchanged.
 
 use std::collections::{BTreeMap, BTreeSet};
 
+use crate::floating_objects::{is_anchored_image_block, is_floating_text_box_block};
 use crate::paragraph_spacing::{FlowStack, get_spacing_before, lines_height};
 use crate::types::{BlockExtent, LayoutBlock, MeasuredBlock};
 
@@ -158,16 +160,17 @@ fn stack_group(group: &KeepWithNextGroup, measured: &[MeasuredBlock], deferred: 
         stack.push_paragraph(block, measure);
     }
     if let Some(follower) = group.follower.and_then(|index| measured.get(index)) {
-        let (before, witness) = witness_slice(follower);
-        stack.push(before, witness, 0.0);
+        if let Some((before, witness)) = witness_slice(follower) {
+            stack.push(before, witness, 0.0);
+        }
     }
     stack.height()
 }
 
 /// The follower's own leading spacing and the first slice bound to the group.
-/// Tables, images and text boxes are placed with no leading spacing of their
-/// own, so their gap is whatever the tail deferred.
-fn witness_slice(follower: &MeasuredBlock) -> (f64, f64) {
+/// In-flow objects have no leading spacing of their own. Anchored images and
+/// floating text boxes return no slice because they do not move the pen.
+fn witness_slice(follower: &MeasuredBlock) -> Option<(f64, f64)> {
     match (&follower.block, &follower.measure) {
         (LayoutBlock::Paragraph(block), BlockExtent::Paragraph(measure)) => {
             let witness_lines = if paragraph_keeps_lines(&follower.block) {
@@ -183,17 +186,23 @@ fn witness_slice(follower: &MeasuredBlock) -> (f64, f64) {
             } else {
                 measure.lines.len().min(1)
             };
-            (
+            Some((
                 get_spacing_before(block),
                 lines_height(&measure.lines[..witness_lines]),
-            )
+            ))
         }
-        (_, BlockExtent::Table(table)) => (0.0, table.rows.first().map_or(0.0, |row| row.height)),
-        (_, BlockExtent::Image(image)) => (0.0, image.height),
-        (_, BlockExtent::Shape(shape)) => (0.0, shape.height),
-        (_, BlockExtent::Chart(chart)) => (0.0, chart.height),
-        (_, BlockExtent::TextBox(text_box)) => (0.0, text_box.height),
-        _ => (0.0, 0.0),
+        (_, BlockExtent::Table(table)) => {
+            Some((0.0, table.rows.first().map_or(0.0, |row| row.height)))
+        }
+        (LayoutBlock::Image(block), BlockExtent::Image(image)) => {
+            (!is_anchored_image_block(block)).then_some((0.0, image.height))
+        }
+        (_, BlockExtent::Shape(shape)) => Some((0.0, shape.height)),
+        (_, BlockExtent::Chart(chart)) => Some((0.0, chart.height)),
+        (LayoutBlock::TextBox(block), BlockExtent::TextBox(text_box)) => {
+            (!is_floating_text_box_block(block)).then_some((0.0, text_box.height))
+        }
+        _ => None,
     }
 }
 

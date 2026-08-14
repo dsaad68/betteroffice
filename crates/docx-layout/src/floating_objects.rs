@@ -26,10 +26,28 @@
 
 use serde::{Deserialize, Serialize};
 
+use crate::types::{ImageBlock, TextBoxBlock};
+
 /// A text segment beside a float narrower than this (px) is not worth
 /// wrapping into. Measurement applies the threshold; this registry reports raw
 /// spans and leaves the decision to its caller.
 pub const MIN_WRAP_SEGMENT_WIDTH: f64 = 24.0;
+
+pub(crate) fn is_anchored_image_block(block: &ImageBlock) -> bool {
+    block
+        .anchor
+        .as_ref()
+        .and_then(|anchor| anchor.is_anchored)
+        .unwrap_or(false)
+}
+
+pub(crate) fn is_floating_text_box_block(block: &TextBoxBlock) -> bool {
+    block.display_mode.as_deref() == Some("float")
+        || matches!(
+            block.wrap_type.as_deref(),
+            Some("square" | "tight" | "through" | "behind" | "inFront" | "topAndBottom")
+        )
+}
 
 /// NaN-propagating minimum that preserves negative zero.
 fn js_min(a: f64, b: f64) -> f64 {
