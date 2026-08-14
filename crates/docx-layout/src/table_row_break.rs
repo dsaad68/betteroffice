@@ -34,11 +34,22 @@ fn cell_unbreakable_ranges(
     let mut ranges = Vec::new();
     let mut y = start_y;
     let mut previous_after = 0.0_f64;
+    let mut keep_with_next_start = None;
     for (index, measure) in measures.iter().enumerate() {
         let block = blocks.get(index);
         if let (Some(LayoutBlock::Paragraph(paragraph)), BlockExtent::Paragraph(extent)) =
             (block, measure)
         {
+            let keeps_with_next = paragraph
+                .attrs
+                .as_ref()
+                .and_then(|attrs| attrs.keep_next)
+                .unwrap_or(false);
+            if keeps_with_next {
+                keep_with_next_start.get_or_insert(y);
+            } else {
+                keep_with_next_start = None;
+            }
             let spacing = paragraph
                 .attrs
                 .as_ref()
@@ -64,7 +75,13 @@ fn cell_unbreakable_ranges(
             let top = y;
             y += height;
             ranges.push((top, y));
+            if let (Some(LayoutBlock::Table(_)), Some(start)) = (block, keep_with_next_start.take())
+            {
+                ranges.push((start, y));
+            }
             previous_after = 0.0;
+        } else {
+            keep_with_next_start = None;
         }
     }
     ranges
@@ -369,5 +386,44 @@ mod tests {
         let info = build_table_row_break_info(&block, &measure);
         assert_eq!(info.break_offsets[0], vec![60.0]);
         assert_eq!(snap_row_break(&info, 0, 0.0, 40.0), 0.0);
+    }
+
+    #[test]
+    fn rejects_cell_boundaries_between_a_keep_next_heading_and_nested_table() {
+        let block: TableBlock = serde_json::from_value(json!({
+            "id": 0,
+            "rows": [{ "id": 0, "cells": [
+                { "id": 0, "blocks": [
+                    { "kind": "paragraph", "id": 1, "runs": [] },
+                    {
+                        "kind": "paragraph", "id": 2, "runs": [],
+                        "attrs": { "keepNext": true }
+                    },
+                    { "kind": "table", "id": 3, "rows": [], "columnWidths": [] }
+                ] },
+                { "id": 1, "blocks": [{ "kind": "paragraph", "id": 4, "runs": [] }] }
+            ] }],
+            "columnWidths": [100, 100],
+        }))
+        .unwrap();
+        let nested_table = json!({
+            "kind": "table", "rows": [], "columnWidths": [],
+            "totalWidth": 0, "totalHeight": 50,
+        });
+        let measure: TableExtent = serde_json::from_value(json!({
+            "rows": [{ "height": 120, "cells": [
+                measured_cell(vec![para_measure(1), para_measure(1), nested_table]),
+                measured_cell(vec![para_measure(6)])
+            ] }],
+            "columnWidths": [100, 100], "totalWidth": 200, "totalHeight": 120,
+        }))
+        .unwrap();
+
+        let info = build_table_row_break_info(&block, &measure);
+
+        assert_eq!(info.break_offsets[0], vec![20.0, 100.0, 120.0]);
+        assert_eq!(snap_row_break(&info, 0, 0.0, 89.0), 20.0);
+        assert_eq!(snap_row_break(&info, 0, 20.0, 69.0), 0.0);
+        assert_eq!(snap_row_break(&info, 0, 20.0, 80.0), 80.0);
     }
 }

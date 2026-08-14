@@ -1503,6 +1503,54 @@ mod pagination_rule_tests {
         })
     }
 
+    fn table_with_nested_keep_next_follower() -> serde_json::Value {
+        let heading = json!({
+            "kind": "paragraph", "id": 20,
+            "runs": [{ "kind": "text", "text": "Heading", "fmt": {} }],
+            "attrs": { "keepNext": true },
+        });
+        let peer = json!({
+            "kind": "paragraph", "id": 21,
+            "runs": [{ "kind": "text", "text": "Peer", "fmt": {} }],
+        });
+        let paragraph_extent = json!({
+            "kind": "paragraph", "lines": [line(20.0)], "totalHeight": 20,
+        });
+        let nested_table = json!({
+            "kind": "table", "id": 22,
+            "rows": [{ "id": 220, "cells": [{ "id": 221, "blocks": [] }] }],
+            "columnWidths": [90],
+        });
+        let nested_extent = json!({
+            "kind": "table", "columnWidths": [90], "totalWidth": 90, "totalHeight": 50,
+            "rows": [{
+                "height": 50,
+                "cells": [{ "width": 90, "height": 50, "blocks": [] }],
+            }],
+        });
+        json!({
+            "block": {
+                "kind": "table", "id": 2,
+                "rows": [{ "id": 200, "cells": [
+                    { "id": 201, "blocks": [heading, nested_table] },
+                    { "id": 202, "blocks": [peer] },
+                ] }],
+                "columnWidths": [90, 90],
+            },
+            "measure": {
+                "kind": "table", "columnWidths": [90, 90],
+                "totalWidth": 180, "totalHeight": 70,
+                "rows": [{ "height": 70, "cells": [
+                    {
+                        "width": 90, "height": 70,
+                        "blocks": [paragraph_extent.clone(), nested_extent],
+                    },
+                    { "width": 90, "height": 20, "blocks": [paragraph_extent] },
+                ] }],
+            },
+        })
+    }
+
     fn positioned_floating_table() -> serde_json::Value {
         measured_table(
             3,
@@ -2080,6 +2128,30 @@ mod pagination_rule_tests {
 
         assert_eq!(result.pages.len(), 2);
         assert_eq!(pages_of(&result, &[2.0, 3.0]), vec![1, 1]);
+    }
+
+    #[test]
+    fn keep_with_next_in_a_cell_moves_with_its_nested_table() {
+        let result = layout(vec![
+            paragraph(1, 1, 60.0, json!({})),
+            table_with_nested_keep_next_follower(),
+        ]);
+        let fragments: Vec<_> = result
+            .pages
+            .iter()
+            .enumerate()
+            .flat_map(|(page_index, page)| {
+                page.fragments.iter().filter_map(move |fragment| {
+                    let Fragment::Table(table) = fragment else {
+                        return None;
+                    };
+                    matches!(table.block_id, crate::types::BlockId::Num(id) if id == 2.0)
+                        .then_some((page_index, table.clip_top, table.clip_bottom))
+                })
+            })
+            .collect();
+
+        assert_eq!(fragments, vec![(1, None, None)]);
     }
 
     #[test]
