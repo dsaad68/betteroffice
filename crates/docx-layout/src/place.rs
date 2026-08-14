@@ -544,33 +544,40 @@ fn place(
             paginator.force_page_break();
         }
 
-        // at the head of a keep-with-next group, move to a fresh page when the
-        // whole group would otherwise straddle the boundary
+        // at the head of a keep-with-next group, move to a fresh column or page
+        // when the whole group would otherwise straddle the boundary
         if let Some(group) = plan.keep_with_next.groups_by_head.get(&i)
             && !plan.keep_with_next.interior_members.contains(&i)
         {
             let state_idx = paginator.get_current();
             let next_column_content_height = paginator.next_column_content_height(state_idx);
-            let fresh_content_height =
-                next_column_content_height.unwrap_or_else(|| paginator.fresh_page_content_height());
+            let fresh_page_content_height = paginator.fresh_page_content_height();
             let page_has_content = paginator.page_fragment_count(state_idx) > 0;
             let group_height = hooks::measure_keep_with_next_group(
                 group,
                 measured,
                 paginator.state(state_idx).deferred_spacing,
             )?;
-            let must_advance = hooks::keep_with_next_group_must_advance(
+            let available_height = paginator.get_available_height();
+            let use_next_column = if let Some(content_height) = next_column_content_height {
+                hooks::keep_with_next_group_must_advance(
+                    group_height,
+                    available_height,
+                    content_height,
+                    page_has_content,
+                )?
+            } else {
+                false
+            };
+            if use_next_column {
+                paginator.force_column_break();
+            } else if hooks::keep_with_next_group_must_advance(
                 group_height,
-                paginator.get_available_height(),
-                fresh_content_height,
+                available_height,
+                fresh_page_content_height,
                 page_has_content,
-            )?;
-            if must_advance {
-                if next_column_content_height.is_some() {
-                    paginator.force_column_break();
-                } else {
-                    paginator.force_page_break();
-                }
+            )? {
+                paginator.force_page_break();
             }
         }
 
@@ -1526,6 +1533,24 @@ mod pagination_rule_tests {
             .collect()
     }
 
+    fn paragraph_origins(layout: &Layout) -> Vec<(usize, f64, f64)> {
+        layout
+            .pages
+            .iter()
+            .enumerate()
+            .flat_map(|(page_index, page)| {
+                page.fragments
+                    .iter()
+                    .filter_map(move |fragment| match fragment {
+                        Fragment::Paragraph(paragraph) => {
+                            Some((page_index, paragraph.x, paragraph.y))
+                        }
+                        _ => None,
+                    })
+            })
+            .collect()
+    }
+
     #[test]
     fn authored_widow_control_off_splits_where_the_default_moves_the_paragraph_on() {
         let default = layout(vec![
@@ -1656,7 +1681,7 @@ mod pagination_rule_tests {
     }
 
     #[test]
-    fn keep_with_next_advances_into_an_unused_terminal_column() {
+    fn keep_with_next_uses_an_unused_column_when_it_holds_the_group() {
         let result = layout_with_options(
             vec![
                 paragraph(1, 1, 20.0, json!({})),
@@ -1695,16 +1720,49 @@ mod pagination_rule_tests {
 
         assert_eq!(result.pages.len(), 1);
         assert_eq!(pages_of(&result, &[1.0, 3.0, 4.0, 5.0]), vec![0, 0, 0, 0]);
-        let x_positions: Vec<f64> = result.pages[0]
-            .fragments
-            .iter()
-            .filter_map(|fragment| match fragment {
-                Fragment::Paragraph(paragraph) => Some(paragraph.x),
-                _ => None,
-            })
-            .collect();
-        assert_eq!(x_positions, vec![10.0, 10.0, 100.0, 100.0]);
+        assert_eq!(
+            paragraph_origins(&result),
+            vec![
+                (0, 10.0, 10.0),
+                (0, 10.0, 40.0),
+                (0, 100.0, 40.0),
+                (0, 100.0, 70.0),
+            ]
+        );
         assert_eq!(paragraph_slices(&result, 5.0), vec![(0, 0, 4)]);
+    }
+
+    #[test]
+    fn keep_with_next_uses_a_fresh_page_when_unused_columns_are_too_short() {
+        let result = layout_with_options(
+            vec![
+                paragraph(1, 1, 80.0, json!({})),
+                json!({
+                    "block": {
+                        "kind": "sectionBreak", "id": 2, "type": "continuous",
+                        "pageSize": { "w": 200, "h": 200 },
+                        "margins": { "top": 10, "right": 10, "bottom": 10, "left": 10 },
+                        "columns": { "count": 1, "gap": 0 },
+                    },
+                    "measure": { "kind": "sectionBreak" },
+                }),
+                paragraph(3, 1, 80.0, json!({ "keepNext": true })),
+                paragraph(4, 2, 20.0, json!({ "keepLines": true })),
+            ],
+            json!({
+                "pageSize": { "w": 200, "h": 200 },
+                "margins": { "top": 10, "right": 10, "bottom": 10, "left": 10 },
+                "columns": { "count": 2, "gap": 0 },
+            }),
+        );
+
+        assert_eq!(result.pages.len(), 2);
+        assert_eq!(pages_of(&result, &[1.0, 3.0, 4.0]), vec![0, 1, 1]);
+        assert_eq!(
+            paragraph_origins(&result),
+            vec![(0, 10.0, 10.0), (1, 10.0, 10.0), (1, 10.0, 90.0)]
+        );
+        assert_eq!(paragraph_slices(&result, 4.0), vec![(1, 0, 2)]);
     }
 
     #[test]
