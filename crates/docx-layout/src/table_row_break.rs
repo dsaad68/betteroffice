@@ -47,19 +47,25 @@ fn cell_unbreakable_ranges(
                 .unwrap_or(false);
             if keeps_with_next {
                 keep_with_next_start.get_or_insert(y);
-            } else {
-                keep_with_next_start = None;
             }
+            let follower_start = (!keeps_with_next)
+                .then(|| keep_with_next_start.take())
+                .flatten();
             let spacing = paragraph
                 .attrs
                 .as_ref()
                 .and_then(|attrs| attrs.spacing.as_ref());
             y += previous_after.max(spacing.and_then(|value| value.before).unwrap_or(0.0));
-            for line in &extent.lines {
+            for (line_index, line) in extent.lines.iter().enumerate() {
                 y += line.float_skip_before.unwrap_or(0.0);
                 let top = y;
                 y += line.line_height;
                 ranges.push((top, y));
+                if line_index == 0
+                    && let Some(start) = follower_start
+                {
+                    ranges.push((start, y));
+                }
             }
             previous_after = spacing.and_then(|value| value.after).unwrap_or(0.0);
             continue;
@@ -75,8 +81,7 @@ fn cell_unbreakable_ranges(
             let top = y;
             y += height;
             ranges.push((top, y));
-            if let (Some(LayoutBlock::Table(_)), Some(start)) = (block, keep_with_next_start.take())
-            {
+            if let Some(start) = keep_with_next_start.take() {
                 ranges.push((start, y));
             }
             previous_after = 0.0;
@@ -386,6 +391,71 @@ mod tests {
         let info = build_table_row_break_info(&block, &measure);
         assert_eq!(info.break_offsets[0], vec![60.0]);
         assert_eq!(snap_row_break(&info, 0, 0.0, 40.0), 0.0);
+    }
+
+    #[test]
+    fn cell_keep_next_spans_every_supported_follower() {
+        let followers = [
+            (
+                "paragraph",
+                json!({ "kind": "paragraph", "id": 2, "runs": [] }),
+                json!({
+                    "kind": "paragraph",
+                    "lines": [{
+                        "headRun": 0, "headChar": 0, "tailRun": 0, "tailChar": 0,
+                        "width": 0, "ascent": 0, "descent": 0, "lineHeight": 50,
+                    }],
+                    "totalHeight": 50,
+                }),
+            ),
+            (
+                "image",
+                json!({
+                    "kind": "image", "id": 2, "src": "embedded",
+                    "width": 50, "height": 50,
+                }),
+                json!({ "kind": "image", "width": 50, "height": 50 }),
+            ),
+            (
+                "text box",
+                json!({
+                    "kind": "textBox", "id": 2, "width": 50, "height": 50,
+                    "content": [],
+                }),
+                json!({
+                    "kind": "textBox", "width": 50, "height": 50,
+                    "innerMeasures": [],
+                }),
+            ),
+            (
+                "nested table",
+                json!({
+                    "kind": "table", "id": 2, "rows": [], "columnWidths": [],
+                }),
+                json!({
+                    "kind": "table", "rows": [], "columnWidths": [],
+                    "totalWidth": 0, "totalHeight": 50,
+                }),
+            ),
+        ];
+
+        for (kind, follower, follower_measure) in followers {
+            let blocks: Vec<LayoutBlock> = serde_json::from_value(json!([
+                {
+                    "kind": "paragraph", "id": 1, "runs": [],
+                    "attrs": { "keepNext": true },
+                },
+                follower,
+            ]))
+            .unwrap();
+            let measures: Vec<BlockExtent> =
+                serde_json::from_value(json!([para_measure(1), follower_measure])).unwrap();
+
+            assert!(
+                cell_unbreakable_ranges(&blocks, &measures, 0.0).contains(&(0.0, 70.0)),
+                "{kind}"
+            );
+        }
     }
 
     #[test]

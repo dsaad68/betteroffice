@@ -37,11 +37,15 @@ pub fn measure_keep_with_next_group(
     group: &KeepWithNextGroup,
     measured: &[MeasuredBlock],
     deferred_spacing: f64,
+    cursor_capacity: f64,
+    fresh_capacity: f64,
 ) -> Result<KeepWithNextHeight, LayoutError> {
     Ok(keep_together::measure_keep_with_next_group(
         group,
         measured,
         deferred_spacing,
+        cursor_capacity,
+        fresh_capacity,
     ))
 }
 

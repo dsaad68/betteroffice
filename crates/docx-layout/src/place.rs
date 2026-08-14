@@ -536,16 +536,21 @@ fn place(
             && !plan.keep_with_next.interior_members.contains(&i)
         {
             let state_idx = paginator.get_current();
+            let current_column_content_height =
+                paginator.state(state_idx).content_limit - paginator.state(state_idx).content_top;
             let next_column_content_height = paginator.next_column_content_height(state_idx);
             let fresh_page_content_height = paginator.fresh_page_content_height();
             let page_has_content = paginator.page_fragment_count(state_idx) > 0;
-            let group_height = hooks::measure_keep_with_next_group(
-                group,
-                measured,
-                paginator.state(state_idx).deferred_spacing,
-            )?;
+            let deferred_spacing = paginator.state(state_idx).deferred_spacing;
             let available_height = paginator.get_available_height();
             let use_next_column = if let Some(content_height) = next_column_content_height {
+                let group_height = hooks::measure_keep_with_next_group(
+                    group,
+                    measured,
+                    deferred_spacing,
+                    current_column_content_height,
+                    content_height,
+                )?;
                 hooks::keep_with_next_group_must_advance(
                     group_height,
                     available_height,
@@ -557,13 +562,22 @@ fn place(
             };
             if use_next_column {
                 paginator.force_column_break();
-            } else if hooks::keep_with_next_group_must_advance(
-                group_height,
-                available_height,
-                fresh_page_content_height,
-                page_has_content,
-            )? {
-                paginator.force_page_break();
+            } else {
+                let group_height = hooks::measure_keep_with_next_group(
+                    group,
+                    measured,
+                    deferred_spacing,
+                    current_column_content_height,
+                    fresh_page_content_height,
+                )?;
+                if hooks::keep_with_next_group_must_advance(
+                    group_height,
+                    available_height,
+                    fresh_page_content_height,
+                    page_has_content,
+                )? {
+                    paginator.force_page_break();
+                }
             }
         }
 
@@ -1503,7 +1517,7 @@ mod pagination_rule_tests {
         })
     }
 
-    fn table_with_nested_keep_next_follower() -> serde_json::Value {
+    fn table_with_cell_keep_next_follower(kind: &str) -> serde_json::Value {
         let heading = json!({
             "kind": "paragraph", "id": 20,
             "runs": [{ "kind": "text", "text": "Heading", "fmt": {} }],
@@ -1516,23 +1530,55 @@ mod pagination_rule_tests {
         let paragraph_extent = json!({
             "kind": "paragraph", "lines": [line(20.0)], "totalHeight": 20,
         });
-        let nested_table = json!({
-            "kind": "table", "id": 22,
-            "rows": [{ "id": 220, "cells": [{ "id": 221, "blocks": [] }] }],
-            "columnWidths": [90],
-        });
-        let nested_extent = json!({
-            "kind": "table", "columnWidths": [90], "totalWidth": 90, "totalHeight": 50,
-            "rows": [{
-                "height": 50,
-                "cells": [{ "width": 90, "height": 50, "blocks": [] }],
-            }],
-        });
+        let (follower, follower_extent) = match kind {
+            "paragraph" => (
+                json!({
+                    "kind": "paragraph", "id": 22,
+                    "runs": [{ "kind": "text", "text": "Body", "fmt": {} }],
+                }),
+                json!({
+                    "kind": "paragraph", "lines": [line(50.0)], "totalHeight": 50,
+                }),
+            ),
+            "image" => (
+                json!({
+                    "kind": "image", "id": 22, "src": "embedded",
+                    "width": 50, "height": 50,
+                }),
+                json!({ "kind": "image", "width": 50, "height": 50 }),
+            ),
+            "text box" => (
+                json!({
+                    "kind": "textBox", "id": 22, "width": 50, "height": 50,
+                    "content": [],
+                }),
+                json!({
+                    "kind": "textBox", "width": 50, "height": 50,
+                    "innerMeasures": [],
+                }),
+            ),
+            "nested table" => (
+                json!({
+                    "kind": "table", "id": 22,
+                    "rows": [{ "id": 220, "cells": [{ "id": 221, "blocks": [] }] }],
+                    "columnWidths": [90],
+                }),
+                json!({
+                    "kind": "table", "columnWidths": [90],
+                    "totalWidth": 90, "totalHeight": 50,
+                    "rows": [{
+                        "height": 50,
+                        "cells": [{ "width": 90, "height": 50, "blocks": [] }],
+                    }],
+                }),
+            ),
+            _ => panic!("unsupported cell follower"),
+        };
         json!({
             "block": {
                 "kind": "table", "id": 2,
                 "rows": [{ "id": 200, "cells": [
-                    { "id": 201, "blocks": [heading, nested_table] },
+                    { "id": 201, "blocks": [heading, follower] },
                     { "id": 202, "blocks": [peer] },
                 ] }],
                 "columnWidths": [90, 90],
@@ -1543,7 +1589,7 @@ mod pagination_rule_tests {
                 "rows": [{ "height": 70, "cells": [
                     {
                         "width": 90, "height": 70,
-                        "blocks": [paragraph_extent.clone(), nested_extent],
+                        "blocks": [paragraph_extent.clone(), follower_extent],
                     },
                     { "width": 90, "height": 20, "blocks": [paragraph_extent] },
                 ] }],
@@ -1737,6 +1783,18 @@ mod pagination_rule_tests {
     }
 
     #[test]
+    fn oversized_keep_lines_follower_degrades_to_its_widow_witness() {
+        let result = layout(vec![
+            paragraph(1, 1, 60.0, json!({})),
+            paragraph(2, 1, 20.0, json!({ "keepNext": true })),
+            paragraph(3, 6, 20.0, json!({ "keepLines": true })),
+        ]);
+
+        assert_eq!(paragraph_slices(&result, 2.0), vec![(1, 0, 1)]);
+        assert_eq!(paragraph_slices(&result, 3.0), vec![(1, 0, 4), (2, 4, 6)]);
+    }
+
+    #[test]
     fn keep_with_next_witness_includes_shape_and_chart_followers() {
         for kind in ["shape", "chart"] {
             let result = layout(vec![
@@ -1881,6 +1939,42 @@ mod pagination_rule_tests {
                 "{kind} heading"
             );
             assert_eq!(object_page(&result, 3.0), expected_page, "{kind}");
+        }
+    }
+
+    #[test]
+    fn floating_table_keep_witness_matches_the_column_capacity_fallback() {
+        for (size, row_heights) in [("fits", [40.0, 40.0]), ("exceeds", [40.0, 90.0])] {
+            let cases = [
+                ("in-flow", None, 1),
+                ("float with numeric Y", Some(json!({ "tblpY": 5 })), 0),
+                (
+                    "float with aligned Y",
+                    Some(json!({ "tblpYSpec": "top" })),
+                    0,
+                ),
+                ("float without explicit Y", Some(json!({})), 1),
+            ];
+
+            for (kind, floating, fits_expected_page) in cases {
+                let result = layout(vec![
+                    paragraph(1, 1, 60.0, json!({})),
+                    paragraph(2, 1, 20.0, json!({ "keepNext": true })),
+                    measured_table(3, 20.0, &row_heights, floating),
+                ]);
+                let expected_page = if size == "fits" {
+                    fits_expected_page
+                } else {
+                    1
+                };
+
+                assert_eq!(
+                    paragraph_slices(&result, 2.0),
+                    vec![(expected_page, 0, 1)],
+                    "{size}: {kind} heading"
+                );
+                assert_eq!(object_page(&result, 3.0), expected_page, "{size}: {kind}");
+            }
         }
     }
 
@@ -2131,27 +2225,29 @@ mod pagination_rule_tests {
     }
 
     #[test]
-    fn keep_with_next_in_a_cell_moves_with_its_nested_table() {
-        let result = layout(vec![
-            paragraph(1, 1, 60.0, json!({})),
-            table_with_nested_keep_next_follower(),
-        ]);
-        let fragments: Vec<_> = result
-            .pages
-            .iter()
-            .enumerate()
-            .flat_map(|(page_index, page)| {
-                page.fragments.iter().filter_map(move |fragment| {
-                    let Fragment::Table(table) = fragment else {
-                        return None;
-                    };
-                    matches!(table.block_id, crate::types::BlockId::Num(id) if id == 2.0)
-                        .then_some((page_index, table.clip_top, table.clip_bottom))
+    fn keep_with_next_in_a_cell_moves_with_every_supported_follower() {
+        for kind in ["paragraph", "image", "text box", "nested table"] {
+            let result = layout(vec![
+                paragraph(1, 1, 60.0, json!({})),
+                table_with_cell_keep_next_follower(kind),
+            ]);
+            let fragments: Vec<_> = result
+                .pages
+                .iter()
+                .enumerate()
+                .flat_map(|(page_index, page)| {
+                    page.fragments.iter().filter_map(move |fragment| {
+                        let Fragment::Table(table) = fragment else {
+                            return None;
+                        };
+                        matches!(table.block_id, crate::types::BlockId::Num(id) if id == 2.0)
+                            .then_some((page_index, table.clip_top, table.clip_bottom))
+                    })
                 })
-            })
-            .collect();
+                .collect();
 
-        assert_eq!(fragments, vec![(1, None, None)]);
+            assert_eq!(fragments, vec![(1, None, None)], "{kind}");
+        }
     }
 
     #[test]

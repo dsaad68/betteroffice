@@ -8,9 +8,9 @@
 //! [`measure_keep_with_next_group`] turns a group into the height the contract
 //! actually demands: every member paragraph plus the follower slice placement
 //! requires before it can begin. The witness is one paragraph line normally,
-//! two under widow control, every line under `w:keepLines`, an in-flow table's
-//! first row, the whole preflight height of an unpositioned floating table, or
-//! the whole height of an in-flow object.
+//! two under widow control, every line under a placeable `w:keepLines`, an
+//! in-flow table's first row, the whole preflight height of an unpositioned
+//! floating table, or the whole height of an in-flow object.
 //!
 //! The group is stacked through [`FlowStack`], so the budget is what placement
 //! will consume rather than a sum of parts: every gap — above the head, between
@@ -145,14 +145,21 @@ pub fn measure_keep_with_next_group(
     group: &KeepWithNextGroup,
     measured: &[MeasuredBlock],
     deferred_spacing: f64,
+    cursor_capacity: f64,
+    fresh_capacity: f64,
 ) -> KeepWithNextHeight {
     KeepWithNextHeight {
-        at_cursor: stack_group(group, measured, deferred_spacing),
-        on_fresh_page: stack_group(group, measured, 0.0),
+        at_cursor: stack_group(group, measured, deferred_spacing, cursor_capacity),
+        on_fresh_page: stack_group(group, measured, 0.0, fresh_capacity),
     }
 }
 
-fn stack_group(group: &KeepWithNextGroup, measured: &[MeasuredBlock], deferred: f64) -> f64 {
+fn stack_group(
+    group: &KeepWithNextGroup,
+    measured: &[MeasuredBlock],
+    deferred: f64,
+    column_capacity: f64,
+) -> f64 {
     let mut stack = FlowStack::resuming(deferred);
     for &index in &group.members {
         let MeasuredBlock { block, measure } = &measured[index];
@@ -163,7 +170,7 @@ fn stack_group(group: &KeepWithNextGroup, measured: &[MeasuredBlock], deferred: 
         stack.push_paragraph(block, measure);
     }
     if let Some(follower) = group.follower.and_then(|index| measured.get(index)) {
-        if let Some((before, witness)) = witness_slice(follower) {
+        if let Some((before, witness)) = witness_slice(follower, column_capacity) {
             stack.push(before, witness, 0.0);
         }
     }
@@ -174,12 +181,10 @@ fn stack_group(group: &KeepWithNextGroup, measured: &[MeasuredBlock], deferred: 
 /// In-flow objects have no leading spacing of their own. Positioned overlays
 /// return no slice, while an unpositioned floating table reserves the full
 /// height that placement passes to `ensure_fits`.
-fn witness_slice(follower: &MeasuredBlock) -> Option<(f64, f64)> {
+fn witness_slice(follower: &MeasuredBlock, column_capacity: f64) -> Option<(f64, f64)> {
     match (&follower.block, &follower.measure) {
         (LayoutBlock::Paragraph(block), BlockExtent::Paragraph(measure)) => {
-            let witness_lines = if paragraph_keeps_lines(&follower.block) {
-                measure.lines.len()
-            } else if measure.lines.len() >= 4
+            let widow_witness_lines = if measure.lines.len() >= 4
                 && block
                     .attrs
                     .as_ref()
@@ -190,6 +195,13 @@ fn witness_slice(follower: &MeasuredBlock) -> Option<(f64, f64)> {
             } else {
                 measure.lines.len().min(1)
             };
+            let keep_lines_fits =
+                get_spacing_before(block) + lines_height(&measure.lines) <= column_capacity;
+            let witness_lines = if paragraph_keeps_lines(&follower.block) && keep_lines_fits {
+                measure.lines.len()
+            } else {
+                widow_witness_lines
+            };
             Some((
                 get_spacing_before(block),
                 lines_height(&measure.lines[..witness_lines]),
@@ -197,6 +209,9 @@ fn witness_slice(follower: &MeasuredBlock) -> Option<(f64, f64)> {
         }
         (LayoutBlock::Table(block), BlockExtent::Table(table)) => match block.floating.as_ref() {
             None => Some((0.0, table.rows.first().map_or(0.0, |row| row.height))),
+            Some(_) if table.total_height > column_capacity => {
+                Some((0.0, table.rows.first().map_or(0.0, |row| row.height)))
+            }
             Some(_) if floating_table_has_explicit_y(block) => None,
             Some(_) => Some((0.0, table.total_height)),
         },
@@ -370,7 +385,7 @@ mod tests {
             .groups_by_head
             .get(&head)
             .unwrap_or_else(|| panic!("group headed at block {head}"));
-        measure_keep_with_next_group(group, measured, deferred)
+        measure_keep_with_next_group(group, measured, deferred, f64::INFINITY, f64::INFINITY)
     }
 
     fn measured_follower(block: serde_json::Value, measure: serde_json::Value) -> MeasuredBlock {
@@ -510,7 +525,7 @@ mod tests {
         ];
 
         for (kind, follower, expected_height) in followers {
-            let witness = witness_slice(&follower);
+            let witness = witness_slice(&follower, 100.0);
             if let Some((before, _)) = witness {
                 assert_eq!(before, 0.0, "{kind}");
             }
@@ -681,7 +696,8 @@ mod tests {
         assert_eq!(group.members, vec![1, 2]);
         assert_eq!(group.follower, Some(3));
 
-        let height = measure_keep_with_next_group(group, &measured, 0.0);
+        let height =
+            measure_keep_with_next_group(group, &measured, 0.0, f64::INFINITY, f64::INFINITY);
         assert_eq!(height.at_cursor, 40.0);
 
         // content height 864 (1056 - 2*96); the 620px filler leaves 244 available
