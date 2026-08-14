@@ -26,7 +26,7 @@
 
 use serde::{Deserialize, Serialize};
 
-use crate::types::{ImageBlock, TextBoxBlock};
+use crate::types::{ImageBlock, TableBlock, TextBoxBlock};
 
 /// A text segment beside a float narrower than this (px) is not worth
 /// wrapping into. Measurement applies the threshold; this registry reports raw
@@ -47,6 +47,16 @@ pub(crate) fn is_floating_text_box_block(block: &TextBoxBlock) -> bool {
             block.wrap_type.as_deref(),
             Some("square" | "tight" | "through" | "behind" | "inFront" | "topAndBottom")
         )
+}
+
+pub(crate) fn floating_table_has_explicit_y(block: &TableBlock) -> bool {
+    block.floating.as_ref().is_some_and(|floating| {
+        floating.tblp_y.is_some()
+            || floating
+                .tblp_y_spec
+                .as_deref()
+                .is_some_and(|spec| spec != "inline")
+    })
 }
 
 /// NaN-propagating minimum that preserves negative zero.

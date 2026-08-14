@@ -1357,6 +1357,52 @@ mod pagination_rule_tests {
         })
     }
 
+    fn measured_table(
+        id: u32,
+        width: f64,
+        row_heights: &[f64],
+        floating: Option<serde_json::Value>,
+    ) -> serde_json::Value {
+        let block_rows: Vec<_> = row_heights
+            .iter()
+            .enumerate()
+            .map(|(index, _)| {
+                json!({
+                    "id": id * 100 + index as u32,
+                    "cells": [{ "id": id * 1000 + index as u32, "blocks": [] }],
+                })
+            })
+            .collect();
+        let measured_rows: Vec<_> = row_heights
+            .iter()
+            .map(|height| {
+                json!({
+                    "height": height,
+                    "cells": [{ "width": width, "height": height, "blocks": [] }],
+                })
+            })
+            .collect();
+        let mut block = json!({
+            "kind": "table",
+            "id": id,
+            "rows": block_rows,
+            "columnWidths": [width],
+        });
+        if let Some(floating) = floating {
+            block["floating"] = floating;
+        }
+        json!({
+            "block": block,
+            "measure": {
+                "kind": "table",
+                "columnWidths": [width],
+                "totalWidth": width,
+                "totalHeight": row_heights.iter().sum::<f64>(),
+                "rows": measured_rows,
+            },
+        })
+    }
+
     fn object_page(layout: &Layout, id: f64) -> usize {
         layout
             .pages
@@ -1373,6 +1419,9 @@ mod pagination_rule_tests {
                         matches!(value.block_id, crate::types::BlockId::Num(found) if found == id)
                     }
                     Fragment::TextBox(value) => {
+                        matches!(value.block_id, crate::types::BlockId::Num(found) if found == id)
+                    }
+                    Fragment::Table(value) => {
                         matches!(value.block_id, crate::types::BlockId::Num(found) if found == id)
                     }
                     _ => false,
@@ -1455,24 +1504,15 @@ mod pagination_rule_tests {
     }
 
     fn positioned_floating_table() -> serde_json::Value {
-        json!({
-            "block": {
-                "kind": "table", "id": 3,
-                "rows": [{ "id": 1, "cells": [{ "id": 2, "blocks": [] }] }],
-                "columnWidths": [50],
-                "floating": {
-                    "horzAnchor": "page", "tblpXSpec": "right",
-                    "vertAnchor": "page", "tblpY": 5,
-                },
-            },
-            "measure": {
-                "kind": "table", "columnWidths": [50],
-                "totalWidth": 50, "totalHeight": 40,
-                "rows": [{ "height": 40, "cells": [
-                    { "width": 50, "height": 40, "blocks": [] }
-                ] }],
-            },
-        })
+        measured_table(
+            3,
+            50.0,
+            &[40.0],
+            Some(json!({
+                "horzAnchor": "page", "tblpXSpec": "right",
+                "vertAnchor": "page", "tblpY": 5,
+            })),
+        )
     }
 
     fn positioned_image() -> serde_json::Value {
@@ -1722,6 +1762,78 @@ mod pagination_rule_tests {
             ),
             (2, vec![(1, 0, 1)], 1),
         );
+    }
+
+    #[test]
+    fn keep_with_next_matches_every_object_follower_placement_cost() {
+        let cases = vec![
+            ("inline image", 70.0, measured_image(3, 80.0, false), 1),
+            ("anchored image", 70.0, measured_image(3, 80.0, true), 0),
+            (
+                "inline text box",
+                70.0,
+                measured_text_box(3, 80.0, false),
+                1,
+            ),
+            (
+                "floating text box",
+                70.0,
+                measured_text_box(3, 80.0, true),
+                0,
+            ),
+            (
+                "inline table",
+                50.0,
+                measured_table(3, 20.0, &[20.0, 60.0], None),
+                0,
+            ),
+            (
+                "floating table without explicit Y",
+                40.0,
+                measured_table(3, 20.0, &[20.0, 60.0], Some(json!({}))),
+                1,
+            ),
+            (
+                "floating table with inline Y spec",
+                40.0,
+                measured_table(
+                    3,
+                    20.0,
+                    &[20.0, 60.0],
+                    Some(json!({ "tblpYSpec": "inline" })),
+                ),
+                1,
+            ),
+            (
+                "floating table with numeric Y",
+                70.0,
+                measured_table(3, 20.0, &[20.0, 60.0], Some(json!({ "tblpY": 5 }))),
+                0,
+            ),
+            (
+                "floating table with aligned Y",
+                70.0,
+                measured_table(3, 20.0, &[20.0, 60.0], Some(json!({ "tblpYSpec": "top" }))),
+                0,
+            ),
+            ("shape", 70.0, measured_object(3, "shape", 80.0), 1),
+            ("chart", 70.0, measured_object(3, "chart", 80.0), 1),
+        ];
+
+        for (kind, filler_height, follower, expected_page) in cases {
+            let result = layout(vec![
+                paragraph(1, 1, filler_height, json!({})),
+                paragraph(2, 1, 20.0, json!({ "keepNext": true })),
+                follower,
+            ]);
+
+            assert_eq!(
+                paragraph_slices(&result, 2.0),
+                vec![(expected_page, 0, 1)],
+                "{kind} heading"
+            );
+            assert_eq!(object_page(&result, 3.0), expected_page, "{kind}");
+        }
     }
 
     #[test]

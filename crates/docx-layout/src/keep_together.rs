@@ -8,8 +8,9 @@
 //! [`measure_keep_with_next_group`] turns a group into the height the contract
 //! actually demands: every member paragraph plus the follower slice placement
 //! requires before it can begin. The witness is one paragraph line normally,
-//! two under widow control, every line under `w:keepLines`, a table's first row,
-//! or the whole height of an in-flow object.
+//! two under widow control, every line under `w:keepLines`, an in-flow table's
+//! first row, the whole preflight height of an unpositioned floating table, or
+//! the whole height of an in-flow object.
 //!
 //! The group is stacked through [`FlowStack`], so the budget is what placement
 //! will consume rather than a sum of parts: every gap — above the head, between
@@ -22,7 +23,9 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
-use crate::floating_objects::{is_anchored_image_block, is_floating_text_box_block};
+use crate::floating_objects::{
+    floating_table_has_explicit_y, is_anchored_image_block, is_floating_text_box_block,
+};
 use crate::paragraph_spacing::{FlowStack, get_spacing_before, lines_height};
 use crate::types::{BlockExtent, LayoutBlock, MeasuredBlock};
 
@@ -168,8 +171,9 @@ fn stack_group(group: &KeepWithNextGroup, measured: &[MeasuredBlock], deferred: 
 }
 
 /// The follower's own leading spacing and the first slice bound to the group.
-/// In-flow objects have no leading spacing of their own. Anchored images and
-/// floating text boxes return no slice because they do not move the pen.
+/// In-flow objects have no leading spacing of their own. Positioned overlays
+/// return no slice, while an unpositioned floating table reserves the full
+/// height that placement passes to `ensure_fits`.
 fn witness_slice(follower: &MeasuredBlock) -> Option<(f64, f64)> {
     match (&follower.block, &follower.measure) {
         (LayoutBlock::Paragraph(block), BlockExtent::Paragraph(measure)) => {
@@ -191,14 +195,16 @@ fn witness_slice(follower: &MeasuredBlock) -> Option<(f64, f64)> {
                 lines_height(&measure.lines[..witness_lines]),
             ))
         }
-        (_, BlockExtent::Table(table)) => {
-            Some((0.0, table.rows.first().map_or(0.0, |row| row.height)))
-        }
+        (LayoutBlock::Table(block), BlockExtent::Table(table)) => match block.floating.as_ref() {
+            None => Some((0.0, table.rows.first().map_or(0.0, |row| row.height))),
+            Some(_) if floating_table_has_explicit_y(block) => None,
+            Some(_) => Some((0.0, table.total_height)),
+        },
         (LayoutBlock::Image(block), BlockExtent::Image(image)) => {
             (!is_anchored_image_block(block)).then_some((0.0, image.height))
         }
-        (_, BlockExtent::Shape(shape)) => Some((0.0, shape.height)),
-        (_, BlockExtent::Chart(chart)) => Some((0.0, chart.height)),
+        (LayoutBlock::Shape(_), BlockExtent::Shape(shape)) => Some((0.0, shape.height)),
+        (LayoutBlock::Chart(_), BlockExtent::Chart(chart)) => Some((0.0, chart.height)),
         (LayoutBlock::TextBox(block), BlockExtent::TextBox(text_box)) => {
             (!is_floating_text_box_block(block)).then_some((0.0, text_box.height))
         }
@@ -365,6 +371,151 @@ mod tests {
             .get(&head)
             .unwrap_or_else(|| panic!("group headed at block {head}"));
         measure_keep_with_next_group(group, measured, deferred)
+    }
+
+    fn measured_follower(block: serde_json::Value, measure: serde_json::Value) -> MeasuredBlock {
+        serde_json::from_value(serde_json::json!({
+            "block": block,
+            "measure": measure,
+        }))
+        .expect("measured follower")
+    }
+
+    fn measured_table(floating: Option<serde_json::Value>) -> MeasuredBlock {
+        let mut block = serde_json::json!({
+            "kind": "table",
+            "id": 9,
+            "rows": [
+                { "id": 91, "cells": [] },
+                { "id": 92, "cells": [] },
+            ],
+            "columnWidths": [20],
+        });
+        if let Some(floating) = floating {
+            block["floating"] = floating;
+        }
+        measured_follower(
+            block,
+            serde_json::json!({
+                "kind": "table",
+                "columnWidths": [20],
+                "totalWidth": 20,
+                "totalHeight": 65,
+                "rows": [
+                    { "height": 25, "cells": [] },
+                    { "height": 40, "cells": [] },
+                ],
+            }),
+        )
+    }
+
+    #[test]
+    fn object_follower_witnesses_match_placement_costs() {
+        let followers = vec![
+            (
+                "inline image",
+                measured_follower(
+                    serde_json::json!({
+                        "kind": "image", "id": 1, "src": "embedded",
+                        "width": 20, "height": 80,
+                    }),
+                    serde_json::json!({ "kind": "image", "width": 20, "height": 80 }),
+                ),
+                Some(80.0),
+            ),
+            (
+                "anchored image",
+                measured_follower(
+                    serde_json::json!({
+                        "kind": "image", "id": 2, "src": "embedded",
+                        "width": 20, "height": 80,
+                        "anchor": { "isAnchored": true },
+                    }),
+                    serde_json::json!({ "kind": "image", "width": 20, "height": 80 }),
+                ),
+                None,
+            ),
+            (
+                "inline text box",
+                measured_follower(
+                    serde_json::json!({
+                        "kind": "textBox", "id": 3, "width": 20,
+                        "height": 80, "content": [],
+                    }),
+                    serde_json::json!({
+                        "kind": "textBox", "width": 20, "height": 80,
+                        "innerMeasures": [],
+                    }),
+                ),
+                Some(80.0),
+            ),
+            (
+                "floating text box",
+                measured_follower(
+                    serde_json::json!({
+                        "kind": "textBox", "id": 4, "width": 20,
+                        "height": 80, "content": [], "displayMode": "float",
+                    }),
+                    serde_json::json!({
+                        "kind": "textBox", "width": 20, "height": 80,
+                        "innerMeasures": [],
+                    }),
+                ),
+                None,
+            ),
+            ("inline table", measured_table(None), Some(25.0)),
+            (
+                "floating table without explicit Y",
+                measured_table(Some(serde_json::json!({}))),
+                Some(65.0),
+            ),
+            (
+                "floating table with inline Y spec",
+                measured_table(Some(serde_json::json!({ "tblpYSpec": "inline" }))),
+                Some(65.0),
+            ),
+            (
+                "floating table with numeric Y",
+                measured_table(Some(serde_json::json!({ "tblpY": 5 }))),
+                None,
+            ),
+            (
+                "floating table with aligned Y",
+                measured_table(Some(serde_json::json!({ "tblpYSpec": "top" }))),
+                None,
+            ),
+            (
+                "shape",
+                measured_follower(
+                    serde_json::json!({
+                        "kind": "shape", "id": 5, "shapeType": "rect",
+                        "geometryPath": [], "width": 20, "height": 80,
+                        "children": [],
+                    }),
+                    serde_json::json!({ "kind": "shape", "width": 20, "height": 80 }),
+                ),
+                Some(80.0),
+            ),
+            (
+                "chart",
+                measured_follower(
+                    serde_json::json!({
+                        "kind": "chart", "id": 6, "chart": {},
+                        "width": 20, "height": 80,
+                    }),
+                    serde_json::json!({ "kind": "chart", "width": 20, "height": 80 }),
+                ),
+                Some(80.0),
+            ),
+        ];
+
+        for (kind, follower, expected_height) in followers {
+            let witness = witness_slice(&follower);
+            if let Some((before, _)) = witness {
+                assert_eq!(before, 0.0, "{kind}");
+            }
+            assert_eq!(witness.map(|(_, height)| height), expected_height, "{kind}");
+        }
     }
 
     #[test]

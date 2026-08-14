@@ -7,6 +7,7 @@
 //! the caller rather than producing wrong geometry.
 
 use crate::LayoutError;
+use crate::floating_objects::floating_table_has_explicit_y;
 use crate::page_flow::Paginator;
 use crate::prescan::SectionLayoutConfig;
 use crate::table_row_break::{build_table_row_break_info, snap_row_break};
@@ -352,12 +353,7 @@ pub fn layout_floating_table(
         .floating
         .as_ref()
         .expect("floating table hook requires tblpPr");
-    let has_explicit_y = floating.tblp_y.is_some()
-        || floating
-            .tblp_y_spec
-            .as_deref()
-            .is_some_and(|spec| spec != "inline");
-    if !has_explicit_y {
+    if !floating_table_has_explicit_y(block) {
         paginator.ensure_fits(measure.total_height);
     }
 
