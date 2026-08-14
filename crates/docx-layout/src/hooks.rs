@@ -154,7 +154,7 @@ pub fn layout_table(
         if row_cant_split
             && consumed == 0.0
             && row_remaining_at_start > paginator.get_available_height()
-            && paginator.state(state_idx).pen_y != paginator.state(state_idx).content_top
+            && paginator.column_is_used(state_idx)
         {
             paginator.ensure_fits(row_remaining_at_start);
             continue;

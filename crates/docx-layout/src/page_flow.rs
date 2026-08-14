@@ -10,8 +10,8 @@
 //! bottom already reduced by the page's footnote reservation, so reserved note
 //! space is simply invisible to body flow. [`Paginator::ensure_fits`] walks to
 //! the next column, then the next page, until the height fits; a fragment
-//! taller than a whole column is placed with overflow — after moving off a
-//! partly used column — rather than looping forever.
+//! taller than a physical page's content area is placed with overflow — after
+//! moving off a partly used column — rather than looping forever.
 //!
 //! Word collapses adjacent vertical spacing to the larger of the two instead of
 //! summing, so [`Paginator::add_fragment`] takes `max(space_before,
@@ -53,10 +53,11 @@ pub struct FlowState {
     pub column_index: usize,
     /// Top margin of content area.
     pub content_top: f64,
-    /// Bottom boundary of content area (minus any footnote reservation).
+    /// Active column bottom, possibly shortened by balancing.
     pub content_limit: f64,
     /// Accumulated trailing spacing (space after previous block).
     pub deferred_spacing: f64,
+    column_used: bool,
 }
 
 /// Splits the content width evenly after subtracting the inter-column gaps.
@@ -69,6 +70,14 @@ fn calculate_column_width(
     let content_width = page_width - left_margin - right_margin;
     let total_gaps = (columns.count - 1.0) * columns.gap;
     (content_width - total_gaps) / columns.count
+}
+
+fn physical_page_capacity(
+    page_size: &Size,
+    margins: &PageMargins,
+    footnote_reserved_height: f64,
+) -> f64 {
+    page_size.h - margins.top - margins.bottom - footnote_reserved_height
 }
 
 /// The page/column cursor and the pages it has produced so far.
@@ -95,7 +104,7 @@ impl Paginator {
         columns: ColumnLayout,
         footnote_reserved_heights: Option<std::collections::BTreeMap<String, f64>>,
     ) -> Result<Self, LayoutError> {
-        let content_height = (page_size.h - margins.bottom) - margins.top;
+        let content_height = physical_page_capacity(&page_size, &margins, 0.0);
         if content_height <= 0.0 {
             return Err(LayoutError::Invalid(
                 "Paginator: page size and margins yield no content area".into(),
@@ -164,7 +173,7 @@ impl Paginator {
         let state = &self.states[state_index];
         let page = &self.pages[state.page_index];
         (state.column_index == 0
-            && state.pen_y == state.content_top
+            && !self.column_is_used(state_index)
             && state.deferred_spacing == 0.0
             && page.fragments.is_empty())
         .then(|| (state.page_index, page.number, self.snapshot_geometry()))
@@ -184,10 +193,6 @@ impl Paginator {
         Some((state.page_index, page.number, self.snapshot_geometry()))
     }
 
-    fn get_content_bottom(&self) -> f64 {
-        self.page_size.h - self.margins.bottom
-    }
-
     fn footnote_reserved_height(&self, page_number: u32) -> f64 {
         self.footnote_reserved_heights
             .as_ref()
@@ -201,16 +206,25 @@ impl Paginator {
         let page_size = self.pending_page_size.as_ref().unwrap_or(&self.page_size);
         let margins = self.pending_margins.as_ref().unwrap_or(&self.margins);
         let page_number = self.start_page_number + self.pages.len() as u32;
-        page_size.h - margins.top - margins.bottom - self.footnote_reserved_height(page_number)
+        physical_page_capacity(
+            page_size,
+            margins,
+            self.footnote_reserved_height(page_number),
+        )
     }
 
     pub fn column_capacity(&self, idx: usize) -> f64 {
         self.states[idx].content_limit - self.column_region_top
     }
 
-    /// Page-level capacity used to escape a shortened column region.
+    /// Physical capacity of the state's page, independent of region balancing.
     fn page_capacity(&self, idx: usize) -> f64 {
-        self.states[idx].content_limit - self.states[idx].content_top
+        let page = &self.pages[self.states[idx].page_index];
+        physical_page_capacity(
+            &page.size,
+            &page.margins,
+            page.footnote_reserved_height.unwrap_or(0.0),
+        )
     }
 
     pub fn next_column_content_height(&self, idx: usize) -> Option<f64> {
@@ -254,11 +268,9 @@ impl Paginator {
         }
         let page_number = self.start_page_number + self.pages.len() as u32;
         let content_top = self.margins.top;
-        let content_limit = self.get_content_bottom();
-
-        // reduce content bottom by the footnote reserved height for this page
         let footnote_height = self.footnote_reserved_height(page_number);
-        let page_content_bottom = content_limit - footnote_height;
+        let page_content_bottom =
+            content_top + physical_page_capacity(&self.page_size, &self.margins, footnote_height);
 
         let page = Page {
             number: page_number,
@@ -303,6 +315,7 @@ impl Paginator {
             content_top,
             content_limit: page_content_bottom,
             deferred_spacing: 0.0,
+            column_used: false,
         };
 
         self.pages.push(page);
@@ -332,6 +345,11 @@ impl Paginator {
         self.pages[self.states[idx].page_index].fragments.len()
     }
 
+    /// Whether normal flow has consumed the current column.
+    pub fn column_is_used(&self, idx: usize) -> bool {
+        self.states[idx].column_used
+    }
+
     fn available_height_of(&self, idx: usize) -> f64 {
         let s = &self.states[idx];
         s.content_limit - s.pen_y
@@ -356,6 +374,7 @@ impl Paginator {
             state.column_index += 1;
             state.pen_y = region_top;
             state.deferred_spacing = 0.0;
+            state.column_used = false;
             return idx;
         }
         self.create_new_page()
@@ -374,7 +393,7 @@ impl Paginator {
             // oversized-fragment guard, re-checked per iteration because a
             // queued continuous-section geometry can change page capacity
             if safe_height > self.page_capacity(idx) {
-                if self.states[idx].pen_y != self.states[idx].content_top {
+                if self.column_is_used(idx) {
                     idx = self.advance_column(idx);
                 }
                 return idx;
@@ -415,6 +434,7 @@ impl Paginator {
         let state = &mut self.states[idx];
         state.pen_y = y + height;
         state.deferred_spacing = space_after;
+        state.column_used = true;
 
         (x, y)
     }
@@ -423,9 +443,7 @@ impl Paginator {
     pub fn force_page_break(&mut self) -> usize {
         if let Some(idx) = self.states.len().checked_sub(1) {
             let current = &self.states[idx];
-            if self.pages[current.page_index].fragments.is_empty()
-                && current.pen_y == current.content_top
-            {
+            if self.pages[current.page_index].fragments.is_empty() && !self.column_is_used(idx) {
                 return idx;
             }
         }
@@ -464,6 +482,7 @@ impl Paginator {
 
         self.column_region_top = self.states[idx].pen_y;
         self.states[idx].column_index = 0;
+        self.states[idx].column_used = false;
     }
 
     /// Applies or queues page geometry for subsequently created pages.
@@ -515,6 +534,7 @@ impl Paginator {
     #[allow(dead_code)] // reached once the floating-table hook is swapped in
     pub fn set_pen_y(&mut self, idx: usize, y: f64) {
         self.states[idx].pen_y = y;
+        self.states[idx].column_used = true;
     }
 }
 

@@ -1440,6 +1440,24 @@ mod pagination_rule_tests {
             .unwrap_or_else(|| panic!("object {id} was placed"))
     }
 
+    fn image_origin(layout: &Layout, id: f64) -> (usize, f64, f64) {
+        layout
+            .pages
+            .iter()
+            .enumerate()
+            .find_map(|(page_index, page)| {
+                page.fragments.iter().find_map(|fragment| match fragment {
+                    Fragment::Image(value)
+                        if matches!(value.block_id, crate::types::BlockId::Num(found) if found == id) =>
+                    {
+                        Some((page_index, value.x, value.y))
+                    }
+                    _ => None,
+                })
+            })
+            .unwrap_or_else(|| panic!("image {id} was placed"))
+    }
+
     fn paragraph_origin(layout: &Layout, id: f64) -> (usize, f64, f64) {
         layout
             .pages
@@ -2116,6 +2134,44 @@ mod pagination_rule_tests {
 
         assert_eq!(result.pages.len(), 1);
         assert_eq!(pages_of(&result, &[1.0, 3.0, 4.0]), vec![0, 0, 0]);
+    }
+
+    fn balanced_continuous_region_with_image(height: f64) -> Layout {
+        layout_with_options(
+            vec![
+                paragraph(1, 1, 20.0, json!({})),
+                json!({
+                    "block": {
+                        "kind": "sectionBreak", "id": 2, "type": "continuous",
+                        "pageSize": { "w": 200, "h": 120 },
+                        "margins": { "top": 10, "right": 10, "bottom": 10, "left": 10 },
+                        "columns": { "count": 1, "gap": 0 },
+                    },
+                    "measure": { "kind": "sectionBreak" },
+                }),
+                paragraph(3, 1, 60.0, json!({})),
+                measured_image(4, height, false),
+            ],
+            json!({
+                "pageSize": { "w": 200, "h": 120 },
+                "margins": { "top": 10, "right": 10, "bottom": 10, "left": 10 },
+                "columns": { "count": 3, "gap": 0 },
+            }),
+        )
+    }
+
+    #[test]
+    fn balanced_region_uses_physical_page_capacity_for_an_inline_image() {
+        let result = balanced_continuous_region_with_image(100.0);
+
+        assert_eq!(image_origin(&result, 4.0), (1, 10.0, 10.0));
+    }
+
+    #[test]
+    fn oversized_image_preflight_keeps_the_first_unused_region_column() {
+        let result = balanced_continuous_region_with_image(110.0);
+
+        assert_eq!(image_origin(&result, 4.0), (0, 70.0, 30.0));
     }
 
     #[test]
