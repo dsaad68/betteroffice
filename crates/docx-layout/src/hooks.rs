@@ -144,8 +144,7 @@ pub fn layout_table(
     while row_index < rows.len() {
         let state_idx = paginator.get_current();
         let is_first_fragment = row_index == 0 && consumed == 0.0;
-        let column_capacity =
-            paginator.state(state_idx).content_limit - paginator.state(state_idx).content_top;
+        let column_capacity = paginator.column_capacity(state_idx);
         let row_remaining_at_start = rows[row_index].height - consumed;
         let row_cant_split = block
             .rows
@@ -347,8 +346,7 @@ pub fn layout_floating_table(
         return Err(unsupported("floating table without measurable rows"));
     }
     let initial_state = paginator.get_current();
-    let column_capacity =
-        paginator.state(initial_state).content_limit - paginator.state(initial_state).content_top;
+    let column_capacity = paginator.column_capacity(initial_state);
     if measure.total_height > column_capacity {
         return layout_table(block, measure, paginator);
     }

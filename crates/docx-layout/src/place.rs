@@ -536,8 +536,7 @@ fn place(
             && !plan.keep_with_next.interior_members.contains(&i)
         {
             let state_idx = paginator.get_current();
-            let current_column_content_height =
-                paginator.state(state_idx).content_limit - paginator.state(state_idx).content_top;
+            let current_column_content_height = paginator.column_capacity(state_idx);
             let next_column_content_height = paginator.next_column_content_height(state_idx);
             let fresh_page_content_height = paginator.fresh_page_content_height();
             let page_has_content = paginator.page_fragment_count(state_idx) > 0;
@@ -875,9 +874,10 @@ fn layout_paragraph(
     {
         let state_idx = paginator.get_current();
         let state = paginator.state(state_idx);
-        let capacity = state.content_limit - state.content_top;
         let required = space_before.max(state.deferred_spacing) + paragraph_height;
-        if required <= capacity && required > paginator.get_available_height() {
+        if required <= paginator.column_capacity(state_idx)
+            && required > paginator.get_available_height()
+        {
             paginator.ensure_fits(required);
         }
     }
@@ -918,12 +918,10 @@ fn layout_paragraph(
         let remaining_after = lines.len() - (current_line_index + fitting_lines);
         if widow_control && remaining_after > 0 {
             if current_line_index == 0 && fitting_lines == 1 {
-                let capacity = paginator.state(state_idx).content_limit
-                    - paginator.state(state_idx).content_top;
                 let first_two_height = lines.iter().take(2).fold(0.0, |sum, line| {
                     sum + line.line_height + line.float_skip_before.unwrap_or(0.0)
                 });
-                if reserved_before + first_two_height <= capacity {
+                if reserved_before + first_two_height <= paginator.column_capacity(state_idx) {
                     paginator.force_column_break();
                     continue;
                 }
@@ -1444,6 +1442,42 @@ mod pagination_rule_tests {
             .unwrap_or_else(|| panic!("object {id} was placed"))
     }
 
+    fn paragraph_origin(layout: &Layout, id: f64) -> (usize, f64, f64) {
+        layout
+            .pages
+            .iter()
+            .enumerate()
+            .find_map(|(page_index, page)| {
+                page.fragments.iter().find_map(|fragment| match fragment {
+                    Fragment::Paragraph(value)
+                        if matches!(value.block_id, crate::types::BlockId::Num(found) if found == id) =>
+                    {
+                        Some((page_index, value.x, value.y))
+                    }
+                    _ => None,
+                })
+            })
+            .unwrap_or_else(|| panic!("paragraph {id} was placed"))
+    }
+
+    fn first_table_fragment(layout: &Layout, id: f64) -> (usize, Option<bool>) {
+        layout
+            .pages
+            .iter()
+            .enumerate()
+            .find_map(|(page_index, page)| {
+                page.fragments.iter().find_map(|fragment| match fragment {
+                    Fragment::Table(value)
+                        if matches!(value.block_id, crate::types::BlockId::Num(found) if found == id) =>
+                    {
+                        Some((page_index, value.is_floating))
+                    }
+                    _ => None,
+                })
+            })
+            .unwrap_or_else(|| panic!("table {id} was placed"))
+    }
+
     fn input(measured: Vec<serde_json::Value>) -> Input {
         serde_json::from_value(json!({
             "measured": measured,
@@ -1795,6 +1829,35 @@ mod pagination_rule_tests {
     }
 
     #[test]
+    fn continuous_region_keep_lines_uses_the_witness_capacity() {
+        let result = layout_with_options(
+            vec![
+                paragraph(10, 1, 20.0, json!({})),
+                json!({
+                    "block": {
+                        "kind": "sectionBreak", "id": 11, "type": "continuous",
+                        "pageSize": { "w": 200, "h": 120 },
+                        "margins": { "top": 10, "right": 10, "bottom": 10, "left": 10 },
+                        "columns": { "count": 1, "gap": 0 },
+                    },
+                    "measure": { "kind": "sectionBreak" },
+                }),
+                paragraph(1, 1, 40.0, json!({})),
+                paragraph(2, 1, 20.0, json!({ "keepNext": true })),
+                paragraph(3, 3, 30.0, json!({ "keepLines": true })),
+            ],
+            json!({
+                "pageSize": { "w": 200, "h": 120 },
+                "margins": { "top": 10, "right": 10, "bottom": 10, "left": 10 },
+                "columns": { "count": 2, "gap": 0 },
+            }),
+        );
+
+        assert_eq!(paragraph_origin(&result, 2.0), (0, 100.0, 30.0));
+        assert_eq!(paragraph_slices(&result, 3.0), vec![(0, 0, 2), (1, 2, 3)]);
+    }
+
+    #[test]
     fn keep_with_next_witness_includes_shape_and_chart_followers() {
         for kind in ["shape", "chart"] {
             let result = layout(vec![
@@ -1943,37 +2006,88 @@ mod pagination_rule_tests {
     }
 
     #[test]
-    fn floating_table_keep_witness_matches_the_column_capacity_fallback() {
-        for (size, row_heights) in [("fits", [40.0, 40.0]), ("exceeds", [40.0, 90.0])] {
-            let cases = [
-                ("in-flow", None, 1),
-                ("float with numeric Y", Some(json!({ "tblpY": 5 })), 0),
-                (
-                    "float with aligned Y",
-                    Some(json!({ "tblpYSpec": "top" })),
-                    0,
-                ),
-                ("float without explicit Y", Some(json!({})), 1),
-            ];
-
-            for (kind, floating, fits_expected_page) in cases {
-                let result = layout(vec![
-                    paragraph(1, 1, 60.0, json!({})),
-                    paragraph(2, 1, 20.0, json!({ "keepNext": true })),
-                    measured_table(3, 20.0, &row_heights, floating),
-                ]);
-                let expected_page = if size == "fits" {
-                    fits_expected_page
-                } else {
-                    1
+    fn floating_table_keep_witness_matches_every_region_capacity_fallback() {
+        for region in ["normal page top", "continuous region"] {
+            for size in ["fits", "exceeds"] {
+                let row_heights = match (region, size) {
+                    (_, "fits") => [40.0, 20.0],
+                    ("normal page top", "exceeds") => [40.0, 70.0],
+                    ("continuous region", "exceeds") => [40.0, 50.0],
+                    _ => unreachable!(),
                 };
+                let cases = [
+                    ("in-flow table", None),
+                    ("float+explicit tblpY", Some(json!({ "tblpY": 5 }))),
+                    ("float+tblpYSpec", Some(json!({ "tblpYSpec": "top" }))),
+                    ("float+no Y", Some(json!({}))),
+                ];
 
-                assert_eq!(
-                    paragraph_slices(&result, 2.0),
-                    vec![(expected_page, 0, 1)],
-                    "{size}: {kind} heading"
-                );
-                assert_eq!(object_page(&result, 3.0), expected_page, "{size}: {kind}");
+                for (kind, floating) in cases {
+                    let mut measured = if region == "continuous region" {
+                        vec![
+                            paragraph(10, 1, 20.0, json!({})),
+                            json!({
+                                "block": {
+                                    "kind": "sectionBreak", "id": 11, "type": "continuous",
+                                    "pageSize": { "w": 200, "h": 120 },
+                                    "margins": {
+                                        "top": 10, "right": 10, "bottom": 10, "left": 10,
+                                    },
+                                    "columns": { "count": 1, "gap": 0 },
+                                },
+                                "measure": { "kind": "sectionBreak" },
+                            }),
+                            paragraph(1, 1, 40.0, json!({})),
+                        ]
+                    } else {
+                        vec![paragraph(1, 1, 60.0, json!({}))]
+                    };
+                    measured.extend([
+                        paragraph(2, 1, 20.0, json!({ "keepNext": true })),
+                        measured_table(3, 20.0, &row_heights, floating),
+                        measured_object(4, "shape", 0.0),
+                    ]);
+                    let result = layout_with_options(
+                        measured,
+                        json!({
+                            "pageSize": { "w": 200, "h": 120 },
+                            "margins": {
+                                "top": 10, "right": 10, "bottom": 10, "left": 10,
+                            },
+                            "columns": { "count": 2, "gap": 0 },
+                        }),
+                    );
+                    let label = format!("{region}: {size}: {kind}");
+                    let explicit_y = kind == "float+explicit tblpY" || kind == "float+tblpYSpec";
+                    let expected_heading_x = if size == "fits" && explicit_y {
+                        10.0
+                    } else {
+                        100.0
+                    };
+                    let expected_floating =
+                        (size == "fits" && kind != "in-flow table").then_some(true);
+
+                    assert_eq!(
+                        paragraph_origin(&result, 2.0),
+                        (
+                            0,
+                            expected_heading_x,
+                            if expected_heading_x == 10.0 {
+                                70.0
+                            } else if region == "continuous region" {
+                                30.0
+                            } else {
+                                10.0
+                            },
+                        ),
+                        "{label}: heading"
+                    );
+                    assert_eq!(
+                        first_table_fragment(&result, 3.0),
+                        (0, expected_floating),
+                        "{label}"
+                    );
+                }
             }
         }
     }

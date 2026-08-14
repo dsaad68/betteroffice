@@ -204,10 +204,20 @@ impl Paginator {
         page_size.h - margins.top - margins.bottom - self.footnote_reserved_height(page_number)
     }
 
+    /// Content height of a fresh column in the current region.
+    pub fn column_capacity(&self, idx: usize) -> f64 {
+        self.states[idx].content_limit - self.column_region_top
+    }
+
+    /// Page-level capacity used to escape a shortened column region.
+    fn page_capacity(&self, idx: usize) -> f64 {
+        self.states[idx].content_limit - self.states[idx].content_top
+    }
+
     /// Content height of the next unused column in the current region.
     pub fn next_column_content_height(&self, idx: usize) -> Option<f64> {
         ((self.states[idx].column_index as f64) < self.columns.count - 1.0)
-            .then(|| self.states[idx].content_limit - self.column_region_top)
+            .then(|| self.column_capacity(idx))
     }
 
     /// Returns the active section's content width.
@@ -365,8 +375,7 @@ impl Paginator {
         while !self.fits(safe_height, idx) {
             // oversized-fragment guard, re-checked per iteration because a
             // queued continuous-section geometry can change page capacity
-            let column_capacity = self.states[idx].content_limit - self.states[idx].content_top;
-            if safe_height > column_capacity {
+            if safe_height > self.page_capacity(idx) {
                 if self.states[idx].pen_y != self.states[idx].content_top {
                     idx = self.advance_column(idx);
                 }
