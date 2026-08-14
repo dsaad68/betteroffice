@@ -204,7 +204,6 @@ impl Paginator {
         page_size.h - margins.top - margins.bottom - self.footnote_reserved_height(page_number)
     }
 
-    /// Content height of a fresh column in the current region.
     pub fn column_capacity(&self, idx: usize) -> f64 {
         self.states[idx].content_limit - self.column_region_top
     }
@@ -214,7 +213,6 @@ impl Paginator {
         self.states[idx].content_limit - self.states[idx].content_top
     }
 
-    /// Content height of the next unused column in the current region.
     pub fn next_column_content_height(&self, idx: usize) -> Option<f64> {
         ((self.states[idx].column_index as f64) < self.columns.count - 1.0)
             .then(|| self.column_capacity(idx))

@@ -9,11 +9,7 @@ pub fn breaks_before_block(block: &LayoutBlock) -> bool {
     paragraph_breaks_before(block)
 }
 
-/// Geometry a keep-with-next group is weighed against at the page cursor.
-/// `height` is the space the whole group (plus its follower's first line)
-/// needs, measured for both geometries below; `available_height` is what
-/// remains in the current column; and `page_content_height` is the content
-/// height of a blank page/column.
+/// Keep-with-next heights and capacities at the cursor and a fresh column.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct KeepWithNextFit {
     pub height: KeepWithNextHeight,
@@ -39,10 +35,8 @@ pub struct KeepWithNextFit {
 ///   there is nothing above the group to detach from, and advancing would only
 ///   emit a blank page, so Word splits in place
 ///
-/// Each clause reads the height for its own geometry: whether an intact
-/// placement exists is a question about a fresh page, while finishing here is a
-/// question about the cursor, where spacing above the group collapses into the
-/// gap the group opens with.
+/// Cursor fit uses `at_cursor`; intact feasibility uses `on_fresh_page` because
+/// a break drops spacing deferred above the group.
 pub fn keep_with_next_group_must_advance(fit: KeepWithNextFit) -> bool {
     let intact_placement_exists = fit.height.on_fresh_page <= fit.page_content_height;
     if !intact_placement_exists {
@@ -62,8 +56,6 @@ mod tests {
     use super::*;
     use crate::types::{BlockId, ParagraphAttrs, ParagraphBlock};
 
-    // a group whose two geometries agree, when the case under test is not
-    // about the spacing deferred above it
     fn both(height: f64) -> KeepWithNextHeight {
         KeepWithNextHeight {
             at_cursor: height,
@@ -163,8 +155,6 @@ mod tests {
 
     #[test]
     fn weighs_each_height_against_the_geometry_it_was_measured_for() {
-        // spacing deferred above the group makes it too tall here, but a page
-        // of its own defers nothing and holds it
         assert!(keep_with_next_group_must_advance(KeepWithNextFit {
             height: KeepWithNextHeight {
                 at_cursor: 250.0,
@@ -174,7 +164,6 @@ mod tests {
             page_content_height: 600.0,
             page_has_content: true,
         }));
-        // that collapse cannot rescue a group no page can hold intact
         assert!(!keep_with_next_group_must_advance(KeepWithNextFit {
             height: KeepWithNextHeight {
                 at_cursor: 650.0,

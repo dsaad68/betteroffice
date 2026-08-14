@@ -14,9 +14,7 @@
 //! - at a paragraph's end, unless it sets `w:keepNext`;
 //! - after every table row, and after an image or text box.
 //!
-//! The range stacks through the shared [`FlowStack`], so the depth it balances
-//! is the depth placement will produce: the gap between two blocks is the
-//! larger of the spacings that meet there, not their sum.
+//! [`FlowStack`] collapses adjacent spacing exactly as placement does.
 //!
 //! Balancing is abandoned — leaving the region at full height — when the
 //! section has no content, when the range holds any block kind other than those
@@ -250,8 +248,6 @@ mod tests {
         }
     }
 
-    /// Like [`text_paragraph`] with authored spacing, folded into `totalHeight`
-    /// the way the measurer folds it.
     fn spaced_text_paragraph(
         line_count: usize,
         line_height: f64,
@@ -343,8 +339,7 @@ mod tests {
         assert_eq!(get_spacing_after(&block), 6.0);
 
         // A two-line paragraph has no legal internal widow boundary, so the
-        // whole 56px paragraph stays in the first column. The measurer folds
-        // spacing into totalHeight, so it reads 10 + 2 x 20 + 6.
+        // whole 56px paragraph stays in the first column.
         let measured = vec![MeasuredBlock {
             block: LayoutBlock::Paragraph(block),
             measure: BlockExtent::Paragraph(ParagraphExtent {
@@ -368,10 +363,6 @@ mod tests {
 
     #[test]
     fn adjacent_paragraph_spacing_meets_once_in_the_balanced_height() {
-        // 3 x (2 lines of 20) with a 20 after on the first and a 20 before on
-        // the second: they meet at one 20px gap, so the range is 140 tall and
-        // the second paragraph's end (100) is the first legal break past the
-        // 70px ideal — summing both edges would stack 160 and snap to 120.
         let measured = vec![
             spaced_text_paragraph(2, 20.0, (0.0, 20.0)),
             spaced_text_paragraph(2, 20.0, (20.0, 0.0)),

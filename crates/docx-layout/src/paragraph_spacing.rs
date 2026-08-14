@@ -55,18 +55,14 @@ pub fn get_spacing_after(block: &ParagraphBlock) -> f64 {
     value
 }
 
-/// Stacked height of measured lines, float skips included.
 pub fn lines_height(lines: &[TypesetRow]) -> f64 {
     lines.iter().fold(0.0, |sum, line| {
         sum + line.line_height + line.float_skip_before.unwrap_or(0.0)
     })
 }
 
-/// Stacks blocks the way [`crate::page_flow::Paginator::add_fragment`] does, so
-/// an estimate and the placement it predicts cannot disagree: the gap between
-/// two adjacent blocks is the larger of the trailing and the leading spacing,
-/// never their sum, and `ParagraphExtent::total_height` — which folds authored
-/// spacing in unconditionally — is never the height of anything.
+/// Mirrors paginator spacing collapse; paragraph `total_height` is ignored
+/// because it already contains authored spacing.
 #[derive(Debug, Clone, Default)]
 pub struct FlowStack {
     height: f64,
@@ -82,30 +78,25 @@ impl FlowStack {
         }
     }
 
-    /// Charges the gap above a block whose leading spacing is `before`.
     pub fn open(&mut self, before: f64) {
         self.height += before.max(self.deferred);
         self.deferred = 0.0;
     }
 
-    /// Grows the open block by `body`.
     pub fn advance(&mut self, body: f64) {
         self.height += body;
     }
 
-    /// Closes the open block, deferring `after` to the next gap.
     pub fn close(&mut self, after: f64) {
         self.deferred = after;
     }
 
-    /// A block measured in one piece.
     pub fn push(&mut self, before: f64, body: f64, after: f64) {
         self.open(before);
         self.advance(body);
         self.close(after);
     }
 
-    /// A measured paragraph at its effective spacing and line height.
     pub fn push_paragraph(&mut self, block: &ParagraphBlock, measure: &ParagraphExtent) {
         self.push(
             get_spacing_before(block),

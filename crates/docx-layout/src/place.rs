@@ -1266,8 +1266,6 @@ mod pagination_rule_tests {
         lines: Vec<serde_json::Value>,
         attrs: serde_json::Value,
     ) -> serde_json::Value {
-        // like the measurer, totalHeight carries the paragraph's spacing and
-        // the float skips its lines opened with
         let spacing = |edge: &str| {
             attrs
                 .get("spacing")
@@ -2253,7 +2251,6 @@ mod pagination_rule_tests {
         assert_eq!(pages_of(&result, &[1.0, 2.0, 3.0]), vec![0, 0, 1]);
     }
 
-    /// Page index each of the listed blocks was placed on.
     fn pages_of(layout: &Layout, ids: &[f64]) -> Vec<usize> {
         ids.iter()
             .map(|id| {
@@ -2267,7 +2264,6 @@ mod pagination_rule_tests {
 
     #[test]
     fn keep_with_next_group_collapses_the_gap_between_its_members() {
-        // 25 filler leaves 75; the members meet at one 10px gap, not two
         let result = layout(vec![
             paragraph(1, 1, 25.0, json!({})),
             paragraph(
@@ -2291,8 +2287,6 @@ mod pagination_rule_tests {
 
     #[test]
     fn keep_with_next_group_charges_the_gap_its_follower_opens() {
-        // the follower's 20 before outweighs the heading's 10 after, so the
-        // group needs 70 of the 65 left and must move whole
         let result = layout(vec![
             paragraph(1, 1, 35.0, json!({})),
             paragraph(
@@ -2322,7 +2316,6 @@ mod pagination_rule_tests {
 
     #[test]
     fn keep_with_next_group_charges_the_spacing_deferred_above_it() {
-        // the filler defers 30, which outweighs the heading's own 5
         let result = layout(vec![
             paragraph(1, 1, 40.0, json!({ "spacing": { "after": 30.0 } })),
             paragraph(

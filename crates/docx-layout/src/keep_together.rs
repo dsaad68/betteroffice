@@ -5,21 +5,10 @@
 //! once and returns each run keyed by its head, plus the interior members, so
 //! the placement walk can skip blocks a group already accounted for.
 //!
-//! [`measure_keep_with_next_group`] turns a group into the height the contract
-//! actually demands: every member paragraph plus the follower slice placement
-//! requires before it can begin. The witness is one paragraph line normally,
-//! two under widow control, every line under a placeable `w:keepLines`, an
-//! in-flow table's first row, the whole preflight height of an unpositioned
-//! floating table, or the whole height of an in-flow object.
-//!
-//! The group is stacked through [`FlowStack`], so the budget is what placement
-//! will consume rather than a sum of parts: every gap — above the head, between
-//! members, and above the witness — collapses to the larger of the two spacings
-//! that meet there, and style-inherited spacing on a blank paragraph is dropped
-//! the way placement drops it. A paragraph follower brings its own leading
-//! spacing to that last gap; an in-flow object is placed with none of its own,
-//! so there the gap is whatever the tail deferred. Overlay followers add no
-//! witness because placement leaves the pen unchanged.
+//! Group height includes every member and the follower slice required to start:
+//! paragraph widow/keep-lines witnesses, an in-flow row or object, or a floating
+//! table's placement cost. [`FlowStack`] matches placement's spacing collapse;
+//! overlays add no witness because they leave the pen unchanged.
 
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -128,19 +117,16 @@ pub fn analyze_keep_with_next(measured: &[MeasuredBlock]) -> KeepWithNextScan {
     }
 }
 
-/// The height a keep-with-next group needs, in each of the two geometries the
-/// break policy weighs it against.
+/// Group heights at the cursor and at a fresh column.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct KeepWithNextHeight {
-    /// From the cursor, where the head's leading spacing collapses against
-    /// whatever the block above deferred.
+    /// At the cursor, including spacing deferred above the group.
     pub at_cursor: f64,
     /// At the top of a fresh page or column, where nothing is deferred.
     pub on_fresh_page: f64,
 }
 
-/// Vertical space (px) the group needs for its keepNext contract to hold on a
-/// single page, from a cursor carrying `deferred_spacing`.
+/// Measures a group at the cursor and at a fresh column.
 pub fn measure_keep_with_next_group(
     group: &KeepWithNextGroup,
     measured: &[MeasuredBlock],
@@ -177,10 +163,10 @@ fn stack_group(
     stack.height()
 }
 
-/// The follower's own leading spacing and the first slice bound to the group.
-/// In-flow objects have no leading spacing of their own. Positioned overlays
-/// return no slice, while an unpositioned floating table reserves the full
-/// height that placement passes to `ensure_fits`.
+/// Returns the follower's leading spacing and first required slice.
+/// Over-capacity floating tables flow and contribute their first row; positioned
+/// overlays contribute none, while unpositioned floating tables reserve full
+/// height.
 fn witness_slice(follower: &MeasuredBlock, column_capacity: f64) -> Option<(f64, f64)> {
     match (&follower.block, &follower.measure) {
         (LayoutBlock::Paragraph(block), BlockExtent::Paragraph(measure)) => {
@@ -286,7 +272,6 @@ mod tests {
         )
     }
 
-    /// A paragraph carrying authored spacing, optionally bound to what follows.
     fn spaced_paragraph(spacing: (f64, f64), keep_next: bool) -> LayoutBlock {
         paragraph(
             vec![text_run("text")],
@@ -341,8 +326,6 @@ mod tests {
         )
     }
 
-    /// Measures blocks the way the measurer does: `totalHeight` folds the
-    /// paragraph's authored spacing in whether or not placement will paint it.
     fn to_measured_blocks(
         blocks: Vec<LayoutBlock>,
         lines: Vec<Vec<TypesetRow>>,
@@ -544,7 +527,6 @@ mod tests {
             vec![vec![make_line(20.0)], vec![], vec![make_line(20.0)]],
         );
 
-        // heading line (20) + empty member (0, spacing suppressed) + follower first line (20)
         assert_eq!(group_height(&measured, 0, 0.0).at_cursor, 40.0);
     }
 
@@ -559,7 +541,6 @@ mod tests {
             vec![vec![make_line(20.0)], vec![], vec![make_line(20.0)]],
         );
 
-        // direct formatting survives on empty paragraphs: 20 + 150 + 0 + 150 + 20
         assert_eq!(group_height(&measured, 0, 0.0).at_cursor, 340.0);
     }
 
@@ -577,7 +558,6 @@ mod tests {
         };
         assert_eq!(head.total_height, 40.0);
 
-        // 10 before + 20 line + 10 after + 20 witness — not 10 + 40 + 10 + 20
         assert_eq!(group_height(&measured, 0, 0.0).at_cursor, 60.0);
     }
 
@@ -596,7 +576,6 @@ mod tests {
             ],
         );
 
-        // the 10 between the members meets once, not twice: 20 + 10 + 20 + 20
         assert_eq!(group_height(&measured, 0, 0.0).at_cursor, 70.0);
     }
 
@@ -631,7 +610,6 @@ mod tests {
             vec![vec![make_line(20.0)], vec![skipped_line(20.0, 15.0)]],
         );
 
-        // placement charges the witness its float skip, so the budget must too
         assert_eq!(group_height(&measured, 0, 0.0).at_cursor, 55.0);
     }
 
@@ -667,7 +645,6 @@ mod tests {
             .expect("table measured block"),
         );
 
-        // 20 line + 12 deferred + the first row only
         assert_eq!(group_height(&measured, 0, 0.0).at_cursor, 57.0);
     }
 
