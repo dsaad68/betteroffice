@@ -557,8 +557,7 @@ pub struct ParagraphAttrs {
     pub keep_next: Option<bool>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub keep_lines: Option<bool>,
-    /// `w:widowControl`, a toggle that defaults on: only an authored off
-    /// reaches here.
+    /// Authored false for default-on `w:widowControl`.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub widow_control: Option<bool>,
     #[serde(skip_serializing_if = "Option::is_none")]

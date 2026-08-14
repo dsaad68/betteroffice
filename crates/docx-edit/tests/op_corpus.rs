@@ -989,8 +989,8 @@ fn apply_paragraph_style_clears_a_widow_control_off_the_new_style_does_not_autho
     doc.set_paragraph_attr(&para, "widowControl", Any::Bool(false))
         .unwrap();
 
-    // Only an authored off is carried, so absence is the sole encoding of the
-    // default-on state: a style that authors nothing has to clear it.
+    // Absence encodes default-on, so a style that authors nothing must clear
+    // false.
     let plain = ResolvedStyleProjection {
         style_id: "Body".into(),
         known: true,

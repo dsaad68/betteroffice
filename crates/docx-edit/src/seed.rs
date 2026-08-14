@@ -3094,9 +3094,8 @@ mod tests {
     }
 
     fn widow_control_styles() -> Value {
-        // Styles arrive with their basedOn chain already merged, so Body carries
-        // the off Normal authored; docDefaults sits under a style that leaves
-        // the toggle alone.
+        // Style chains are already merged: Body carries Normal's authored off,
+        // while docDefaults sits under a style that leaves the toggle absent.
         json!({
             "docDefaults": { "pPr": { "widowControl": false } },
             "styles": [

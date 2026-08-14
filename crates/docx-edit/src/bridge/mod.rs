@@ -3173,8 +3173,7 @@ fn true_property(values: &BTreeMap<String, Any>, key: &str) -> Option<bool> {
     (values.get(key).and_then(any_bool) == Some(true)).then_some(true)
 }
 
-/// The mirror of [`true_property`] for a toggle that defaults on: layout only
-/// needs to hear about an authored off.
+/// Returns only an authored false for a default-on toggle.
 fn false_property(values: &BTreeMap<String, Any>, key: &str) -> Option<bool> {
     (values.get(key).and_then(any_bool) == Some(false)).then_some(false)
 }
@@ -4130,7 +4129,6 @@ mod tests {
 
         assert_eq!(attrs(&doc).get("widowControl"), None);
 
-        // the seed writes null for every paragraph that authors nothing
         doc.set_paragraph_attr(&para, "widowControl", Any::Null)
             .unwrap();
         assert_eq!(attrs(&doc).get("widowControl"), None);

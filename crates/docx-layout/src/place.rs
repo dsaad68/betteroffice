@@ -1424,7 +1424,6 @@ mod pagination_rule_tests {
         assert_eq!(second_page_lines, vec![(0, 4)]);
     }
 
-    /// `(page index, from line, to line)` of every fragment of one paragraph.
     fn paragraph_slices(layout: &Layout, id: f64) -> Vec<(usize, usize, usize)> {
         layout
             .pages
