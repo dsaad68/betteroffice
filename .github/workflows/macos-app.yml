@@ -127,7 +127,7 @@ jobs:
     needs: build
     runs-on: macos-15
     timeout-minutes: 180
-    environment: apple-signing
+    environment: native-macos
     permissions:
       contents: read
     outputs:
