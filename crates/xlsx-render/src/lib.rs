@@ -9,6 +9,7 @@ pub mod region;
 
 pub use ooxml_drawingml::GeometryPathCommand;
 use ooxml_drawingml::chart::ChartSpace;
+use std::cell::{Cell, OnceCell};
 use std::ops::Range;
 
 use serde::{Deserialize, Serialize};
@@ -359,7 +360,8 @@ where
             tooltip: link.tooltip.clone(),
         })
         .collect();
-    let anchors = visible_anchors(sheet_ref, &rows, &cols);
+    let merges = MergeIndex::new(&sheet_ref.merges);
+    let anchors = visible_anchors(sheet_ref, &rows, &cols, &merges);
     let changed_ghost_cells: std::collections::HashSet<(u32, u32)> = ghosts
         .iter()
         .filter(|g| g.old_text != g.new_text)
@@ -374,7 +376,7 @@ where
         let Some(hex) = color.resolve(theme) else {
             continue;
         };
-        let Some(cell_box) = cell_box(&geom, &rows, &cols, sheet_ref, at) else {
+        let Some(cell_box) = cell_box(&geom, &rows, &cols, &merges, at) else {
             continue;
         };
         let clip = cell_box.clip;
@@ -432,6 +434,7 @@ where
             sheet_ref,
             styles,
             theme,
+            &merges,
             at,
             border,
         );
@@ -457,7 +460,7 @@ where
             color
         };
 
-        let Some(cell_box) = cell_box(&geom, &rows, &cols, sheet_ref, at) else {
+        let Some(cell_box) = cell_box(&geom, &rows, &cols, &merges, at) else {
             continue;
         };
         let font = cell.style.and_then(|s| styles.font_for(s));
@@ -506,7 +509,7 @@ where
         let Some(text) = link.display.as_ref().filter(|display| !display.is_empty()) else {
             continue;
         };
-        let Some(cell_box) = cell_box(&geom, &rows, &cols, sheet_ref, at) else {
+        let Some(cell_box) = cell_box(&geom, &rows, &cols, &merges, at) else {
             continue;
         };
         commands.push(DrawCmd::Text {
@@ -546,7 +549,7 @@ where
             italic: font.is_some_and(|font| font.italic),
             underline: font.is_some_and(|font| font.underline),
         };
-        let Some(bx) = cell_box(&geom, &rows, &cols, sheet_ref, at) else {
+        let Some(bx) = cell_box(&geom, &rows, &cols, &merges, at) else {
             continue;
         };
         let align = resolve_align_with_value(styles, cell, &ghost.alignment_value);
@@ -758,6 +761,7 @@ fn visible_anchors<'a>(
     sheet: &'a Sheet,
     rows: &AxisLayout,
     cols: &AxisLayout,
+    merges: &MergeIndex<'_>,
 ) -> Vec<(CellRef, &'a xlsx_model::Cell)> {
     let mut cells = Vec::new();
     for row_range in &rows.ranges {
@@ -767,16 +771,148 @@ fn visible_anchors<'a>(
     }
     cells.sort_unstable_by_key(|(at, _)| (at.row, at.col));
     cells.dedup_by_key(|(at, _)| (at.row, at.col));
-    cells.retain(|(at, _)| match covering_merge(&sheet.merges, *at) {
+    cells.retain(|(at, _)| match merges.covering(*at) {
         Some(merge) => merge.start == *at,
         None => true,
     });
     cells
 }
 
-/// the merge (if any) that covers a cell.
-fn covering_merge(merges: &[CellRange], at: CellRef) -> Option<CellRange> {
-    merges.iter().copied().find(|m| m.contains(at))
+/// the sorted positions that can hold a range covering `row`: those whose start
+/// row has been reached, minus the prefix whose running max end row falls short.
+fn stab_window(starts: &[u32], max_end_row: &[u32], row: u32) -> Range<usize> {
+    let first = max_end_row.partition_point(|&end| end < row);
+    let last = starts.partition_point(|&start| start <= row);
+    first..last.max(first)
+}
+
+/// merges sorted by start row, with a running max of end rows alongside.
+struct SortedMerges<'a> {
+    by_start: Vec<(&'a CellRange, usize)>,
+    start_row: Vec<u32>,
+    max_end_row: Vec<u32>,
+}
+
+/// per-frame merge lookup: interval stabbing over starts sorted by row, so a
+/// lookup finds covering merges without expanding the rows a range spans.
+///
+/// Sorting costs about `n log n`, which a frame with few merge lookups never
+/// earns back, so lookups scan linearly — exactly as they did before — until
+/// they have spent that much and the sort has paid for itself.
+struct MergeIndex<'a> {
+    merges: &'a [CellRange],
+    unsorted_probes_left: Cell<usize>,
+    sorted: OnceCell<SortedMerges<'a>>,
+}
+
+impl<'a> MergeIndex<'a> {
+    fn new(merges: &'a [CellRange]) -> Self {
+        Self::with_probe_budget(
+            merges,
+            merges
+                .len()
+                .saturating_mul(merges.len().max(2).ilog2() as usize),
+        )
+    }
+
+    fn with_probe_budget(merges: &'a [CellRange], budget: usize) -> Self {
+        Self {
+            merges,
+            unsorted_probes_left: Cell::new(budget),
+            sorted: OnceCell::new(),
+        }
+    }
+
+    fn sorted(&self) -> &SortedMerges<'a> {
+        self.sorted.get_or_init(|| {
+            let mut by_start: Vec<_> = self
+                .merges
+                .iter()
+                .enumerate()
+                .map(|(i, m)| (m, i))
+                .collect();
+            by_start.sort_unstable_by_key(|(m, i)| (m.start.row, m.start.col, *i));
+            let start_row = by_start.iter().map(|(m, _)| m.start.row).collect();
+            let max_end_row = running_max_end_row(by_start.iter().map(|(m, _)| m.end.row));
+            SortedMerges {
+                by_start,
+                start_row,
+                max_end_row,
+            }
+        })
+    }
+
+    /// the merge covering `at`, earliest in sheet order when merges overlap.
+    fn covering(&self, at: CellRef) -> Option<CellRange> {
+        if self.unsorted_probes_left.get() > 0 {
+            return self.scan(at);
+        }
+        self.stab(at)
+    }
+
+    /// the scan the index replaces, charging what it costs against the budget.
+    fn scan(&self, at: CellRef) -> Option<CellRange> {
+        let mut probes = 0;
+        let found = self.merges.iter().copied().find(|range| {
+            probes += 1;
+            contains_probe(range, at)
+        });
+        self.unsorted_probes_left
+            .set(self.unsorted_probes_left.get().saturating_sub(probes));
+        found
+    }
+
+    /// A sheet-order walk runs alongside the stab, one step per stabbed entry,
+    /// so a lookup never takes more than twice the scan's containment checks
+    /// even when the sort has pushed the winner to the far end of the window.
+    fn stab(&self, at: CellRef) -> Option<CellRange> {
+        let sorted = self.sorted();
+        let window = stab_window(&sorted.start_row, &sorted.max_end_row, at.row);
+        let mut ahead = self.merges.iter();
+        let mut best: Option<(usize, CellRange)> = None;
+        for j in window {
+            if let Some(range) = ahead.next().filter(|range| contains_probe(range, at)) {
+                return Some(*range);
+            }
+            let (range, i) = sorted.by_start[j];
+            if contains_probe(range, at) && best.is_none_or(|(best, _)| i < best) {
+                best = Some((i, *range));
+            }
+        }
+        best.map(|(_, range)| range)
+    }
+}
+
+fn running_max_end_row(ends: impl ExactSizeIterator<Item = u32>) -> Vec<u32> {
+    let mut out = Vec::with_capacity(ends.len());
+    let mut running = 0;
+    for end in ends {
+        running = running.max(end);
+        out.push(running);
+    }
+    out
+}
+
+#[cfg(test)]
+thread_local! {
+    static CONTAINS_PROBES: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+/// test hook counting containment checks so tests can bound per-frame work.
+fn contains_probe(range: &CellRange, at: CellRef) -> bool {
+    #[cfg(test)]
+    CONTAINS_PROBES.with(|probes| probes.set(probes.get() + 1));
+    range.contains(at)
+}
+
+#[cfg(test)]
+fn reset_contains_probes() {
+    CONTAINS_PROBES.with(|probes| probes.set(0));
+}
+
+#[cfg(test)]
+fn contains_probes() -> usize {
+    CONTAINS_PROBES.with(std::cell::Cell::get)
 }
 
 /// viewport-local `(x, y, w, h)` of a cell's box, spanning its merged range
@@ -785,10 +921,10 @@ fn cell_box(
     geom: &GridGeometry,
     rows: &AxisLayout,
     cols: &AxisLayout,
-    sheet: &Sheet,
+    merges: &MergeIndex<'_>,
     at: CellRef,
 ) -> Option<CellBox> {
-    let (end_col, end_row) = match covering_merge(&sheet.merges, at) {
+    let (end_col, end_row) = match merges.covering(at) {
         Some(merge) => (merge.end.col, merge.end.row),
         None => (at.col, at.row),
     };
@@ -909,17 +1045,18 @@ fn emit_borders(
     sheet: &Sheet,
     styles: &Stylesheet,
     theme: &Theme,
+    merges: &MergeIndex<'_>,
     at: CellRef,
     border: &Border,
 ) {
-    let Some(cell_box) = cell_box(geom, rows, cols, sheet, at) else {
+    let Some(cell_box) = cell_box(geom, rows, cols, merges, at) else {
         return;
     };
     let (x, y) = (cell_box.x, cell_box.y);
     let (x2, y2) = (x + cell_box.w, y + cell_box.h);
     let clip = cell_box.clip;
     let (clip_x2, clip_y2) = (clip.x + clip.w, clip.y + clip.h);
-    let (end_col, end_row) = match covering_merge(&sheet.merges, at) {
+    let (end_col, end_row) = match merges.covering(at) {
         Some(m) => (m.end.col, m.end.row),
         None => (at.col, at.row),
     };
@@ -1595,5 +1732,259 @@ mod tests {
         assert_eq!(texts[0].0, "merged");
         let dc = geometry::col_chars_to_px(geometry::DEFAULT_COL_WIDTH_CHARS);
         assert!((texts[0].1.w - dc * 2.0).abs() < 0.01);
+    }
+
+    #[test]
+    fn merge_index_stabs_multi_row_multi_col_ranges() {
+        let merges: Vec<CellRange> = ["E2:F3", "B6:D7", "A1:C4"]
+            .iter()
+            .map(|s| CellRange::parse_a1(s).unwrap())
+            .collect();
+        let index = MergeIndex::with_probe_budget(&merges, 0);
+
+        assert_eq!(index.covering(CellRef::new(1, 1)), Some(merges[2]));
+        assert_eq!(index.covering(CellRef::new(0, 0)), Some(merges[2]));
+        assert_eq!(index.covering(CellRef::new(3, 2)), Some(merges[2]));
+        assert_eq!(index.covering(CellRef::new(2, 5)), Some(merges[0]));
+        assert_eq!(index.covering(CellRef::new(6, 3)), Some(merges[1]));
+
+        for at in [
+            CellRef::new(0, 3),
+            CellRef::new(0, 4),
+            CellRef::new(4, 1),
+            CellRef::new(1, 3),
+            CellRef::new(7, 2),
+            CellRef::new(5, 4),
+        ] {
+            assert_eq!(index.covering(at), None, "unexpected cover at {at:?}");
+        }
+    }
+
+    #[test]
+    fn merge_index_prefers_sheet_order_when_merges_overlap() {
+        let merges: Vec<CellRange> = ["A1:B2", "B2:C3"]
+            .iter()
+            .map(|s| CellRange::parse_a1(s).unwrap())
+            .collect();
+        let index = MergeIndex::with_probe_budget(&merges, 0);
+        assert_eq!(index.covering(CellRef::new(1, 1)), Some(merges[0]));
+        assert_eq!(index.covering(CellRef::new(2, 2)), Some(merges[1]));
+    }
+
+    #[test]
+    fn merged_sheet_with_hyperlink_matches_expected_primitives() {
+        let mut sheet = Sheet::new("Sheet1");
+        for range in ["A1:B3", "D2:E4", "G1:H2", "J5:K8", "A10:C12"] {
+            sheet.merges.push(CellRange::parse_a1(range).unwrap());
+        }
+        sheet.set_cell(CellRef::new(0, 0), text_cell("anchor"));
+        sheet.set_cell(CellRef::new(2, 4), text_cell("covered"));
+        sheet.set_cell(CellRef::new(0, 6), text_cell("site"));
+        sheet.hyperlinks.push(Hyperlink {
+            range: CellRange::parse_a1("G1:H2").unwrap(),
+            external_target: Some("https://example.com".into()),
+            location: None,
+            tooltip: Some("Open site".into()),
+            display: None,
+        });
+        let mut wb = Workbook::default();
+        wb.sheets.push(sheet);
+
+        let dc = geometry::col_chars_to_px(geometry::DEFAULT_COL_WIDTH_CHARS);
+        let dr = geometry::row_pt_to_px(geometry::DEFAULT_ROW_HEIGHT_PT);
+        let dl = build_display_list(
+            &wb,
+            SheetId(0),
+            &Viewport {
+                x: 0.0,
+                y: 0.0,
+                width: dc * 12.0,
+                height: dr * 13.0,
+            },
+        )
+        .unwrap();
+
+        assert_eq!(dl.hyperlinks.len(), 1);
+        assert_eq!(
+            (
+                dl.hyperlinks[0].top,
+                dl.hyperlinks[0].left,
+                dl.hyperlinks[0].bottom,
+                dl.hyperlinks[0].right
+            ),
+            (0, 6, 1, 7)
+        );
+        assert_eq!(dl.hyperlinks[0].tooltip.as_deref(), Some("Open site"));
+
+        assert_eq!(
+            text_cmds(&dl),
+            vec![
+                ("anchor", TEXT_COLOR, false, Align::Left),
+                ("site", HYPERLINK_COLOR, false, Align::Left),
+            ]
+        );
+
+        let clips: Vec<_> = dl
+            .commands
+            .iter()
+            .filter_map(|command| match command {
+                DrawCmd::Text { text, clip, .. } => Some((text.as_str(), *clip)),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(clips.len(), 2);
+        assert!((clips[0].1.w - dc * 2.0).abs() < 0.01);
+        assert!((clips[0].1.h - dr * 3.0).abs() < 0.01);
+        assert!((clips[1].1.w - dc * 2.0).abs() < 0.01);
+        assert!((clips[1].1.h - dr * 2.0).abs() < 0.01);
+
+        let underlines: Vec<_> = dl
+            .commands
+            .iter()
+            .filter_map(|command| match command {
+                DrawCmd::Text {
+                    text, underline, ..
+                } => Some((text.as_str(), *underline)),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(underlines, vec![("anchor", false), ("site", true)]);
+    }
+
+    struct TestRng(u64);
+
+    impl TestRng {
+        fn below(&mut self, n: u32) -> u32 {
+            let mut x = self.0;
+            x ^= x << 13;
+            x ^= x >> 7;
+            x ^= x << 17;
+            self.0 = x;
+            if n == 0 { 0 } else { (x >> 32) as u32 % n }
+        }
+    }
+
+    /// ranges that stress the index: overlapping, whole-sheet, full-column, and
+    /// non-normalized (`end` before `start`, which `contains` rejects outright).
+    fn mixed_ranges(rng: &mut TestRng, rows: u32, cols: u32, n: u32) -> Vec<CellRange> {
+        (0..n)
+            .map(|_| {
+                let (r, c) = (rng.below(rows + 4), rng.below(cols + 4));
+                let (h, w) = (rng.below(9), rng.below(9));
+                match rng.below(12) {
+                    0 => CellRange {
+                        start: CellRef::new(r + h, c + w),
+                        end: CellRef::new(r, c),
+                    },
+                    1 => CellRange {
+                        start: CellRef::new(0, 0),
+                        end: CellRef::new(MAX_ROWS - 1, MAX_COLS - 1),
+                    },
+                    2 => CellRange {
+                        start: CellRef::new(r, c),
+                        end: CellRef::new(MAX_ROWS - 1, c + w),
+                    },
+                    _ => CellRange {
+                        start: CellRef::new(r, c),
+                        end: CellRef::new(r + h, c + w),
+                    },
+                }
+            })
+            .collect()
+    }
+
+    #[test]
+    fn merge_index_matches_a_vec_order_scan() {
+        let (rows, cols) = (26u32, 16u32);
+        for seed in 1..600u64 {
+            let mut rng = TestRng(seed.wrapping_mul(0x9E37_79B9_7F4A_7C15) | 1);
+            let n = rng.below(14);
+            let merges = mixed_ranges(&mut rng, rows, cols, n);
+            let scanning = MergeIndex::new(&merges);
+            let stabbing = MergeIndex::with_probe_budget(&merges, 0);
+            for row in 0..rows + 6 {
+                for col in 0..cols + 6 {
+                    let at = CellRef::new(row, col);
+                    let expect = merges.iter().copied().find(|m| m.contains(at));
+                    assert_eq!(
+                        stabbing.covering(at),
+                        expect,
+                        "seed {seed} at ({row},{col})"
+                    );
+                    assert_eq!(
+                        scanning.covering(at),
+                        expect,
+                        "seed {seed} at ({row},{col})"
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn a_merge_stab_paces_the_walk_before_it_holds_a_match() {
+        let mut merges = vec![CellRange {
+            start: CellRef::new(4_095, 0),
+            end: CellRef::new(4_095, 0),
+        }];
+        merges.extend((1..4096u32).map(|i| CellRange {
+            start: CellRef::new(i - 1, 1),
+            end: CellRef::new(MAX_ROWS - 1, 2),
+        }));
+        let index = MergeIndex::with_probe_budget(&merges, 0);
+        let at = CellRef::new(4_095, 0);
+
+        reset_contains_probes();
+        assert_eq!(index.covering(at), Some(merges[0]));
+        assert!(
+            contains_probes() <= 8,
+            "containment probes exploded: {}",
+            contains_probes()
+        );
+    }
+    /// a frame with a single merge lookup must not pay to sort thousands of
+    /// merges: until the scans cost what the sort would, they stay scans.
+    #[test]
+    fn one_lookup_over_many_merges_costs_only_the_scan() {
+        let merges: Vec<CellRange> = (0..4_096u32)
+            .map(|i| CellRange::new(CellRef::new(i, 0), CellRef::new(i, 2)))
+            .collect();
+        let index = MergeIndex::new(&merges);
+
+        reset_contains_probes();
+        assert_eq!(index.covering(CellRef::new(0, 0)), Some(merges[0]));
+        assert_eq!(contains_probes(), 1);
+        assert!(index.sorted.get().is_none(), "sorted for one lookup");
+    }
+
+    /// and once the scans have cost what the sort would, the sort happens.
+    #[test]
+    fn merges_are_sorted_once_the_scans_have_paid_for_it() {
+        let merges: Vec<CellRange> = (0..4_096u32)
+            .map(|i| CellRange::new(CellRef::new(i, 0), CellRef::new(i, 2)))
+            .collect();
+        let index = MergeIndex::new(&merges);
+        let uncovered = CellRef::new(5_000, 0);
+
+        for _ in 0..merges.len().ilog2() {
+            assert_eq!(index.covering(uncovered), None);
+        }
+        assert!(
+            index.sorted.get().is_none(),
+            "sorted before the budget ran out"
+        );
+        assert_eq!(index.covering(uncovered), None);
+        assert!(
+            index.sorted.get().is_some(),
+            "still unsorted past the budget"
+        );
+
+        reset_contains_probes();
+        assert_eq!(index.covering(CellRef::new(9, 1)), Some(merges[9]));
+        assert!(
+            contains_probes() <= 4,
+            "containment probes exploded: {}",
+            contains_probes()
+        );
     }
 }
