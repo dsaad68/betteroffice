@@ -5,15 +5,18 @@ use std::collections::HashMap;
 
 use ooxml_drawingml::{ColorValue, ShapeFill};
 use pptx_parse::{
-    Bullet, DeckWrite, InheritedTransform, ParagraphWrite, Placeholder, PptxPackage, RunProperties,
-    RunWrite, ShapeAdd, ShapeNode, ShapePatch, ShapeTransform, ShapeWrite, SlideLayout,
-    SlideMaster, SlideWrite, TextTarget, TextWrite,
+    Bullet, CommentAuthorWrite, CommentFlavor, CommentWrite, CommentsWrite, DeckWrite,
+    InheritedTransform, ParagraphWrite, Placeholder, PptxPackage, RunProperties, RunWrite,
+    ShapeAdd, ShapeNode, ShapePatch, ShapeTransform, ShapeWrite, SlideLayout, SlideMaster,
+    SlideWrite, TextTarget, TextWrite,
 };
 
+use crate::comments::derived_guid;
 use crate::deck::{seed_doc, snapshot_doc};
 use crate::{
-    BOOTSTRAP_CLIENT_ID, DeckSession, DeckSnapshot, EditError, EditResult, ParagraphSnapshot,
-    ShapeKind, ShapeSnapshot, SlideSnapshot, StorySnapshot, TextRunSnapshot, doc_with_client_id,
+    BOOTSTRAP_CLIENT_ID, CommentSnapshot, DeckSession, DeckSnapshot, EditError, EditResult,
+    ParagraphSnapshot, ShapeKind, ShapeSnapshot, SlideSnapshot, StorySnapshot, TextRunSnapshot,
+    doc_with_client_id,
 };
 
 /// The parsed parts a slide's shapes may inherit geometry from.
@@ -122,7 +125,126 @@ fn deck_write(
         };
         slides.push(write);
     }
-    Ok(DeckWrite { slides })
+    Ok(DeckWrite {
+        slides,
+        comments: comments_write(current, baseline),
+    })
+}
+
+/// Rebuilds the deck's comment parts when they differ from the source. `None`
+/// leaves every comment part byte for byte as it was, which is also what makes
+/// a slide deletion prune its comments through the reachability walk alone.
+fn comments_write(current: &DeckSnapshot, baseline: &DeckSnapshot) -> Option<CommentsWrite> {
+    if current.comments == baseline.comments && current.comment_flavor == baseline.comment_flavor {
+        return None;
+    }
+    let flavor = current.comment_flavor;
+    let live: Vec<&CommentSnapshot> = current
+        .comments
+        .iter()
+        .filter(|comment| {
+            current
+                .slides
+                .iter()
+                .any(|slide| slide.id == comment.slide_id)
+        })
+        .collect();
+
+    let mut authors: Vec<CommentAuthorWrite> = Vec::new();
+    let mut per_slide: Vec<(String, Vec<CommentWrite>)> = current
+        .slides
+        .iter()
+        .filter_map(|slide| {
+            slide
+                .source_part_path
+                .clone()
+                .map(|part_path| (part_path, Vec::new()))
+        })
+        .collect();
+
+    for comment in live.iter().filter(|comment| comment.parent_id.is_none()) {
+        let Some(part_path) = current
+            .slides
+            .iter()
+            .find(|slide| slide.id == comment.slide_id)
+            .and_then(|slide| slide.source_part_path.clone())
+        else {
+            continue;
+        };
+        let mut write = charge_author(&mut authors, flavor, comment);
+        if flavor == CommentFlavor::Modern {
+            for reply in live
+                .iter()
+                .filter(|reply| reply.parent_id.as_deref() == Some(comment.id.as_str()))
+            {
+                write
+                    .replies
+                    .push(charge_author(&mut authors, flavor, reply));
+            }
+        }
+        if let Some((_, slide_comments)) = per_slide
+            .iter_mut()
+            .find(|(candidate, _)| candidate == &part_path)
+        {
+            slide_comments.push(write);
+        }
+    }
+
+    Some(CommentsWrite {
+        flavor,
+        authors,
+        per_slide,
+    })
+}
+
+/// Finds or adds the comment's author, then takes the next per-author index.
+/// Legacy `idx` runs per author across the whole deck, starting at 1.
+fn charge_author(
+    authors: &mut Vec<CommentAuthorWrite>,
+    flavor: CommentFlavor,
+    comment: &CommentSnapshot,
+) -> CommentWrite {
+    let slot = match authors
+        .iter()
+        .position(|known| known.name == comment.author && known.initials == comment.initials)
+    {
+        Some(slot) => slot,
+        None => {
+            let slot = authors.len();
+            let id = match flavor {
+                CommentFlavor::Legacy => slot.to_string(),
+                CommentFlavor::Modern => {
+                    derived_guid(&format!("author:{}:{}", comment.author, comment.initials))
+                }
+            };
+            authors.push(CommentAuthorWrite {
+                id,
+                name: comment.author.clone(),
+                initials: comment.initials.clone(),
+                last_index: 0,
+                color_index: slot as u32,
+                user_id: None,
+                provider_id: None,
+            });
+            slot
+        }
+    };
+    authors[slot].last_index += 1;
+    comment_write(comment, authors[slot].id.clone(), authors[slot].last_index)
+}
+
+fn comment_write(comment: &CommentSnapshot, author_id: String, index: u32) -> CommentWrite {
+    CommentWrite {
+        id: derived_guid(&comment.id),
+        author_id,
+        index,
+        text: comment.text.clone(),
+        created: comment.created.clone(),
+        x_emu: comment.x_emu,
+        y_emu: comment.y_emu,
+        status: comment.resolved.then(|| "resolved".to_owned()),
+        replies: Vec::new(),
+    }
 }
 
 fn source_part_path(slide: &SlideSnapshot) -> EditResult<String> {

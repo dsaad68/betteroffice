@@ -1,10 +1,10 @@
 use std::collections::BTreeMap;
 
 use pptx_edit::{
-    CaretAnchor, DeckSession, DeckSnapshot, EditCtx, PresetShapeDraft, ShapeAdjustReceipt,
-    ShapeDraft, ShapeFillReceipt, ShapeReceipt, ShapeRect, ShapeStroke, ShapeStrokeReceipt,
-    SlideReceipt, StorySnapshot, TextReceipt, TextStyle, TextStylePatch, TransformReceipt,
-    UpdateEvent, UpdateSubscription,
+    CaretAnchor, CommentFlavor, CommentReceipt, CommentSnapshot, DeckSession, DeckSnapshot,
+    EditCtx, PresetShapeDraft, ShapeAdjustReceipt, ShapeDraft, ShapeFillReceipt, ShapeReceipt,
+    ShapeRect, ShapeStroke, ShapeStrokeReceipt, SlideReceipt, StorySnapshot, TextReceipt,
+    TextStyle, TextStylePatch, TransformReceipt, UpdateEvent, UpdateSubscription,
 };
 use pptx_parse::{
     MediaPart, ParseLimits, PptxPackage, Presentation as PresentationModel, Slide, SlideLayout,
@@ -277,6 +277,74 @@ impl Presentation {
         Ok(self
             .session
             .set_paragraph_alignment(context, story_id, start, end, alignment)?)
+    }
+
+    /// Anchors a comment to a slide. `created` is caller-supplied, so the
+    /// engine needs no clock.
+    #[allow(clippy::too_many_arguments)]
+    pub fn add_comment(
+        &self,
+        context: &EditCtx,
+        slide_id: &str,
+        author: &str,
+        initials: &str,
+        text: &str,
+        created: &str,
+        x_emu: i64,
+        y_emu: i64,
+    ) -> Result<CommentReceipt> {
+        Ok(self.session.add_comment(
+            context, slide_id, author, initials, text, created, x_emu, y_emu,
+        )?)
+    }
+
+    /// Modern comments only; legacy `p:cm` has no reply list.
+    pub fn reply_to_comment(
+        &self,
+        context: &EditCtx,
+        comment_id: &str,
+        author: &str,
+        initials: &str,
+        text: &str,
+        created: &str,
+    ) -> Result<CommentReceipt> {
+        Ok(self
+            .session
+            .reply_to_comment(context, comment_id, author, initials, text, created)?)
+    }
+
+    /// Modern comments only; on a legacy deck, resolving means removing.
+    pub fn set_comment_status(
+        &self,
+        context: &EditCtx,
+        comment_id: &str,
+        resolved: bool,
+    ) -> Result<CommentReceipt> {
+        Ok(self
+            .session
+            .set_comment_status(context, comment_id, resolved)?)
+    }
+
+    pub fn remove_comment(&self, context: &EditCtx, comment_id: &str) -> Result<CommentReceipt> {
+        Ok(self.session.remove_comment(context, comment_id)?)
+    }
+
+    /// Only legal while the deck has no comments: PowerPoint fixes the flavour
+    /// at the first comment and the two bodies are not interchangeable.
+    pub fn set_comment_flavor(
+        &self,
+        context: &EditCtx,
+        flavor: CommentFlavor,
+    ) -> Result<CommentFlavor> {
+        Ok(self.session.set_comment_flavor(context, flavor)?)
+    }
+
+    pub fn comments(&self) -> Result<Vec<CommentSnapshot>> {
+        Ok(self.session.comments()?)
+    }
+
+    pub fn comment_flavor(&self) -> Result<CommentFlavor> {
+        Ok(self.session.comment_flavor()?)
     }
 
     pub fn insert_paragraph_break(

@@ -1,4 +1,4 @@
-use std::collections::{BTreeMap, HashSet};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::sync::Arc;
 
 use ooxml_drawingml::{
@@ -12,6 +12,7 @@ use yrs::{
     Transact, TransactionMut, WriteTxn,
 };
 
+use crate::comments::{flavor_key, seed_comments, snapshot_comments, snapshot_flavor};
 use crate::story::{seed_plain_story, seed_story, snapshot_story, validate_story};
 use crate::{
     DeckSession, DeckSnapshot, EditCtx, EditError, EditResult, META, MIGRATE_ORIGIN,
@@ -20,9 +21,9 @@ use crate::{
     ShapeStrokeReceipt, SlideReceipt, SlideSnapshot, TransformReceipt,
 };
 
-const SCHEMA_VERSION: f64 = 2.0;
+const SCHEMA_VERSION: f64 = 3.0;
 /// Versions [`migrate_doc`] can carry forward. Anything else is unreadable.
-const MIGRATABLE_SCHEMA_VERSIONS: [f64; 2] = [1.0, SCHEMA_VERSION];
+const MIGRATABLE_SCHEMA_VERSIONS: [f64; 3] = [1.0, 2.0, SCHEMA_VERSION];
 const MAX_GEOMETRY: i64 = 1_000_000_000_000_000;
 const MAX_SHAPE_DEPTH: usize = 128;
 const EMU_PER_POINT: f64 = 12_700.0;
@@ -47,10 +48,16 @@ pub(crate) fn seed_doc(doc: &Doc, package: &PptxPackage, fingerprint: &str) -> E
         "packageJson",
         Any::Buffer(Arc::from(package_json)),
     );
+    meta.insert(
+        &mut txn,
+        "commentFlavor",
+        flavor_key(package.comment_flavor.unwrap_or_default()),
+    );
     let order = txn.get_or_insert_array(SLIDE_ORDER);
     let slides = txn.get_or_insert_map(SLIDES);
     let shapes = txn.get_or_insert_map(SHAPES);
     let stories = txn.get_or_insert_map(STORIES);
+    let mut slide_id_by_part: HashMap<String, String> = HashMap::new();
 
     for (slide_index, slide) in package.slides.iter().enumerate() {
         let theme = slide_theme(package, slide);
@@ -79,7 +86,11 @@ pub(crate) fn seed_doc(doc: &Doc, package: &PptxPackage, fingerprint: &str) -> E
             )?;
             shape_order.push_back(&mut txn, shape_id.as_str());
         }
+        slide_id_by_part.insert(slide.part_path.clone(), slide_id);
     }
+    seed_comments(&mut txn, package, &|part| {
+        slide_id_by_part.get(part).cloned()
+    })?;
     Ok(())
 }
 
@@ -709,6 +720,11 @@ pub(crate) fn migrate_doc(doc: &Doc) -> EditResult<()> {
         Any::Buffer(Arc::from(package_json)),
     );
     meta.insert(&mut txn, "schemaVersion", SCHEMA_VERSION);
+    meta.insert(
+        &mut txn,
+        "commentFlavor",
+        flavor_key(package.comment_flavor.unwrap_or_default()),
+    );
     Ok(())
 }
 
@@ -776,6 +792,8 @@ pub(crate) fn snapshot_doc(doc: &Doc, package: &PptxPackage) -> EditResult<DeckS
         width_emu: required_i64(&meta, &txn, "widthEmu")?,
         height_emu: required_i64(&meta, &txn, "heightEmu")?,
         slides: slide_snapshots,
+        comment_flavor: snapshot_flavor(&txn)?,
+        comments: snapshot_comments(&txn)?,
     })
 }
 
@@ -868,12 +886,12 @@ fn required_order<T: ReadTxn>(txn: &T) -> EditResult<ArrayRef> {
         .ok_or_else(|| EditError::InvalidState("missing slide order".to_owned()))
 }
 
-fn required_map<T: ReadTxn>(txn: &T, name: &str) -> EditResult<MapRef> {
+pub(crate) fn required_map<T: ReadTxn>(txn: &T, name: &str) -> EditResult<MapRef> {
     txn.get_map(name)
         .ok_or_else(|| EditError::InvalidState(format!("missing {name}")))
 }
 
-fn slide_ref<T: ReadTxn>(txn: &T, slide_id: &str) -> EditResult<MapRef> {
+pub(crate) fn slide_ref<T: ReadTxn>(txn: &T, slide_id: &str) -> EditResult<MapRef> {
     required_map(txn, SLIDES)?
         .get(txn, slide_id)
         .and_then(|value| value.cast::<MapRef>().ok())
@@ -1129,7 +1147,7 @@ fn required_string<T: ReadTxn>(map: &MapRef, txn: &T, key: &str) -> EditResult<S
         .ok_or_else(|| EditError::InvalidState(format!("missing string {key}")))
 }
 
-fn map_string<T: ReadTxn>(map: &MapRef, txn: &T, key: &str) -> Option<String> {
+pub(crate) fn map_string<T: ReadTxn>(map: &MapRef, txn: &T, key: &str) -> Option<String> {
     map.get(txn, key).and_then(|value| out_string(&value))
 }
 
@@ -1149,7 +1167,7 @@ fn required_i64<T: ReadTxn>(map: &MapRef, txn: &T, key: &str) -> EditResult<i64>
     Ok(number as i64)
 }
 
-fn map_number<T: ReadTxn>(map: &MapRef, txn: &T, key: &str) -> Option<f64> {
+pub(crate) fn map_number<T: ReadTxn>(map: &MapRef, txn: &T, key: &str) -> Option<f64> {
     match map.get(txn, key) {
         Some(Out::Any(Any::Number(value))) if value.is_finite() => Some(value),
         Some(Out::Any(Any::BigInt(value))) => Some(value as f64),
@@ -1157,7 +1175,7 @@ fn map_number<T: ReadTxn>(map: &MapRef, txn: &T, key: &str) -> Option<f64> {
     }
 }
 
-fn map_bool<T: ReadTxn>(map: &MapRef, txn: &T, key: &str) -> Option<bool> {
+pub(crate) fn map_bool<T: ReadTxn>(map: &MapRef, txn: &T, key: &str) -> Option<bool> {
     match map.get(txn, key) {
         Some(Out::Any(Any::Bool(value))) => Some(value),
         _ => None,

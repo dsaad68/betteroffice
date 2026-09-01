@@ -9,6 +9,7 @@ use ooxml_drawingml::{
 };
 
 use crate::PptxError;
+use crate::comments::{CommentFlavor, CommentsWrite, authors_xml, comments_xml};
 use crate::drawing::parse_run_properties;
 use crate::model::{Bullet, PptxPackage, RunProperties, SlideReference};
 use crate::xml::{ParseBudget, ParseLimits, XmlElement, XmlNode, parse_xml, serialize_xml};
@@ -29,6 +30,8 @@ const MAX_SLIDE_ID: u32 = 2_147_483_647;
 /// The desired final deck, expressed against the parsed source package.
 pub struct DeckWrite {
     pub slides: Vec<SlideWrite>,
+    /// `None` leaves every comment part exactly as the source had it.
+    pub comments: Option<CommentsWrite>,
 }
 
 pub enum SlideWrite {
@@ -280,6 +283,16 @@ pub fn write_pptx_with_edits(
             &mut budget,
         )?;
     }
+    if let Some(comments) = &deck.comments {
+        patch_comment_parts(
+            package,
+            comments,
+            &mut replacements,
+            &mut new_parts,
+            &mut removed_paths,
+            &mut budget,
+        )?;
+    }
     let mut parts = Vec::with_capacity(package.parts.len() + new_parts.len());
     for part in &package.parts {
         if removed_paths.contains(&part.path) {
@@ -501,6 +514,323 @@ fn patch_structure(
         ));
     }
     replacements.insert(content_types_path.to_owned(), serialize_xml(&root));
+    Ok(())
+}
+
+const PACKAGE_RELATIONSHIPS_NS: &str =
+    "http://schemas.openxmlformats.org/package/2006/relationships";
+
+/// Writes the deck's comment parts and their OPC bookkeeping. Parts belonging
+/// to the flavour the deck is not using are dropped, so a package never ends up
+/// carrying both systems.
+fn patch_comment_parts(
+    package: &PptxPackage,
+    write: &CommentsWrite,
+    replacements: &mut HashMap<String, Vec<u8>>,
+    new_parts: &mut Vec<(String, Vec<u8>)>,
+    removed_paths: &mut HashSet<String>,
+    budget: &mut ParseBudget<'_>,
+) -> Result<(), PptxError> {
+    let mut sink = PartSink {
+        package,
+        replacements,
+        new_parts,
+    };
+    for (slide_part_path, comments) in &write.per_slide {
+        let reference = package
+            .presentation
+            .slides
+            .iter()
+            .find(|reference| &reference.part_path == slide_part_path)
+            .ok_or_else(|| write_error(slide_part_path, "not a slide of this deck"))?;
+        let relationships_path = slide_relationships_path(slide_part_path);
+        let existing = existing_comment_part(package, slide_part_path, write);
+
+        if comments.is_empty() {
+            if let Some(part_path) = existing {
+                removed_paths.insert(part_path.clone());
+                sink.forget(&part_path);
+                remove_content_type_override(&mut sink, &part_path, budget)?;
+                remove_relationship(
+                    &mut sink,
+                    &relationships_path,
+                    write.comments_relationship_type(),
+                    budget,
+                )?;
+            }
+            continue;
+        }
+
+        let part_path = match existing {
+            Some(part_path) => part_path,
+            None => write.comments_part_path(slide_number(slide_part_path)),
+        };
+        removed_paths.remove(&part_path);
+        sink.store(&part_path, comments_xml(write, comments, reference.id));
+        set_content_type_override(&mut sink, &part_path, write.comments_content_type(), budget)?;
+        set_relationship(
+            &mut sink,
+            &relationships_path,
+            write.comments_relationship_type(),
+            &relative_target(slide_part_path, &part_path),
+            budget,
+        )?;
+    }
+
+    let presentation_relationships = slide_relationships_path(&package.presentation.part_path);
+    let authors_path = write.authors_part_path().to_owned();
+    if write.authors.is_empty() {
+        removed_paths.insert(authors_path.clone());
+        sink.forget(&authors_path);
+        remove_content_type_override(&mut sink, &authors_path, budget)?;
+        remove_relationship(
+            &mut sink,
+            &presentation_relationships,
+            write.authors_relationship_type(),
+            budget,
+        )?;
+    } else {
+        removed_paths.remove(&authors_path);
+        sink.store(&authors_path, authors_xml(write));
+        set_content_type_override(
+            &mut sink,
+            &authors_path,
+            write.authors_content_type(),
+            budget,
+        )?;
+        set_relationship(
+            &mut sink,
+            &presentation_relationships,
+            write.authors_relationship_type(),
+            &relative_target(&package.presentation.part_path, &authors_path),
+            budget,
+        )?;
+    }
+
+    drop_other_flavor(package, write, &mut sink, removed_paths, budget)
+}
+
+/// Removes whatever the deck holds for the flavour it is not being written in.
+fn drop_other_flavor(
+    package: &PptxPackage,
+    write: &CommentsWrite,
+    sink: &mut PartSink<'_>,
+    removed_paths: &mut HashSet<String>,
+    budget: &mut ParseBudget<'_>,
+) -> Result<(), PptxError> {
+    let other = CommentsWrite {
+        flavor: match write.flavor {
+            CommentFlavor::Legacy => CommentFlavor::Modern,
+            CommentFlavor::Modern => CommentFlavor::Legacy,
+        },
+        authors: Vec::new(),
+        per_slide: Vec::new(),
+    };
+    for reference in &package.presentation.slides {
+        let Some(part_path) = existing_comment_part(package, &reference.part_path, &other) else {
+            continue;
+        };
+        removed_paths.insert(part_path.clone());
+        sink.forget(&part_path);
+        remove_content_type_override(sink, &part_path, budget)?;
+        remove_relationship(
+            sink,
+            &slide_relationships_path(&reference.part_path),
+            other.comments_relationship_type(),
+            budget,
+        )?;
+    }
+    let authors_path = other.authors_part_path().to_owned();
+    if package.part_bytes(&authors_path).is_some() {
+        removed_paths.insert(authors_path.clone());
+        sink.forget(&authors_path);
+        remove_content_type_override(sink, &authors_path, budget)?;
+        remove_relationship(
+            sink,
+            &slide_relationships_path(&package.presentation.part_path),
+            other.authors_relationship_type(),
+            budget,
+        )?;
+    }
+    Ok(())
+}
+
+fn existing_comment_part(
+    package: &PptxPackage,
+    slide_part_path: &str,
+    write: &CommentsWrite,
+) -> Option<String> {
+    package
+        .relationships
+        .get(slide_part_path)?
+        .iter()
+        .find(|relationship| relationship.is_type(write.comments_relationship_type()))
+        .and_then(|relationship| relationship.resolved_target.clone())
+}
+
+/// `ppt/slides/slide7.xml` -> 7, so a comment part lands beside the slide it
+/// belongs to. Anything unparseable falls back to 1; the relationship, not the
+/// name, is what binds the two.
+fn slide_number(slide_part_path: &str) -> usize {
+    slide_part_path
+        .rsplit_once("/slide")
+        .and_then(|(_, tail)| tail.strip_suffix(".xml"))
+        .and_then(|digits| digits.parse().ok())
+        .unwrap_or(1)
+}
+
+/// Reads and writes package parts while a write is in flight, so later steps
+/// see what earlier ones produced.
+struct PartSink<'a> {
+    package: &'a PptxPackage,
+    replacements: &'a mut HashMap<String, Vec<u8>>,
+    new_parts: &'a mut Vec<(String, Vec<u8>)>,
+}
+
+impl PartSink<'_> {
+    fn current(&self, path: &str) -> Option<Vec<u8>> {
+        if let Some(bytes) = self.replacements.get(path) {
+            return Some(bytes.clone());
+        }
+        if let Some((_, bytes)) = self.new_parts.iter().find(|(name, _)| name == path) {
+            return Some(bytes.clone());
+        }
+        self.package.part_bytes(path).map(<[u8]>::to_vec)
+    }
+
+    fn store(&mut self, path: &str, bytes: Vec<u8>) {
+        if self.package.part_bytes(path).is_some() {
+            self.replacements.insert(path.to_owned(), bytes);
+            return;
+        }
+        match self.new_parts.iter_mut().find(|(name, _)| name == path) {
+            Some((_, existing)) => *existing = bytes,
+            None => self.new_parts.push((path.to_owned(), bytes)),
+        }
+    }
+
+    fn forget(&mut self, path: &str) {
+        self.replacements.remove(path);
+        self.new_parts.retain(|(name, _)| name != path);
+    }
+}
+
+fn set_relationship(
+    sink: &mut PartSink<'_>,
+    relationships_path: &str,
+    relationship_type: &str,
+    target: &str,
+    budget: &mut ParseBudget<'_>,
+) -> Result<(), PptxError> {
+    let mut root = match sink.current(relationships_path) {
+        Some(bytes) => parse_xml(&bytes, relationships_path, budget)?,
+        None => XmlElement::new("Relationships").with_attribute("xmlns", PACKAGE_RELATIONSHIPS_NS),
+    };
+    let existing = root.children.iter_mut().find_map(|child| match child {
+        XmlNode::Element(element)
+            if element.local_name() == "Relationship"
+                && element.attribute("Type") == Some(relationship_type) =>
+        {
+            Some(element)
+        }
+        _ => None,
+    });
+    match existing {
+        Some(element) => element.set_attribute("Target", target),
+        None => {
+            let id = format!("rId{}", max_relationship_id(&root) + 1);
+            root.children.push(XmlNode::Element(
+                XmlElement::new("Relationship")
+                    .with_attribute("Id", id)
+                    .with_attribute("Type", relationship_type)
+                    .with_attribute("Target", target),
+            ));
+        }
+    }
+    sink.store(relationships_path, serialize_xml(&root));
+    Ok(())
+}
+
+fn remove_relationship(
+    sink: &mut PartSink<'_>,
+    relationships_path: &str,
+    relationship_type: &str,
+    budget: &mut ParseBudget<'_>,
+) -> Result<(), PptxError> {
+    let Some(bytes) = sink.current(relationships_path) else {
+        return Ok(());
+    };
+    let mut root = parse_xml(&bytes, relationships_path, budget)?;
+    root.children.retain(|child| match child {
+        XmlNode::Element(element) if element.local_name() == "Relationship" => {
+            element.attribute("Type") != Some(relationship_type)
+        }
+        _ => true,
+    });
+    sink.store(relationships_path, serialize_xml(&root));
+    Ok(())
+}
+
+fn max_relationship_id(root: &XmlElement) -> usize {
+    root.children_named("Relationship")
+        .filter_map(|element| element.attribute("Id"))
+        .filter_map(|id| id.strip_prefix("rId"))
+        .filter_map(|number| number.parse::<usize>().ok())
+        .max()
+        .unwrap_or(0)
+}
+
+fn set_content_type_override(
+    sink: &mut PartSink<'_>,
+    part_path: &str,
+    content_type: &str,
+    budget: &mut ParseBudget<'_>,
+) -> Result<(), PptxError> {
+    let path = "[Content_Types].xml";
+    let bytes = sink
+        .current(path)
+        .ok_or_else(|| PptxError::MissingPart(path.to_owned()))?;
+    let mut root = parse_xml(&bytes, path, budget)?;
+    let name = format!("/{part_path}");
+    let existing = root.children.iter_mut().find_map(|child| match child {
+        XmlNode::Element(element)
+            if element.local_name() == "Override"
+                && element.attribute("PartName") == Some(name.as_str()) =>
+        {
+            Some(element)
+        }
+        _ => None,
+    });
+    match existing {
+        Some(element) => element.set_attribute("ContentType", content_type),
+        None => root.children.push(XmlNode::Element(
+            XmlElement::new("Override")
+                .with_attribute("PartName", name)
+                .with_attribute("ContentType", content_type),
+        )),
+    }
+    sink.store(path, serialize_xml(&root));
+    Ok(())
+}
+
+fn remove_content_type_override(
+    sink: &mut PartSink<'_>,
+    part_path: &str,
+    budget: &mut ParseBudget<'_>,
+) -> Result<(), PptxError> {
+    let path = "[Content_Types].xml";
+    let Some(bytes) = sink.current(path) else {
+        return Ok(());
+    };
+    let mut root = parse_xml(&bytes, path, budget)?;
+    let name = format!("/{part_path}");
+    root.children.retain(|child| match child {
+        XmlNode::Element(element) if element.local_name() == "Override" => {
+            element.attribute("PartName") != Some(name.as_str())
+        }
+        _ => true,
+    });
+    sink.store(path, serialize_xml(&root));
     Ok(())
 }
 

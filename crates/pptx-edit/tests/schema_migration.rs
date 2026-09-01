@@ -2,7 +2,7 @@
 //! `betteroffice-demo.pptx`, adds a text box and edits its story, then persists
 //! `encode_state_as_update_v1()`.
 
-use pptx_edit::{DeckSession, DeckSnapshot, EditCtx, EditError, TextStyle};
+use pptx_edit::{CommentFlavor, DeckSession, DeckSnapshot, EditCtx, EditError, TextStyle};
 use yrs::updates::decoder::Decode;
 use yrs::{Any, Doc, Map, MapRef, Out, ReadTxn, StateVector, Transact, Update};
 
@@ -12,14 +12,14 @@ const SHAPE_ID: &str = "shape:4242:0";
 const STORY_ID: &str = "story:shape:4242:0:0";
 
 #[test]
-fn released_v1_snapshot_migrates_and_round_trips_as_v2() {
+fn released_v1_snapshot_migrates_and_round_trips_as_v3() {
     assert_eq!(stamped_version(V1_UPDATE), Some(1.0));
 
     let session = DeckSession::open_from_update(V1_UPDATE, 901).unwrap();
     assert_v1_content(&session);
 
     let migrated = session.encode_state_as_update_v1();
-    assert_eq!(stamped_version(&migrated), Some(2.0));
+    assert_eq!(stamped_version(&migrated), Some(3.0));
     assert!(
         package_json(&migrated).contains("\"charts\""),
         "the migrated package must carry the v2 chart field"
@@ -34,7 +34,7 @@ fn released_v1_snapshot_migrates_and_round_trips_as_v2() {
     assert_eq!(
         reopened.encode_state_as_update_v1().len(),
         migrated.len(),
-        "reopening a v2 snapshot must not migrate again"
+        "reopening a v3 snapshot must not migrate again"
     );
 }
 
@@ -76,7 +76,7 @@ fn two_clients_migrating_the_same_v1_snapshot_converge() {
     assert_eq!(left.snapshot().unwrap(), right.snapshot().unwrap());
     assert_eq!(
         stamped_version(&left.encode_state_as_update_v1()),
-        Some(2.0)
+        Some(3.0)
     );
     assert_eq!(
         package_json(&left.encode_state_as_update_v1()),
@@ -86,7 +86,7 @@ fn two_clients_migrating_the_same_v1_snapshot_converge() {
 
 #[test]
 fn unmigratable_schema_versions_stay_rejected() {
-    for version in [0.0, 1.5, 3.0] {
+    for version in [0.0, 1.5, 4.0] {
         assert!(
             matches!(
                 DeckSession::open_from_update(&restamped(V1_UPDATE, Some(version)), 905),
@@ -119,6 +119,11 @@ fn assert_v1_content(session: &DeckSession) {
         "edited persisted on v1"
     );
     assert!(session.package().charts.is_empty());
+    assert!(
+        snapshot.comments.is_empty(),
+        "a deck migrated from v1 carries no comments"
+    );
+    assert_eq!(snapshot.comment_flavor, CommentFlavor::Legacy);
 }
 
 fn snapshot_shape_ids(snapshot: &DeckSnapshot) -> Vec<String> {

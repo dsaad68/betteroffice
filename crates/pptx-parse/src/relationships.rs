@@ -10,6 +10,18 @@ pub mod relationship_types {
     pub const THEME: &str = "/theme";
     pub const IMAGE: &str = "/image";
     pub const CHART: &str = "/chart";
+
+    // Comment relationships are full URIs matched with [`super::Relationship::is_type`].
+    // The modern type also ends with `/comments`, so the suffix matching the
+    // constants above rely on would conflate the two flavours.
+    pub const COMMENTS: &str =
+        "http://schemas.openxmlformats.org/officeDocument/2006/relationships/comments";
+    pub const COMMENT_AUTHORS: &str =
+        "http://schemas.openxmlformats.org/officeDocument/2006/relationships/commentAuthors";
+    pub const MODERN_COMMENTS: &str =
+        "http://schemas.microsoft.com/office/2018/10/relationships/comments";
+    pub const MODERN_AUTHORS: &str =
+        "http://schemas.microsoft.com/office/2018/10/relationships/authors";
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -33,6 +45,11 @@ pub struct Relationship {
 impl Relationship {
     pub fn has_type(&self, suffix: &str) -> bool {
         self.relationship_type.ends_with(suffix)
+    }
+
+    /// Exact match, for relationship types whose suffixes overlap.
+    pub fn is_type(&self, relationship_type: &str) -> bool {
+        self.relationship_type == relationship_type
     }
 }
 

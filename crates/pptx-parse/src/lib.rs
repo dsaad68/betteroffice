@@ -1,6 +1,7 @@
 //! Bounded PresentationML parsing and part-preserving package writes.
 
 mod chart;
+mod comments;
 mod drawing;
 mod error;
 mod model;
@@ -10,6 +11,9 @@ mod theme;
 mod write;
 mod xml;
 
+pub use comments::{
+    Comment, CommentAuthor, CommentAuthorWrite, CommentFlavor, CommentWrite, CommentsWrite,
+};
 pub use error::PptxError;
 pub use model::*;
 pub use package::{parse_pptx, parse_pptx_with_limits, write_pptx};

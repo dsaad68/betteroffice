@@ -3,6 +3,7 @@ use std::collections::BTreeMap;
 use ooxml_drawingml::{ColorValue, ShapeFill, ShapeOutline, Theme};
 use serde::{Deserialize, Serialize};
 
+use crate::comments::{Comment, CommentAuthor, CommentFlavor};
 use crate::relationships::Relationship;
 
 pub use ooxml_drawingml::chart::{
@@ -22,6 +23,15 @@ pub struct PptxPackage {
     #[serde(default)]
     pub charts: Vec<ChartPart>,
     pub media: Vec<MediaPart>,
+    /// Absent from packages serialized before comments were parsed.
+    #[serde(default)]
+    pub comment_authors: Vec<CommentAuthor>,
+    #[serde(default)]
+    pub comments: Vec<Comment>,
+    /// Which comment system the deck already commits to, if any. A deck with
+    /// no comments is neutral and may take either.
+    #[serde(default)]
+    pub comment_flavor: Option<CommentFlavor>,
     pub relationships: BTreeMap<String, Vec<Relationship>>,
     #[serde(skip)]
     pub(crate) parts: Vec<PackagePart>,
