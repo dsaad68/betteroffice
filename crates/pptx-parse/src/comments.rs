@@ -264,9 +264,18 @@ fn unsigned_attribute(element: &XmlElement, name: &str) -> Option<u32> {
 pub struct CommentsWrite {
     pub flavor: CommentFlavor,
     pub authors: Vec<CommentAuthorWrite>,
-    /// Keyed by slide part path. A slide present with an empty list has its
-    /// comment part, relationship and content-type override dropped.
-    pub per_slide: Vec<(String, Vec<CommentWrite>)>,
+    /// A slide present with an empty list has its comment part, relationship
+    /// and content-type override dropped.
+    pub per_slide: Vec<(CommentSlide, Vec<CommentWrite>)>,
+}
+
+/// Which slide a comment set belongs to. A slide minted by this same write has
+/// no part path yet, so it is named by its position in [`crate::DeckWrite`]'s
+/// slide list and resolved once the part has been created.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum CommentSlide {
+    Existing(String),
+    Added(usize),
 }
 
 pub struct CommentAuthorWrite {

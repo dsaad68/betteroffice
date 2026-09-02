@@ -723,3 +723,33 @@ fn an_unknown_comment_is_reported_not_ignored() {
         Err(EditError::CommentNotFound(_))
     ));
 }
+
+#[test]
+fn a_comment_on_a_newly_inserted_slide_survives_the_save() {
+    let session = open_fixture();
+    let slide = session.insert_slide(&context(), 1, None).unwrap();
+    session
+        .add_comment(
+            &context(),
+            &slide.slide_id,
+            "Ada Lovelace",
+            "AL",
+            "Fresh slide, fresh comment.",
+            "2026-09-02T10:00:00.000",
+            914_400,
+            457_200,
+        )
+        .unwrap();
+
+    let saved = session.save().unwrap();
+    let reopened = DeckSession::open(&saved, 13).unwrap();
+    let snapshot = reopened.snapshot().unwrap();
+    assert_eq!(snapshot.slides.len(), 4);
+    assert_eq!(
+        snapshot.comments.len(),
+        1,
+        "a comment anchored to a minted slide must reach the saved deck"
+    );
+    assert_eq!(snapshot.comments[0].text, "Fresh slide, fresh comment.");
+    assert_eq!(snapshot.comments[0].slide_id, snapshot.slides[1].id);
+}

@@ -5,10 +5,10 @@ use std::collections::HashMap;
 
 use ooxml_drawingml::{ColorValue, ShapeFill};
 use pptx_parse::{
-    Bullet, CommentAuthorWrite, CommentFlavor, CommentWrite, CommentsWrite, DeckWrite,
-    InheritedTransform, ParagraphWrite, Placeholder, PptxPackage, RunProperties, RunWrite,
-    ShapeAdd, ShapeNode, ShapePatch, ShapeTransform, ShapeWrite, SlideLayout, SlideMaster,
-    SlideWrite, TextTarget, TextWrite,
+    Bullet, CommentAuthorWrite, CommentFlavor, CommentSlide, CommentWrite, CommentsWrite,
+    DeckWrite, InheritedTransform, ParagraphWrite, Placeholder, PptxPackage, RunProperties,
+    RunWrite, ShapeAdd, ShapeNode, ShapePatch, ShapeTransform, ShapeWrite, SlideLayout,
+    SlideMaster, SlideWrite, TextTarget, TextWrite,
 };
 
 use crate::comments::derived_guid;
@@ -151,23 +151,26 @@ fn comments_write(current: &DeckSnapshot, baseline: &DeckSnapshot) -> Option<Com
         .collect();
 
     let mut authors: Vec<CommentAuthorWrite> = Vec::new();
-    let mut per_slide: Vec<(String, Vec<CommentWrite>)> = current
+    // A slide minted by this same write has no source part path yet, so it is
+    // named by its position and resolved once the part exists.
+    let mut per_slide: Vec<(CommentSlide, Vec<CommentWrite>)> = current
         .slides
         .iter()
-        .filter_map(|slide| {
-            slide
-                .source_part_path
-                .clone()
-                .map(|part_path| (part_path, Vec::new()))
+        .enumerate()
+        .map(|(index, slide)| {
+            let target = match slide.source_part_path.clone() {
+                Some(part_path) => CommentSlide::Existing(part_path),
+                None => CommentSlide::Added(index),
+            };
+            (target, Vec::new())
         })
         .collect();
 
     for comment in live.iter().filter(|comment| comment.parent_id.is_none()) {
-        let Some(part_path) = current
+        let Some(index) = current
             .slides
             .iter()
-            .find(|slide| slide.id == comment.slide_id)
-            .and_then(|slide| slide.source_part_path.clone())
+            .position(|slide| slide.id == comment.slide_id)
         else {
             continue;
         };
@@ -182,10 +185,7 @@ fn comments_write(current: &DeckSnapshot, baseline: &DeckSnapshot) -> Option<Com
                     .push(charge_author(&mut authors, flavor, reply));
             }
         }
-        if let Some((_, slide_comments)) = per_slide
-            .iter_mut()
-            .find(|(candidate, _)| candidate == &part_path)
-        {
+        if let Some((_, slide_comments)) = per_slide.get_mut(index) {
             slide_comments.push(write);
         }
     }

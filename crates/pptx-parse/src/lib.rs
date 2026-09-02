@@ -12,7 +12,8 @@ mod write;
 mod xml;
 
 pub use comments::{
-    Comment, CommentAuthor, CommentAuthorWrite, CommentFlavor, CommentWrite, CommentsWrite,
+    Comment, CommentAuthor, CommentAuthorWrite, CommentFlavor, CommentSlide, CommentWrite,
+    CommentsWrite,
 };
 pub use error::PptxError;
 pub use model::*;

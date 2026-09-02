@@ -985,3 +985,87 @@ fn switching_an_emptied_deck_to_modern_drops_the_legacy_parts() {
     assert!(!content_types.contains("presentationml.commentAuthors+xml"));
     assert_relationships_resolve(&saved);
 }
+
+/// The `commentN.xml` naming is conventional, not normative: the relationship
+/// is what binds a comment part to its slide. A deck where slide 2 owns
+/// `comment1.xml` must not have that part stolen when slide 1 gains its first
+/// comment.
+#[test]
+fn a_minted_comment_part_never_overwrites_another_slides() {
+    let mut sources = fixture_parts(256);
+    for (path, body) in sources.iter_mut() {
+        match path.as_str() {
+            "[Content_Types].xml" => {
+                *body = body.replace(
+                    "</Types>",
+                    r#"<Override PartName="/ppt/commentAuthors.xml" ContentType="application/vnd.openxmlformats-officedocument.presentationml.commentAuthors+xml"/><Override PartName="/ppt/comments/comment1.xml" ContentType="application/vnd.openxmlformats-officedocument.presentationml.comments+xml"/></Types>"#,
+                );
+            }
+            "ppt/_rels/presentation.xml.rels" => {
+                *body = body.replace(
+                    "</Relationships>",
+                    &format!("{LEGACY_AUTHORS_REL}</Relationships>"),
+                );
+            }
+            // slide 2 owns comment1.xml, which is legal and what makes this bite
+            "ppt/slides/_rels/slide2.xml.rels" => {
+                *body = body.replace(
+                    "</Relationships>",
+                    &format!("{LEGACY_COMMENTS_REL}</Relationships>"),
+                );
+            }
+            _ => {}
+        }
+    }
+    sources.push((
+        "ppt/commentAuthors.xml".to_owned(),
+        LEGACY_AUTHORS.to_owned(),
+    ));
+    sources.push((
+        "ppt/comments/comment1.xml".to_owned(),
+        LEGACY_COMMENTS.to_owned(),
+    ));
+
+    let session = DeckSession::open(&zip(sources), 31).unwrap();
+    let snapshot = session.snapshot().unwrap();
+    assert_eq!(
+        snapshot.comments.len(),
+        1,
+        "slide 2 starts with the comment"
+    );
+    assert_eq!(snapshot.comments[0].slide_id, snapshot.slides[1].id);
+
+    let first = snapshot.slides[0].id.clone();
+    session
+        .add_comment(
+            &context(),
+            &first,
+            "Ada Lovelace",
+            "AL",
+            "First slide, new comment.",
+            "2026-09-02T10:00:00.000",
+            0,
+            0,
+        )
+        .unwrap();
+
+    let saved = session.save().unwrap();
+    let back = DeckSession::open(&saved, 32).unwrap();
+    let comments = back.snapshot().unwrap();
+    assert_eq!(
+        comments.comments.len(),
+        2,
+        "both slides keep their own comment"
+    );
+    let texts: Vec<&str> = comments
+        .comments
+        .iter()
+        .map(|comment| comment.text.as_str())
+        .collect();
+    assert!(
+        texts.contains(&"Needs a source."),
+        "slide 2's comment was lost: {texts:?}"
+    );
+    assert!(texts.contains(&"First slide, new comment."));
+    assert_relationships_resolve(&parts(&saved));
+}

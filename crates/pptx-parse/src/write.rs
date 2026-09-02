@@ -9,7 +9,7 @@ use ooxml_drawingml::{
 };
 
 use crate::PptxError;
-use crate::comments::{CommentFlavor, CommentsWrite, authors_xml, comments_xml};
+use crate::comments::{CommentFlavor, CommentSlide, CommentsWrite, authors_xml, comments_xml};
 use crate::drawing::parse_run_properties;
 use crate::model::{Bullet, PptxPackage, RunProperties, SlideReference};
 use crate::xml::{ParseBudget, ParseLimits, XmlElement, XmlNode, parse_xml, serialize_xml};
@@ -179,7 +179,8 @@ pub fn write_pptx_with_edits(
     let mut next_relationship = next_relationship_number(package);
     let mut structural = false;
     let mut final_order: Vec<FinalSlide<'_>> = Vec::new();
-    for slide in &deck.slides {
+    let mut minted_by_slide: HashMap<usize, usize> = HashMap::new();
+    for (slide_index, slide) in deck.slides.iter().enumerate() {
         match slide {
             SlideWrite::Keep { part_path } | SlideWrite::Patch { part_path, .. } => {
                 let reference = package
@@ -242,6 +243,7 @@ pub fn write_pptx_with_edits(
                     relationship_id,
                     slide_id,
                 });
+                minted_by_slide.insert(slide_index, minted.len() - 1);
                 final_order.push(FinalSlide::Added(minted.len() - 1));
             }
         }
@@ -287,6 +289,10 @@ pub fn write_pptx_with_edits(
         patch_comment_parts(
             package,
             comments,
+            &MintedSlides {
+                slides: &minted,
+                by_slide_index: &minted_by_slide,
+            },
             &mut replacements,
             &mut new_parts,
             &mut removed_paths,
@@ -523,28 +529,72 @@ const PACKAGE_RELATIONSHIPS_NS: &str =
 /// Writes the deck's comment parts and their OPC bookkeeping. Parts belonging
 /// to the flavour the deck is not using are dropped, so a package never ends up
 /// carrying both systems.
+/// The slides this write minted, addressed by their position in the deck's
+/// slide list rather than by a part path they do not have yet.
+struct MintedSlides<'a> {
+    slides: &'a [MintedSlide],
+    by_slide_index: &'a HashMap<usize, usize>,
+}
+
+impl MintedSlides<'_> {
+    fn get(&self, slide_index: usize) -> Option<&MintedSlide> {
+        self.by_slide_index
+            .get(&slide_index)
+            .and_then(|at| self.slides.get(*at))
+    }
+}
+
 fn patch_comment_parts(
     package: &PptxPackage,
     write: &CommentsWrite,
+    minted: &MintedSlides<'_>,
     replacements: &mut HashMap<String, Vec<u8>>,
     new_parts: &mut Vec<(String, Vec<u8>)>,
     removed_paths: &mut HashSet<String>,
     budget: &mut ParseBudget<'_>,
 ) -> Result<(), PptxError> {
+    // Every comment part the deck already spells out, so a slide minting its
+    // first one never lands on a name another slide owns. `commentN.xml` is a
+    // convention, not a rule: the relationship is what binds part to slide.
+    let mut taken: HashSet<String> = package
+        .parts
+        .iter()
+        .map(|part| part.path.clone())
+        .chain(
+            package
+                .relationships
+                .values()
+                .flatten()
+                .filter(|relationship| relationship.is_type(write.comments_relationship_type()))
+                .filter_map(|relationship| relationship.resolved_target.clone()),
+        )
+        .collect();
+
     let mut sink = PartSink {
         package,
         replacements,
         new_parts,
     };
-    for (slide_part_path, comments) in &write.per_slide {
-        let reference = package
-            .presentation
-            .slides
-            .iter()
-            .find(|reference| &reference.part_path == slide_part_path)
-            .ok_or_else(|| write_error(slide_part_path, "not a slide of this deck"))?;
-        let relationships_path = slide_relationships_path(slide_part_path);
-        let existing = existing_comment_part(package, slide_part_path, write);
+    for (slide, comments) in &write.per_slide {
+        let (slide_part_path, slide_id) = match slide {
+            CommentSlide::Existing(part_path) => {
+                let reference = package
+                    .presentation
+                    .slides
+                    .iter()
+                    .find(|reference| &reference.part_path == part_path)
+                    .ok_or_else(|| write_error(part_path, "not a slide of this deck"))?;
+                (part_path.clone(), reference.id)
+            }
+            CommentSlide::Added(index) => {
+                let Some(slide) = minted.get(*index) else {
+                    continue;
+                };
+                (slide.part_path.clone(), slide.slide_id)
+            }
+        };
+        let relationships_path = slide_relationships_path(&slide_part_path);
+        let existing = existing_comment_part(package, &slide_part_path, write);
 
         if comments.is_empty() {
             if let Some(part_path) = existing {
@@ -563,16 +613,16 @@ fn patch_comment_parts(
 
         let part_path = match existing {
             Some(part_path) => part_path,
-            None => write.comments_part_path(slide_number(slide_part_path)),
+            None => mint_comment_part_path(write, &slide_part_path, &mut taken),
         };
         removed_paths.remove(&part_path);
-        sink.store(&part_path, comments_xml(write, comments, reference.id));
+        sink.store(&part_path, comments_xml(write, comments, slide_id));
         set_content_type_override(&mut sink, &part_path, write.comments_content_type(), budget)?;
         set_relationship(
             &mut sink,
             &relationships_path,
             write.comments_relationship_type(),
-            &relative_target(slide_part_path, &part_path),
+            &relative_target(&slide_part_path, &part_path),
             budget,
         )?;
     }
@@ -608,6 +658,24 @@ fn patch_comment_parts(
     }
 
     drop_other_flavor(package, write, &mut sink, removed_paths, budget)
+}
+
+/// Prefers the slide's own number so conventional decks keep conventional
+/// names, then counts up past anything already spoken for.
+fn mint_comment_part_path(
+    write: &CommentsWrite,
+    slide_part_path: &str,
+    taken: &mut HashSet<String>,
+) -> String {
+    let preferred = slide_number(slide_part_path);
+    let mut number = preferred;
+    loop {
+        let candidate = write.comments_part_path(number);
+        if taken.insert(candidate.clone()) {
+            return candidate;
+        }
+        number += 1;
+    }
 }
 
 /// Removes whatever the deck holds for the flavour it is not being written in.
