@@ -1,6 +1,6 @@
 use std::collections::BTreeMap;
 
-use ooxml_drawingml::{ColorValue, ShapeFill, ShapeOutline, Theme};
+use ooxml_drawingml::{ColorValue, ShapeFill, ShapeOutline, ShapeStyle, Theme, ThemeFormatScheme};
 use serde::{Deserialize, Serialize};
 
 use crate::relationships::Relationship;
@@ -155,6 +155,9 @@ pub struct SlideMaster {
 pub struct ThemePart {
     pub part_path: String,
     pub theme: Theme,
+    /// Absent from packages serialized before `a:fmtScheme` was parsed.
+    #[serde(default, skip_serializing_if = "ThemeFormatScheme::is_empty")]
+    pub format_scheme: ThemeFormatScheme,
 }
 
 /// A chart part resolved against one referenced presentation theme.
@@ -247,6 +250,9 @@ pub struct Shape {
     pub adjust_values: BTreeMap<String, f64>,
     pub fill: Option<ShapeFill>,
     pub outline: Option<ShapeOutline>,
+    /// `p:style`: the theme formatting used where `spPr` sets nothing.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub style: Option<ShapeStyle>,
     pub text: Option<TextBody>,
 }
 
@@ -274,6 +280,8 @@ pub struct Picture {
     pub adjust_values: BTreeMap<String, f64>,
     pub fill: Option<ShapeFill>,
     pub outline: Option<ShapeOutline>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub style: Option<ShapeStyle>,
 }
 
 fn rect_geometry() -> String {

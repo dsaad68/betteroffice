@@ -6,6 +6,7 @@ use pptx_edit::{DeckSession, DeckSnapshot, EditCtx, EditError, TextStyle};
 use yrs::updates::decoder::Decode;
 use yrs::{Any, Doc, Map, MapRef, Out, ReadTxn, StateVector, Transact, Update};
 
+const V2_STYLE_UPDATE: &[u8] = include_bytes!("fixtures/deck-schema-v2.update.bin");
 const V1_UPDATE: &[u8] = include_bytes!("fixtures/deck-schema-v1.update.bin");
 const V2_SOURCE: &[u8] = include_bytes!("fixtures/deck-schema-v2-connectors.pptx");
 const V2_UPDATE: &[u8] = include_bytes!("fixtures/deck-schema-v2-connectors.update.bin");
@@ -17,9 +18,77 @@ const NUMBERED_FIXTURE: &[u8] =
 const V3_CONNECTORS_UPDATE: &[u8] = include_bytes!("fixtures/deck-schema-v3-connectors.update.bin");
 const V3_NUMBERED_UPDATE: &[u8] =
     include_bytes!("fixtures/deck-schema-v3-slide-number-fields.update.bin");
+const V3_UPDATE: &[u8] = include_bytes!("fixtures/deck-schema-v3-connectors.update.bin");
 const META: &str = "pptx:meta";
 const SHAPE_ID: &str = "shape:4242:0";
 const STORY_ID: &str = "story:shape:4242:0:0";
+
+#[test]
+fn released_v2_snapshot_migrates_without_changing_content_or_default_serialization() {
+    assert_eq!(stamped_version(V2_STYLE_UPDATE), Some(2.0));
+    let legacy_json = package_json(V2_STYLE_UPDATE);
+    assert!(!legacy_json.contains("formatScheme"));
+    let session = DeckSession::open_from_update(V2_STYLE_UPDATE, 909).unwrap();
+    let snapshot = session.snapshot().unwrap();
+    let story = snapshot.slides[0]
+        .shapes
+        .iter()
+        .find_map(|s| s.text_stories.first())
+        .unwrap();
+    assert_eq!(
+        session.story(&story.id).unwrap().plain_text(),
+        "persisted-v2 Styled"
+    );
+    let migrated = session.encode_state_as_update_v1();
+    assert_eq!(stamped_version(&migrated), Some(4.0));
+    assert_eq!(package_json(&migrated), legacy_json);
+    let reopened = DeckSession::open_from_update(&migrated, 910).unwrap();
+    assert_eq!(reopened.snapshot().unwrap(), snapshot);
+    assert_eq!(reopened.encode_state_as_update_v1().len(), migrated.len());
+
+    let styled = DeckSession::open(
+        include_bytes!("../../pptx-parse/tests/fixtures/style-matrix-deck.pptx"),
+        911,
+    )
+    .unwrap();
+    let update = styled.encode_state_as_update_v1();
+    let restored = DeckSession::open_from_update(&update, 912).unwrap();
+    assert_eq!(
+        restored.package().themes[0].format_scheme,
+        styled.package().themes[0].format_scheme
+    );
+    assert_eq!(
+        restored.package().slides[0].shapes,
+        styled.package().slides[0].shapes
+    );
+    assert_eq!(
+        package_json(&restored.encode_state_as_update_v1()),
+        package_json(&update)
+    );
+}
+
+#[test]
+fn released_v3_snapshot_migrates_without_changing_connector_ordinals() {
+    assert_eq!(stamped_version(V3_UPDATE), Some(3.0));
+    let session = DeckSession::open_from_update_with_source(V3_UPDATE, V2_SOURCE, 917).unwrap();
+    assert!(session.package().models_connectors());
+    let snapshot = session.snapshot().unwrap();
+    assert_eq!(
+        snapshot.slides[0]
+            .shapes
+            .iter()
+            .map(|shape| shape.source_id)
+            .collect::<Vec<_>>(),
+        [2, 3, 4]
+    );
+    let migrated = session.encode_state_as_update_v1();
+    assert_eq!(stamped_version(&migrated), Some(4.0));
+    assert_eq!(package_json(&migrated), package_json(V3_UPDATE));
+    let reopened = DeckSession::open_from_update_with_source(&migrated, V2_SOURCE, 918).unwrap();
+    assert_eq!(reopened.snapshot().unwrap(), snapshot);
+    assert_eq!(reopened.encode_state_as_update_v1(), migrated);
+    assert_eq!(reopened.save().unwrap(), session.save().unwrap());
+}
 
 #[test]
 fn released_v1_snapshot_migrates_and_round_trips_as_v4() {
