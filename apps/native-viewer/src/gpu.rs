@@ -146,7 +146,7 @@ pub fn render_comparison(
             #[cfg(feature = "xlsx")]
             ReferenceDocument::Xlsx(_) => "commands",
             #[cfg(feature = "pptx")]
-            ReferenceDocument::Pptx(_) => unreachable!(),
+            ReferenceDocument::Pptx(_) => "primitives",
         };
         println!(
             "skipped Vello {skipped_label}: {} {:?}",
@@ -171,8 +171,8 @@ pub fn render_comparison(
         Ok(())
     }
 
-    #[cfg(not(any(feature = "docx", feature = "xlsx")))]
-    unreachable!("PPTX export returned before raster comparison")
+    #[cfg(not(any(feature = "docx", feature = "xlsx", feature = "pptx")))]
+    unreachable!("no format feature builds a reference document")
 }
 
 struct GpuImage {

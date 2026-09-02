@@ -1399,11 +1399,17 @@ function PptxEditorContent({
   // with, so the png matches what is on screen.
   const exportPng = () => {
     const frame = model?.frame;
-    if (!frame) return;
+    const handle = handleRef.current;
+    if (!frame || !handle) return;
+    // Painting is async, so the deck can be replaced or disposed mid-export.
+    // Pin the handle the frame came from, behind its own decode cache, rather
+    // than reading whichever deck `handleRef` holds by the time an asset
+    // resolves.
+    const pinned = { current: handle };
+    const cache = { current: new Map<string, Promise<CanvasImageSource | null>>() };
     void slideToPng(frame, {
       scale: window.devicePixelRatio || 1,
-      resolveImage: (assetId) =>
-        resolveImage(assetId, handleRef, imageCacheRef, decodeImageError),
+      resolveImage: (assetId) => resolveImage(assetId, pinned, cache, decodeImageError),
     })
       .then(async (blob) => {
         const bytes = new Uint8Array(await blob.arrayBuffer());
