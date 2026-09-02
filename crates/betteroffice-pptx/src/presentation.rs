@@ -19,6 +19,8 @@ const STANDALONE_CLIENT_ID: u64 = 1;
 pub struct Presentation {
     session: DeckSession,
     renderer: SlideRenderer,
+    #[cfg(feature = "raster")]
+    glyphs: crate::render::GlyphRegistry,
 }
 
 impl Presentation {
@@ -52,6 +54,8 @@ impl Presentation {
         Ok(Self {
             session,
             renderer: SlideRenderer::new(),
+            #[cfg(feature = "raster")]
+            glyphs: crate::render::GlyphRegistry::default(),
         })
     }
 
@@ -293,6 +297,16 @@ impl Presentation {
         bytes: &[u8],
     ) -> Result<u32> {
         Ok(self.renderer.register_font(family, bold, italic, bytes)?)
+    }
+
+    #[cfg(feature = "raster")]
+    pub(crate) fn renderer(&self) -> &SlideRenderer {
+        &self.renderer
+    }
+
+    #[cfg(feature = "raster")]
+    pub(crate) fn glyphs(&self) -> &crate::render::GlyphRegistry {
+        &self.glyphs
     }
 
     pub fn render_slide(&self, slide_index: usize) -> Result<RenderedSlide> {

@@ -4,6 +4,7 @@ import {
   paintSlide,
   PRESENCE_LABEL_DURATION_MS,
   sizeCanvasForSlide,
+  slideToPng,
 } from '@betteroffice/pptx';
 import type {
   CanvasImageResolver,
@@ -197,6 +198,12 @@ interface RecentCanvasClick {
 
 const PPTX_MIME =
   'application/vnd.openxmlformats-officedocument.presentationml.presentation';
+
+// the png download name derived from the deck name: swap .pptx for the slide.
+function pngName(fileName: string | undefined, slideIndex: number): string {
+  const stem = (fileName ?? 'presentation.pptx').replace(/\.pptx$/i, '');
+  return `${stem}-slide-${slideIndex + 1}.png`;
+}
 
 // trigger a browser download of a byte blob under the given name and mime type.
 function downloadBytes(bytes: Uint8Array, name: string, mime: string): void {
@@ -1387,6 +1394,23 @@ function PptxEditorContent({
 
   const slideCount = model?.snapshot.slides.length ?? 0;
   const currentSlide = model?.slideIndex ?? 0;
+
+  // Export the current slide through the same canvas painter the editor draws
+  // with, so the png matches what is on screen.
+  const exportPng = () => {
+    const frame = model?.frame;
+    if (!frame) return;
+    void slideToPng(frame, {
+      scale: window.devicePixelRatio || 1,
+      resolveImage: (assetId) =>
+        resolveImage(assetId, handleRef, imageCacheRef, decodeImageError),
+    })
+      .then(async (blob) => {
+        const bytes = new Uint8Array(await blob.arrayBuffer());
+        downloadBytes(bytes, pngName(fileName, currentSlide), 'image/png');
+      })
+      .catch(reportError);
+  };
   const shapeDragDelta =
     dragPreview && dragPreview.shapeId === shapeSelection?.shapeId ? dragPreview.delta : null;
 
@@ -1404,6 +1428,7 @@ function PptxEditorContent({
           slideLayouts={slideLayouts}
           currentLayoutPartPath={model?.snapshot.slides[currentSlide]?.layoutPartPath}
           onSave={save}
+          onExportPng={exportPng}
           onUndo={() => history('undo')}
           onRedo={() => history('redo')}
           canUndo={historyState.canUndo}
