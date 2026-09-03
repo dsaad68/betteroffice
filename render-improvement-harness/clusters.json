@@ -153,6 +153,11 @@
         "cisco-cloud-security/17",
         "cisco-cloud-security/18",
         "project20/09"
+      ],
+      "files": [
+        "crates/pptx-parse/src/drawing.rs",
+        "crates/pptx-render/src/layout.rs",
+        "crates/pptx-parse/src/write.rs"
       ]
     },
     {
