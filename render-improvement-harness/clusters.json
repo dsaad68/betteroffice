@@ -816,9 +816,10 @@
       "impact": "medium",
       "effort": "medium",
       "confidence": "high",
-      "occurrences": 6,
+      "occurrences": 7,
       "decks": [
-        "cisco-cloud-security"
+        "cisco-cloud-security",
+        "project17"
       ],
       "findings": [
         "cisco-cloud-security/07/4",
@@ -826,14 +827,15 @@
         "cisco-cloud-security/09/2",
         "cisco-cloud-security/10/1",
         "cisco-cloud-security/21/1",
-        "cisco-cloud-security/23/1"
+        "cisco-cloud-security/23/1",
+        "project17/05/5"
       ],
       "symptom": "Text inside a shape rotated 180° with flipV=\"1\" (or 90° with flipH) renders mirrored/reversed instead of staying upright; separately, text in a shape rotated via bodyPr vert=\"vert\"/\"vert270\" renders sideways following the shape's raw rotation instead of the compensated vertical reading direction.",
       "evidence": [
-        "cisco-cloud-security/08",
-        "cisco-cloud-security/09",
-        "cisco-cloud-security/10",
-        "cisco-cloud-security/21"
+        "cisco-cloud-security/23",
+        "cisco-cloud-security/21",
+        "cisco-cloud-security/07",
+        "project17/05"
       ],
       "files": [
         "crates/pptx-render/src/layout.rs",
@@ -1249,10 +1251,6 @@
     {
       "finding": "project17/03/2",
       "reason": "category lo-suspect: neither renderer has the specified font; BetterOffice's substitute is judged closer to the source design than LO's."
-    },
-    {
-      "finding": "project17/05/5",
-      "reason": "category lo-suspect per comparator, but the symptom (text mirrored under xfrm flipH) matches the transform-text-orientation-wrong-under-rotation cluster (rot=180/flipV cases) — worth the investigator double-checking this deck too instead of writing it off."
     },
     {
       "finding": "project17/09/3",

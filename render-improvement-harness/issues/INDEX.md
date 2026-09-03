@@ -22,7 +22,7 @@ Generated from `clusters.json` (2026-09-03). Ordered by impact, then effort.
 | 16 | [text-run-props-solidfill-scope-bug](text-run-props-solidfill-scope-bug/report.md) | text-run-props | medium | easy | 6 | 2 | open |
 | 17 | [chart-dlbls-shown-when-disabled](chart-dlbls-shown-when-disabled/report.md) | chart | medium | easy | 4 | 1 | open |
 | 18 | [text-layout-master-lnspc-ignored](text-layout-master-lnspc-ignored/report.md) | text-layout | medium | medium | 7 | 1 | open |
-| 19 | [transform-text-orientation-wrong-under-rotation](transform-text-orientation-wrong-under-rotation/report.md) | transform | medium | medium | 6 | 1 | open |
+| 19 | [transform-text-orientation-wrong-under-rotation](transform-text-orientation-wrong-under-rotation/report.md) | transform | medium | medium | 7 | 2 | open |
 | 20 | [fill-nonsolid-fill-types-not-resolved](fill-nonsolid-fill-types-not-resolved/report.md) | fill | medium | medium | 6 | 3 | open |
 | 21 | [text-run-props-spc-ignored](text-run-props-spc-ignored/report.md) | text-run-props | medium | medium | 5 | 4 | open |
 | 22 | [text-bullets-autonum-not-drawn](text-bullets-autonum-not-drawn/report.md) | text-bullets | medium | medium | 5 | 1 | open |
@@ -54,7 +54,6 @@ Generated from `clusters.json` (2026-09-03). Ordered by impact, then effort.
 - `ocp-psp-plan/01/4`: confidence low: wrap-count difference consistent with a different (but plausible) fallback substitute for the unavailable 'Segoe UI Semilight' face; not clearly a BetterOffice defect.
 - `ocp-psp-plan/03/4`: category lo-suspect: LO mid-word-wraps a wrap='none' label; BetterOffice's unwrapped single line matches the XML.
 - `project17/03/2`: category lo-suspect: neither renderer has the specified font; BetterOffice's substitute is judged closer to the source design than LO's.
-- `project17/05/5`: category lo-suspect per comparator, but the symptom (text mirrored under xfrm flipH) matches the transform-text-orientation-wrong-under-rotation cluster (rot=180/flipV cases) — worth the investigator double-checking this deck too instead of writing it off.
 - `project17/09/3`: corrupted/unusual field XML (fld type='datetime' containing a scrambled, repeated string) drives a dropped second line and a tofu glyph; looks like a source-document oddity rather than a generalizable BetterOffice defect.
 - `project17/11/6`: ambiguous: wrap='none' labels wrap anyway, but several sibling lo-suspect findings in other decks show LO itself violating wrap='none' — unclear which renderer is at fault here without visual inspection.
 - `project20/05/5`: category lo-suspect: LO appears to have wrapped/clipped a noAutofit single-line footer run; BetterOffice's unwrapped render matches the XML.
