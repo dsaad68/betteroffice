@@ -863,6 +863,16 @@
         "typography-trick/02",
         "typography-trick/03",
         "minimal-chart/01"
+      ],
+      "files": [
+        "crates/pptx-render/src/layout.rs",
+        "crates/pptx-parse/src/drawing.rs",
+        "crates/pptx-render/src/display_list.rs",
+        "crates/pptx-raster/src/lib.rs",
+        "crates/ooxml-drawingml/src/chart/parse.rs",
+        "crates/ooxml-drawingml/src/chart/model.rs",
+        "crates/pptx-render/src/chart.rs",
+        "packages/pptx/src/render/canvas.ts"
       ]
     },
     {

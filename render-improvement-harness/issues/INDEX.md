@@ -22,7 +22,7 @@ Generated from `clusters.json` (2026-09-03). Ordered by impact, then effort.
 | 16 | [text-run-props-solidfill-scope-bug](text-run-props-solidfill-scope-bug/report.md) | text-run-props | medium | easy | 6 | 2 | open |
 | 17 | [chart-dlbls-shown-when-disabled](chart-dlbls-shown-when-disabled/report.md) | chart | medium | easy | 4 | 1 | open |
 | 18 | [text-layout-master-lnspc-ignored](text-layout-master-lnspc-ignored/report.md) | text-layout | medium | medium | 7 | 1 | open |
-| 19 | `transform-text-orientation-wrong-under-rotation` | transform | medium | medium | 6 | 1 | triaged |
+| 19 | [transform-text-orientation-wrong-under-rotation](transform-text-orientation-wrong-under-rotation/report.md) | transform | medium | medium | 6 | 1 | open |
 | 20 | [fill-nonsolid-fill-types-not-resolved](fill-nonsolid-fill-types-not-resolved/report.md) | fill | medium | medium | 6 | 3 | open |
 | 21 | [text-run-props-spc-ignored](text-run-props-spc-ignored/report.md) | text-run-props | medium | medium | 5 | 4 | open |
 | 22 | [text-bullets-autonum-not-drawn](text-bullets-autonum-not-drawn/report.md) | text-bullets | medium | medium | 5 | 1 | open |
