@@ -928,6 +928,12 @@
         "stacked-bar/02",
         "stacked-bar/03",
         "stacked-bar/04"
+      ],
+      "files": [
+        "crates/ooxml-drawingml/src/chart/geometry.rs",
+        "crates/pptx-render/src/chart.rs",
+        "crates/xlsx-render/src/chart.rs",
+        "crates/docx-layout/src/display_list.rs"
       ]
     },
     {
