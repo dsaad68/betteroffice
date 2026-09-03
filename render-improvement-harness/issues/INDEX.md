@@ -17,7 +17,7 @@ Generated from `clusters.json` (2026-09-03). Ordered by impact, then effort.
 | 11 | [unsupported-table-not-rendered](unsupported-table-not-rendered/report.md) | table | high | hard | 19 | 3 | open |
 | 12 | [picture-fill-fails-to-render](picture-fill-fails-to-render/report.md) | picture | high | hard | 10 | 4 | open |
 | 13 | [text-slidenum-field-not-evaluated](text-slidenum-field-not-evaluated/report.md) | field-eval | medium | easy | 13 | 1 | open |
-| 14 | `line-zero-extent-skipped` | line | medium | easy | 9 | 3 | triaged |
+| 14 | [line-zero-extent-skipped](line-zero-extent-skipped/report.md) | unsupported-element | medium | easy | 9 | 3 | open |
 | 15 | `fill-alpha-modifier-ignored` | fill | medium | easy | 5 | 2 | triaged |
 | 16 | `chart-dlbls-shown-when-disabled` | chart | medium | easy | 4 | 1 | triaged |
 | 17 | [text-layout-master-lnspc-ignored](text-layout-master-lnspc-ignored/report.md) | text-layout | medium | medium | 7 | 1 | open |

@@ -449,7 +449,7 @@
       "title": "custGeom shapes render as their bounding-box rectangle",
       "category": "geometry-custom",
       "impact": "high",
-      "effort": "hard",
+      "effort": "medium",
       "confidence": "high",
       "occurrences": 17,
       "decks": [
@@ -483,6 +483,15 @@
         "cisco-cloud-security/19",
         "project17/04",
         "ocp-psp-plan/01"
+      ],
+      "files": [
+        "crates/pptx-parse/src/drawing.rs",
+        "crates/pptx-parse/src/model.rs",
+        "crates/pptx-render/src/layout.rs",
+        "crates/pptx-render/src/lib.rs",
+        "crates/pptx-edit/src/deck.rs",
+        "crates/pptx-edit/src/model.rs",
+        "crates/docx-parse/src/drawingml.rs"
       ]
     },
     {
@@ -670,8 +679,8 @@
     },
     {
       "id": "line-zero-extent-skipped",
-      "title": "Zero-extent straight lines and connectors skipped entirely",
-      "category": "line",
+      "title": "Connector shapes (p:cxnSp) never parsed, so no connector is ever drawn",
+      "category": "unsupported-element",
       "impact": "medium",
       "effort": "easy",
       "confidence": "high",
@@ -692,12 +701,16 @@
         "project20/12/3",
         "project20/13/3"
       ],
-      "symptom": "A p:cxnSp connector or p:sp using prstGeom \"line\" with a degenerate (zero-width or zero-height) bounding box is culled entirely, dropping decorative rules, dividers, and leader lines that PowerPoint/LibreOffice still draw as a hairline.",
+      "symptom": "Every p:cxnSp is dropped by the shape-tree parser, so decorative rules, dividers, leader lines and arrow connectors never reach the renderer. A degenerate bounding box is not the trigger: non-degenerate diagonal connectors are dropped identically, and renaming p:cxnSp to p:sp makes them render correctly.",
       "evidence": [
         "project20/07",
         "project20/09",
         "project17/04",
         "green-solutions/01"
+      ],
+      "files": [
+        "crates/pptx-parse/src/drawing.rs",
+        "crates/pptx-parse/src/write.rs"
       ]
     },
     {
