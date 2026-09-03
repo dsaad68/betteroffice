@@ -30,6 +30,13 @@
         "project20/05",
         "project20/07",
         "rollout-plan/08"
+      ],
+      "files": [
+        "crates/pptx-parse/src/drawing.rs",
+        "crates/pptx-parse/src/model.rs",
+        "crates/pptx-parse/src/write.rs",
+        "crates/pptx-edit/src/story.rs",
+        "crates/pptx-render/src/layout.rs"
       ]
     },
     {

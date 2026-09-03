@@ -8,7 +8,7 @@ Generated from `clusters.json` (2026-09-03). Ordered by impact, then effort.
 | 2 | `text-run-props-bold-ignored` | text-run-props | high | easy | 15 | 4 | triaged |
 | 3 | `picture-srcrect-crop-ignored` | picture | high | easy | 14 | 2 | triaged |
 | 4 | `hidden-shape-drawn-anyway` | hidden | high | easy | 11 | 2 | triaged |
-| 5 | `text-run-props-gradfill-not-resolved` | text-run-props | high | easy | 9 | 2 | triaged |
+| 5 | [text-run-props-gradfill-not-resolved](text-run-props-gradfill-not-resolved/report.md) | text-run-props | high | easy | 9 | 2 | open |
 | 6 | `theme-color-scheme-color-resolution-broken` | theme-color | high | medium | 20 | 4 | triaged |
 | 7 | `text-inheritance-layout-lststyle-ignored` | text-inheritance | high | medium | 14 | 4 | triaged |
 | 8 | `text-bullets-char-indent-dropped` | text-bullets | high | medium | 9 | 4 | triaged |
