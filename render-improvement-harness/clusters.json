@@ -76,6 +76,10 @@
         "project20/09",
         "ocp-psp-plan/02",
         "rollout-plan/03"
+      ],
+      "files": [
+        "crates/pptx-render/src/layout.rs",
+        "crates/ooxml-drawingml/src/theme.rs"
       ]
     },
     {
@@ -298,7 +302,7 @@
     },
     {
       "id": "text-bullets-char-indent-dropped",
-      "title": "Bullet glyph and hanging indent dropped for buChar paragraphs",
+      "title": "Draw buChar bullet glyphs and honour the paragraph hanging indent",
       "category": "text-bullets",
       "impact": "high",
       "effort": "medium",
@@ -321,12 +325,17 @@
         "rollout-plan/05/3",
         "rollout-plan/08/2"
       ],
-      "symptom": "Paragraphs with an explicit or lstStyle-inherited buChar/buFont bullet glyph and hanging indent (marL/indent) render with no bullet marker at all and flush-left text, losing the list structure.",
+      "symptom": "Paragraphs with an explicit or lstStyle-inherited buChar bullet render with no bullet marker at all, losing the list structure; marL is applied so the text columns are correct, but the indent attribute that positions the bullet is also dropped.",
       "evidence": [
         "project17/06",
         "project17/07",
         "rollout-plan/02",
         "rollout-plan/08"
+      ],
+      "files": [
+        "crates/pptx-render/src/layout.rs",
+        "crates/pptx-parse/src/model.rs",
+        "crates/pptx-parse/src/drawing.rs"
       ]
     },
     {
