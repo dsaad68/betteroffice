@@ -215,7 +215,7 @@
     },
     {
       "id": "theme-color-scheme-color-resolution-broken",
-      "title": "Theme scheme-color resolution ignores style fontRef and clrMapOvr",
+      "title": "Parse p:style/a:fontRef and the clrMap/clrMapOvr colour map",
       "category": "theme-color",
       "impact": "high",
       "effort": "medium",
@@ -255,6 +255,15 @@
         "cisco-cloud-security/16",
         "ocp-psp-plan/14",
         "rollout-plan/01"
+      ],
+      "files": [
+        "crates/pptx-parse/src/drawing.rs",
+        "crates/pptx-parse/src/model.rs",
+        "crates/pptx-parse/src/package.rs",
+        "crates/pptx-parse/src/write.rs",
+        "crates/pptx-render/src/layout.rs",
+        "crates/ooxml-drawingml/src/theme.rs",
+        "crates/ooxml-drawingml/src/color.rs"
       ]
     },
     {
