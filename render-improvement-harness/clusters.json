@@ -430,6 +430,18 @@
         "ocp-psp-plan/09",
         "rollout-plan/03",
         "rollout-plan/12"
+      ],
+      "files": [
+        "crates/pptx-parse/src/drawing.rs",
+        "crates/pptx-parse/src/model.rs",
+        "crates/pptx-parse/src/package.rs",
+        "crates/pptx-render/src/layout.rs",
+        "crates/pptx-render/src/display_list.rs",
+        "crates/pptx-render/src/lib.rs",
+        "crates/pptx-raster/src/lib.rs",
+        "crates/pptx-edit/src/deck.rs",
+        "packages/pptx/src/render/canvas.ts",
+        "packages/pptx/src/types.ts"
       ]
     },
     {
@@ -505,6 +517,18 @@
         "cisco-cloud-security/22",
         "rollout-plan/06",
         "rollout-plan/07"
+      ],
+      "files": [
+        "crates/pptx-raster/Cargo.toml",
+        "crates/pptx-raster/src/lib.rs",
+        "crates/pptx-raster/README.md",
+        "crates/pptx-parse/src/drawing.rs",
+        "crates/pptx-parse/src/model.rs",
+        "crates/pptx-render/src/layout.rs",
+        "crates/pptx-render/src/lib.rs",
+        "crates/pptx-render/src/display_list.rs",
+        "packages/pptx/src/types.ts",
+        "packages/pptx/src/render/canvas.ts"
       ]
     },
     {
@@ -616,7 +640,7 @@
       "title": "Master title style's reduced line spacing (lnSpc) not applied",
       "category": "text-layout",
       "impact": "medium",
-      "effort": "easy",
+      "effort": "medium",
       "confidence": "high",
       "occurrences": 7,
       "decks": [
@@ -637,6 +661,11 @@
         "cisco-cloud-security/08",
         "cisco-cloud-security/11",
         "cisco-cloud-security/18"
+      ],
+      "files": [
+        "crates/pptx-parse/src/model.rs",
+        "crates/pptx-parse/src/drawing.rs",
+        "crates/pptx-render/src/layout.rs"
       ]
     },
     {
