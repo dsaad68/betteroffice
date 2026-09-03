@@ -501,10 +501,9 @@
       "impact": "high",
       "effort": "hard",
       "confidence": "high",
-      "occurrences": 10,
+      "occurrences": 9,
       "decks": [
         "cisco-cloud-security",
-        "green-solutions",
         "project17",
         "rollout-plan"
       ],
@@ -512,7 +511,6 @@
         "cisco-cloud-security/01/2",
         "cisco-cloud-security/16/4",
         "cisco-cloud-security/22/1",
-        "green-solutions/01/1",
         "project17/09/1",
         "project17/11/4",
         "rollout-plan/01/3",
@@ -520,7 +518,7 @@
         "rollout-plan/07/2",
         "rollout-plan/08/3"
       ],
-      "symptom": "A p:pic (or an OLE object's mc:Fallback picture) whose blip resolves to an EMF or WMF image is skipped entirely \u2014 logged as a skipped image \u2014 leaving a blank area where a logo, chart fallback, or illustration should be. One full-bleed JPEG background also fails to draw, leaving a solid black slide.",
+      "symptom": "A p:pic (or an OLE object's mc:Fallback picture) whose blip resolves to an EMF or WMF image is skipped entirely \u2014 logged as a skipped image \u2014 leaving a blank area where a logo, chart fallback, or illustration should be.",
       "evidence": [
         "cisco-cloud-security/01",
         "cisco-cloud-security/22",
@@ -621,27 +619,37 @@
       "id": "fill-alpha-modifier-ignored",
       "title": "Alpha/opacity modifier on solid fills ignored",
       "category": "fill",
-      "impact": "medium",
+      "impact": "high",
       "effort": "easy",
       "confidence": "high",
-      "occurrences": 5,
+      "occurrences": 6,
       "decks": [
+        "green-solutions",
         "ocp-psp-plan",
         "project20"
       ],
       "findings": [
+        "green-solutions/01/1",
         "ocp-psp-plan/03/2",
         "project20/01/1",
         "project20/06/3",
         "project20/10/2",
         "project20/15/2"
       ],
-      "symptom": "The alpha child on a schemeClr or srgbClr solidFill is dropped; translucent overlays, shadow shapes, and layered backgrounds render fully opaque instead of blending with what is beneath them.",
+      "symptom": "The alpha child on a schemeClr or srgbClr solidFill is dropped; translucent overlays, shadow shapes and layered backgrounds render fully opaque instead of blending with what is beneath them. Full-slide scrims turn whole slides into flat colour, hiding the photograph behind them.",
       "evidence": [
+        "green-solutions/01",
         "project20/01",
         "project20/10",
-        "project20/15",
         "ocp-psp-plan/03"
+      ],
+      "files": [
+        "crates/pptx-render/src/layout.rs",
+        "crates/ooxml-drawingml/src/color.rs",
+        "crates/pptx-parse/src/drawing.rs",
+        "crates/pptx-raster/src/lib.rs",
+        "crates/pptx-render/src/display_list.rs",
+        "packages/pptx/src/render/canvas.ts"
       ]
     },
     {
@@ -730,12 +738,16 @@
         "stacked-bar/03/1",
         "stacked-bar/04/7"
       ],
-      "symptom": "A series' c:dLbls block has every show* flag (showVal, showCatName, etc.) set to 0, yet BetterOffice still draws a numeric label at the end of every bar.",
+      "symptom": "The plot group's c:dLbls block has every show* flag (showVal, showCatName, etc.) set to 0, yet BetterOffice still draws a numeric label at the end of every bar.",
       "evidence": [
         "stacked-bar/01",
         "stacked-bar/02",
         "stacked-bar/03",
         "stacked-bar/04"
+      ],
+      "files": [
+        "crates/pptx-render/src/chart.rs",
+        "crates/ooxml-drawingml/src/chart/parse.rs"
       ]
     },
     {
