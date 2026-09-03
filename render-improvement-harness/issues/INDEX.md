@@ -26,7 +26,7 @@ Generated from `clusters.json` (2026-09-03). Ordered by impact, then effort.
 | 20 | [fill-nonsolid-fill-types-not-resolved](fill-nonsolid-fill-types-not-resolved/report.md) | fill | medium | medium | 6 | 3 | open |
 | 21 | [text-run-props-spc-ignored](text-run-props-spc-ignored/report.md) | text-run-props | medium | medium | 5 | 4 | open |
 | 22 | [text-bullets-autonum-not-drawn](text-bullets-autonum-not-drawn/report.md) | text-bullets | medium | medium | 5 | 1 | open |
-| 23 | `line-stroke-color-resolution-broken` | connector | medium | medium | 4 | 1 | triaged |
+| 23 | [line-stroke-color-resolution-broken](line-stroke-color-resolution-broken/report.md) | connector | medium | medium | 4 | 1 | open |
 | 24 | [chart-axis-position-swapped](chart-axis-position-swapped/report.md) | chart | medium | medium | 4 | 1 | open |
 | 25 | `chart-category-order-reversed` | chart | medium | medium | 3 | 1 | triaged |
 | 26 | `text-font-substitution-issues` | text-font | medium | hard | 8 | 1 | triaged |
