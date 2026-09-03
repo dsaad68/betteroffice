@@ -151,7 +151,7 @@
         "project20/08/1",
         "project20/09/1"
       ],
-      "symptom": "A child shape (preset roundRect bar or custGeom icon) whose spPr defers its fill to a:grpFill, expecting the enclosing group's solidFill, instead renders with no fill at all \u2014 the shape becomes invisible, taking any overlaid white text or numbers with it.",
+      "symptom": "A child shape (preset roundRect bar or custGeom icon) whose spPr defers its fill to a:grpFill, expecting the enclosing group's solidFill, instead renders with no fill at all — the shape becomes invisible, taking any overlaid white text or numbers with it.",
       "evidence": [
         "cisco-cloud-security/12",
         "cisco-cloud-security/17",
@@ -424,7 +424,7 @@
         "rollout-plan/10/1",
         "rollout-plan/12/1"
       ],
-      "symptom": "Every p:graphicFrame containing an a:tbl renders only as an empty dashed placeholder box labeled \"Table\" \u2014 no grid, cell fills, borders, or text \u2014 regardless of table size or style. The single largest and most consistently high-severity cluster in the dataset.",
+      "symptom": "Every p:graphicFrame containing an a:tbl renders only as an empty dashed placeholder box labeled \"Table\" — no grid, cell fills, borders, or text — regardless of table size or style. The single largest and most consistently high-severity cluster in the dataset.",
       "evidence": [
         "ocp-psp-plan/04",
         "ocp-psp-plan/09",
@@ -477,7 +477,7 @@
         "project17/11/5",
         "project20/16/3"
       ],
-      "symptom": "Any custGeom shape \u2014 whether its path is built from literal moveTo/lnTo/cubicBezTo points, legacy T-guide formulas, or connsiteX/Y guides \u2014 is drawn as a plain filled or unfilled axis-aligned rectangle spanning its a:off/a:ext box, discarding the actual outline. Icons, silhouettes, donut wedges, hexagons, country shapes, and decorative rules all reduce to rectangles or squares.",
+      "symptom": "Any custGeom shape — whether its path is built from literal moveTo/lnTo/cubicBezTo points, legacy T-guide formulas, or connsiteX/Y guides — is drawn as a plain filled or unfilled axis-aligned rectangle spanning its a:off/a:ext box, discarding the actual outline. Icons, silhouettes, donut wedges, hexagons, country shapes, and decorative rules all reduce to rectangles or squares.",
       "evidence": [
         "cisco-cloud-security/04",
         "cisco-cloud-security/19",
@@ -518,7 +518,7 @@
         "rollout-plan/07/2",
         "rollout-plan/08/3"
       ],
-      "symptom": "A p:pic (or an OLE object's mc:Fallback picture) whose blip resolves to an EMF or WMF image is skipped entirely \u2014 logged as a skipped image \u2014 leaving a blank area where a logo, chart fallback, or illustration should be.",
+      "symptom": "A p:pic (or an OLE object's mc:Fallback picture) whose blip resolves to an EMF or WMF image is skipped entirely — logged as a skipped image — leaving a blank area where a logo, chart fallback, or illustration should be.",
       "evidence": [
         "cisco-cloud-security/01",
         "cisco-cloud-security/22",
@@ -564,7 +564,7 @@
         "cisco-cloud-security/20/4",
         "cisco-cloud-security/21/2"
       ],
-      "symptom": "The <a:fld type=\"slidenum\"> field on a plain (non-placeholder) master/layout shape is drawn using its cached fallback text (\u2039#\u203a) instead of being evaluated to the slide's number; all 23 slides of the deck show the identical literal. The cluster's \"dingbat-like font substitution\" sub-claim is not confirmed \u2014 slide 5 renders the same \u2039#\u203a at 6 pt.",
+      "symptom": "The <a:fld type=\"slidenum\"> field on a plain (non-placeholder) master/layout shape is drawn using its cached fallback text (‹#›) instead of being evaluated to the slide's number; all 23 slides of the deck show the identical literal. The cluster's \"dingbat-like font substitution\" sub-claim is not confirmed — slide 5 renders the same ‹#› at 6 pt.",
       "evidence": [
         "cisco-cloud-security/02",
         "cisco-cloud-security/11",
@@ -830,7 +830,7 @@
         "cisco-cloud-security/23/1",
         "project17/05/5"
       ],
-      "symptom": "Text inside a shape rotated 180\u00b0 with flipV=\"1\" (or 90\u00b0 with flipH) renders mirrored/reversed instead of staying upright; separately, text in a shape rotated via bodyPr vert=\"vert\"/\"vert270\" renders sideways following the shape's raw rotation instead of the compensated vertical reading direction.",
+      "symptom": "Text inside a shape rotated 180° with flipV=\"1\" (or 90° with flipH) renders mirrored/reversed instead of staying upright; separately, text in a shape rotated via bodyPr vert=\"vert\"/\"vert270\" renders sideways following the shape's raw rotation instead of the compensated vertical reading direction.",
       "evidence": [
         "cisco-cloud-security/23",
         "cisco-cloud-security/21",
@@ -864,7 +864,7 @@
         "typography-trick/02/2",
         "typography-trick/03/2"
       ],
-      "symptom": "A radial (circle-path) gradient background, or a pattern fill (pattFill, e.g. dot/grid patterns), renders as a single flat color \u2014 the outer gradient stop, or a plain fill in place of the pattern \u2014 instead of the actual gradient/pattern.",
+      "symptom": "A radial (circle-path) gradient background, or a pattern fill (pattFill, e.g. dot/grid patterns), renders as a single flat color — the outer gradient stop, or a plain fill in place of the pattern — instead of the actual gradient/pattern.",
       "evidence": [
         "typography-trick/01",
         "typography-trick/02",
@@ -899,7 +899,7 @@
         "cisco-cloud-security/16/6",
         "cisco-cloud-security/19/2"
       ],
-      "symptom": "A connector whose only stroke definition is the shape style's lnRef (no explicit a:ln), or whose explicit a:ln uses a gradFill instead of a solidFill, is drawn with no visible stroke at all \u2014 whole diagrams lose their connecting lines.",
+      "symptom": "A connector whose only stroke definition is the shape style's lnRef (no explicit a:ln), or whose explicit a:ln uses a gradFill instead of a solidFill, is drawn with no visible stroke at all — whole diagrams lose their connecting lines.",
       "evidence": [
         "cisco-cloud-security/04",
         "cisco-cloud-security/09",
@@ -921,7 +921,7 @@
     },
     {
       "id": "chart-axis-position-swapped",
-      "title": "Chart value axis c:axPos not honored \u2014 axes swapped",
+      "title": "Chart value axis c:axPos not honored — axes swapped",
       "category": "chart",
       "impact": "medium",
       "effort": "medium",
@@ -1183,7 +1183,7 @@
         "typography-trick/02/1",
         "typography-trick/03/1"
       ],
-      "symptom": "A freeform custGeom whose fill is a blipFill (a picture-filled wordmark/letterform outline) is not drawn at all, not even as a bounding-box fallback \u2014 the whole decorative element vanishes.",
+      "symptom": "A freeform custGeom whose fill is a blipFill (a picture-filled wordmark/letterform outline) is not drawn at all, not even as a bounding-box fallback — the whole decorative element vanishes.",
       "evidence": [
         "typography-trick/01",
         "typography-trick/02",
@@ -1242,7 +1242,7 @@
         "minimal-chart/01/2",
         "minimal-chart/01/4"
       ],
-      "symptom": "A single chart's data series (line stroke and markers) is not drawn at all, its category/value axis tick labels are missing, and its axis line \u2014 explicitly set to noFill \u2014 is drawn anyway as a broken, segmented vertical stroke.",
+      "symptom": "A single chart's data series (line stroke and markers) is not drawn at all, its category/value axis tick labels are missing, and its axis line — explicitly set to noFill — is drawn anyway as a broken, segmented vertical stroke.",
       "evidence": [
         "minimal-chart/01"
       ]
@@ -1252,8 +1252,8 @@
       "title": "Group child rotation + anisotropic scale computed wrong",
       "category": "transform",
       "impact": "low",
-      "effort": "hard",
-      "confidence": "medium",
+      "effort": "easy",
+      "confidence": "high",
       "occurrences": 1,
       "decks": [
         "swot-analysis"
@@ -1261,9 +1261,13 @@
       "findings": [
         "swot-analysis/01/1"
       ],
-      "symptom": "A custGeom shape inside a non-uniformly scaled, rotated group renders as an oversized diamond far larger than the circle it should shade, consistent with the child's own rotation and the group's chOff/chExt scale factors being combined incorrectly.",
+      "symptom": "Duplicate of geometry-custom-collapses-to-bbox. The custGeom shading crescent renders as an oversized diamond, but the diamond is the freeform's bounding rectangle correctly scaled by the group's anisotropic chOff/chExt and correctly rotated 315deg — the group child transform is right to within ~2px; only the path is missing.",
       "evidence": [
         "swot-analysis/01"
+      ],
+      "files": [
+        "crates/pptx-parse/src/drawing.rs",
+        "crates/pptx-render/src/layout.rs"
       ]
     }
   ],
@@ -1322,7 +1326,7 @@
     },
     {
       "finding": "project17/11/6",
-      "reason": "ambiguous: wrap='none' labels wrap anyway, but several sibling lo-suspect findings in other decks show LO itself violating wrap='none' \u2014 unclear which renderer is at fault here without visual inspection."
+      "reason": "ambiguous: wrap='none' labels wrap anyway, but several sibling lo-suspect findings in other decks show LO itself violating wrap='none' — unclear which renderer is at fault here without visual inspection."
     },
     {
       "finding": "project20/05/5",
@@ -1334,7 +1338,7 @@
     },
     {
       "finding": "project20/09/5",
-      "reason": "category lo-suspect: same hyperlink-color override behavior as project20/07/5 \u2014 BetterOffice matches the explicit direct formatting, LO substitutes its theme hlink color."
+      "reason": "category lo-suspect: same hyperlink-color override behavior as project20/07/5 — BetterOffice matches the explicit direct formatting, LO substitutes its theme hlink color."
     },
     {
       "finding": "project20/13/4",
