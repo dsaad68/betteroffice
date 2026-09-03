@@ -11,12 +11,12 @@ Generated from `clusters.json` (2026-09-03). Ordered by impact, then effort.
 | 5 | [text-run-props-gradfill-not-resolved](text-run-props-gradfill-not-resolved/report.md) | text-run-props | high | easy | 9 | 2 | open |
 | 6 | [theme-color-scheme-color-resolution-broken](theme-color-scheme-color-resolution-broken/report.md) | theme-color | high | medium | 20 | 4 | open |
 | 7 | [picture-srcrect-crop-ignored](picture-srcrect-crop-ignored/report.md) | picture | high | medium | 14 | 2 | open |
-| 8 | [text-bullets-char-indent-dropped](text-bullets-char-indent-dropped/report.md) | text-bullets | high | medium | 9 | 4 | open |
-| 9 | `unsupported-table-not-rendered` | table | high | hard | 19 | 3 | triaged |
-| 10 | `geometry-custom-collapses-to-bbox` | geometry-custom | high | hard | 17 | 4 | triaged |
-| 11 | `text-overflow-autofit-not-handled` | text-autofit | high | hard | 13 | 5 | triaged |
+| 8 | [text-overflow-autofit-not-handled](text-overflow-autofit-not-handled/report.md) | text-autofit | high | medium | 13 | 5 | open |
+| 9 | [text-bullets-char-indent-dropped](text-bullets-char-indent-dropped/report.md) | text-bullets | high | medium | 9 | 4 | open |
+| 10 | `unsupported-table-not-rendered` | table | high | hard | 19 | 3 | triaged |
+| 11 | `geometry-custom-collapses-to-bbox` | geometry-custom | high | hard | 17 | 4 | triaged |
 | 12 | `picture-fill-fails-to-render` | picture | high | hard | 10 | 4 | triaged |
-| 13 | `text-slidenum-field-not-evaluated` | field-eval | medium | easy | 13 | 1 | triaged |
+| 13 | [text-slidenum-field-not-evaluated](text-slidenum-field-not-evaluated/report.md) | field-eval | medium | easy | 13 | 1 | open |
 | 14 | `line-zero-extent-skipped` | line | medium | easy | 9 | 3 | triaged |
 | 15 | `text-layout-master-lnspc-ignored` | text-layout | medium | easy | 7 | 1 | triaged |
 | 16 | `text-run-props-spc-ignored` | text-run-props | medium | easy | 5 | 4 | triaged |

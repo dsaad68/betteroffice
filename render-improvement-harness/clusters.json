@@ -352,7 +352,7 @@
       "title": "Text overflow/autofit semantics not implemented",
       "category": "text-autofit",
       "impact": "high",
-      "effort": "hard",
+      "effort": "medium",
       "confidence": "high",
       "occurrences": 13,
       "decks": [
@@ -383,6 +383,11 @@
         "cisco-cloud-security/19",
         "project17/08",
         "project20/01"
+      ],
+      "files": [
+        "crates/pptx-raster/src/lib.rs",
+        "crates/pptx-render/src/layout.rs",
+        "packages/pptx/src/render/canvas.ts"
       ]
     },
     {
@@ -528,12 +533,17 @@
         "cisco-cloud-security/20/4",
         "cisco-cloud-security/21/2"
       ],
-      "symptom": "The <a:fld type=\"slidenum\"> field is drawn using its cached fallback text (\u2039#\u203a / \u00ab#\u00bb) instead of being evaluated to the slide's actual number. One instance also shows the same fallback text rendered through a dingbat-like font substitution.",
+      "symptom": "The <a:fld type=\"slidenum\"> field on a plain (non-placeholder) master/layout shape is drawn using its cached fallback text (\u2039#\u203a) instead of being evaluated to the slide's number; all 23 slides of the deck show the identical literal. The cluster's \"dingbat-like font substitution\" sub-claim is not confirmed \u2014 slide 5 renders the same \u2039#\u203a at 6 pt.",
       "evidence": [
         "cisco-cloud-security/02",
         "cisco-cloud-security/11",
         "cisco-cloud-security/12",
         "cisco-cloud-security/15"
+      ],
+      "files": [
+        "crates/pptx-render/src/layout.rs",
+        "crates/pptx-parse/src/package.rs",
+        "crates/pptx-parse/src/model.rs"
       ]
     },
     {
