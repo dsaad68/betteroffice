@@ -160,7 +160,7 @@
       "title": "Picture srcRect crop (and ellipse crop mask) ignored",
       "category": "picture",
       "impact": "high",
-      "effort": "easy",
+      "effort": "medium",
       "confidence": "high",
       "occurrences": 14,
       "decks": [
@@ -189,6 +189,19 @@
         "cisco-cloud-security/17",
         "cisco-cloud-security/18",
         "project17/04"
+      ],
+      "files": [
+        "crates/pptx-parse/src/drawing.rs",
+        "crates/pptx-parse/src/model.rs",
+        "crates/pptx-edit/src/deck.rs",
+        "crates/pptx-edit/src/model.rs",
+        "crates/pptx-render/src/layout.rs",
+        "crates/pptx-render/src/lib.rs",
+        "crates/pptx-render/src/display_list.rs",
+        "crates/pptx-raster/src/lib.rs",
+        "crates/pptx-raster/README.md",
+        "packages/pptx/src/types.ts",
+        "packages/pptx/src/render/canvas.ts"
       ]
     },
     {
@@ -240,7 +253,7 @@
       "title": "Layout placeholder's own lstStyle/position override ignored",
       "category": "text-inheritance",
       "impact": "high",
-      "effort": "medium",
+      "effort": "easy",
       "confidence": "high",
       "occurrences": 14,
       "decks": [
@@ -271,6 +284,11 @@
         "project20/10",
         "project20/17",
         "rollout-plan/01"
+      ],
+      "files": [
+        "crates/pptx-parse/src/drawing.rs",
+        "crates/pptx-parse/src/model.rs",
+        "crates/pptx-render/src/layout.rs"
       ]
     },
     {
