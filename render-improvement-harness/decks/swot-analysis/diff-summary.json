@@ -1,0 +1,33 @@
+{
+  "01": {
+    "fine_pct": 8.86,
+    "coarse_pct": 1.35,
+    "verdict": "minor",
+    "hot_cells": [
+      {
+        "cell": "r1c1",
+        "pct": 19.0
+      },
+      {
+        "cell": "r2c4",
+        "pct": 16.4
+      },
+      {
+        "cell": "r2c1",
+        "pct": 16.0
+      },
+      {
+        "cell": "r3c1",
+        "pct": 11.0
+      }
+    ],
+    "lo_size": [
+      1280,
+      720
+    ],
+    "bo_size": [
+      1280,
+      720
+    ]
+  }
+}

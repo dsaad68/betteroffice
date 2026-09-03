@@ -1,0 +1,8 @@
+# Source decks and raw renders are derived or third-party; only reports, summaries and issue evidence are tracked.
+decks/*/source.pptx
+decks/*/lo-img/
+decks/*/bo-img/
+decks/*/diff-img/
+decks/*/xml/
+decks/*/lo-log.txt
+findings.jsonl
