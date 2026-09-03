@@ -7,7 +7,7 @@ Generated from `clusters.json` (2026-09-03). Ordered by impact, then effort.
 | 1 | `fill-grpfill-not-resolved` | fill | high | easy | 16 | 2 | triaged |
 | 2 | `text-run-props-bold-ignored` | text-run-props | high | easy | 15 | 4 | triaged |
 | 3 | `picture-srcrect-crop-ignored` | picture | high | easy | 14 | 2 | triaged |
-| 4 | `hidden-shape-drawn-anyway` | hidden | high | easy | 11 | 2 | triaged |
+| 4 | [hidden-shape-drawn-anyway](hidden-shape-drawn-anyway/report.md) | hidden | high | easy | 11 | 2 | open |
 | 5 | [text-run-props-gradfill-not-resolved](text-run-props-gradfill-not-resolved/report.md) | text-run-props | high | easy | 9 | 2 | open |
 | 6 | `theme-color-scheme-color-resolution-broken` | theme-color | high | medium | 20 | 4 | triaged |
 | 7 | `text-inheritance-layout-lststyle-ignored` | text-inheritance | high | medium | 14 | 4 | triaged |

@@ -109,6 +109,12 @@
         "project17/08",
         "project17/12",
         "cisco-cloud-security/07"
+      ],
+      "files": [
+        "crates/pptx-edit/src/model.rs",
+        "crates/pptx-edit/src/deck.rs",
+        "crates/pptx-render/src/layout.rs",
+        "packages/pptx/src/types.ts"
       ]
     },
     {
