@@ -4,8 +4,8 @@ Generated from `clusters.json` (2026-09-03). Ordered by impact, then effort.
 
 | # | issue | category | impact | effort | occurrences | decks | status |
 |---|---|---|---|---|---|---|---|
-| 1 | `fill-grpfill-not-resolved` | fill | high | easy | 16 | 2 | triaged |
-| 2 | `text-run-props-bold-ignored` | text-run-props | high | easy | 15 | 4 | triaged |
+| 1 | [fill-grpfill-not-resolved](fill-grpfill-not-resolved/report.md) | fill | high | easy | 16 | 2 | investigated |
+| 2 | [text-run-props-bold-ignored](text-run-props-bold-ignored/report.md) | text-run-props | high | easy | 15 | 4 | open |
 | 3 | [text-inheritance-layout-lststyle-ignored](text-inheritance-layout-lststyle-ignored/report.md) | text-inheritance | high | easy | 14 | 4 | open |
 | 4 | [hidden-shape-drawn-anyway](hidden-shape-drawn-anyway/report.md) | hidden | high | easy | 11 | 2 | open |
 | 5 | [text-run-props-gradfill-not-resolved](text-run-props-gradfill-not-resolved/report.md) | text-run-props | high | easy | 9 | 2 | open |
