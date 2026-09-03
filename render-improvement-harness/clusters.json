@@ -1099,7 +1099,7 @@
       "title": "Text warp (prstTxWarp) and outer shadow effects not applied",
       "category": "effects",
       "impact": "low",
-      "effort": "medium",
+      "effort": "hard",
       "confidence": "high",
       "occurrences": 3,
       "decks": [
@@ -1116,6 +1116,19 @@
         "ocp-psp-plan/01",
         "ocp-psp-plan/03",
         "project20/04"
+      ],
+      "files": [
+        "crates/pptx-parse/src/model.rs",
+        "crates/pptx-parse/src/drawing.rs",
+        "crates/pptx-render/src/display_list.rs",
+        "crates/pptx-render/src/layout.rs",
+        "crates/pptx-raster/src/lib.rs",
+        "crates/pptx-raster/src/font.rs",
+        "crates/pptx-edit/src/model.rs",
+        "crates/pptx-edit/src/deck.rs",
+        "crates/ooxml-drawingml/src/geometry.rs",
+        "packages/pptx/src/types.ts",
+        "packages/pptx/src/render/canvas.ts"
       ]
     },
     {
@@ -1159,7 +1172,7 @@
       "title": "custGeom shape with a picture fill not drawn at all",
       "category": "unsupported-element",
       "impact": "low",
-      "effort": "medium",
+      "effort": "hard",
       "confidence": "high",
       "occurrences": 3,
       "decks": [
@@ -1175,6 +1188,18 @@
         "typography-trick/01",
         "typography-trick/02",
         "typography-trick/03"
+      ],
+      "files": [
+        "crates/pptx-parse/src/drawing.rs",
+        "crates/pptx-parse/src/model.rs",
+        "crates/ooxml-drawingml/src/shape.rs",
+        "crates/pptx-edit/src/deck.rs",
+        "crates/pptx-render/src/display_list.rs",
+        "crates/pptx-render/src/layout.rs",
+        "crates/pptx-render/src/lib.rs",
+        "crates/pptx-raster/src/lib.rs",
+        "packages/pptx/src/types.ts",
+        "packages/pptx/src/render/canvas.ts"
       ]
     },
     {
