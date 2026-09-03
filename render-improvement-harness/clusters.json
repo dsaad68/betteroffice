@@ -551,7 +551,7 @@
       "title": "Run-level character spacing (spc) ignored",
       "category": "text-run-props",
       "impact": "medium",
-      "effort": "easy",
+      "effort": "medium",
       "confidence": "high",
       "occurrences": 5,
       "decks": [
@@ -573,6 +573,15 @@
         "flat-chart/02",
         "green-solutions/01",
         "stacked-bar/04"
+      ],
+      "files": [
+        "crates/pptx-parse/src/drawing.rs",
+        "crates/pptx-parse/src/model.rs",
+        "crates/pptx-parse/src/write.rs",
+        "crates/pptx-edit/src/model.rs",
+        "crates/pptx-edit/src/story.rs",
+        "crates/pptx-edit/src/save.rs",
+        "crates/pptx-render/src/layout.rs"
       ]
     },
     {
