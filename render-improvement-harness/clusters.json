@@ -1,0 +1,1137 @@
+{
+  "generated": "2026-09-03",
+  "clusters": [
+    {
+      "id": "text-run-props-gradfill-not-resolved",
+      "title": "Run-level gradFill (white-to-white) not resolved",
+      "category": "text-run-props",
+      "impact": "high",
+      "effort": "easy",
+      "confidence": "high",
+      "occurrences": 9,
+      "decks": [
+        "project20",
+        "rollout-plan"
+      ],
+      "findings": [
+        "project20/01/2",
+        "project20/05/3",
+        "project20/07/4",
+        "project20/09/4",
+        "project20/11/4",
+        "rollout-plan/02/1",
+        "rollout-plan/04/2",
+        "rollout-plan/05/2",
+        "rollout-plan/08/1"
+      ],
+      "symptom": "A degenerate two-stop gradFill on a text run (both stops the same color, typically white) is not resolved at all; the run falls back to the theme's dark default text color instead of the gradient's color, killing contrast against colored fills.",
+      "evidence": [
+        "project20/01",
+        "project20/05",
+        "project20/07",
+        "rollout-plan/08"
+      ]
+    },
+    {
+      "id": "text-run-props-bold-ignored",
+      "title": "Explicit run-level bold (b=\"1\") not applied",
+      "category": "text-run-props",
+      "impact": "high",
+      "effort": "easy",
+      "confidence": "high",
+      "occurrences": 15,
+      "decks": [
+        "ocp-psp-plan",
+        "project17",
+        "project20",
+        "rollout-plan"
+      ],
+      "findings": [
+        "ocp-psp-plan/02/2",
+        "ocp-psp-plan/07/2",
+        "project17/07/3",
+        "project20/03/2",
+        "project20/04/4",
+        "project20/05/2",
+        "project20/07/3",
+        "project20/09/3",
+        "project20/11/2",
+        "project20/12/2",
+        "project20/13/2",
+        "project20/14/1",
+        "project20/16/1",
+        "rollout-plan/02/2",
+        "rollout-plan/03/2"
+      ],
+      "symptom": "Runs (and occasionally just a run's leading letter/prefix) that carry an explicit b=\"1\" render at regular weight instead of bold. Affects titles, column headers, and body emphasis across four decks.",
+      "evidence": [
+        "project20/04",
+        "project20/09",
+        "ocp-psp-plan/02",
+        "rollout-plan/03"
+      ]
+    },
+    {
+      "id": "hidden-shape-drawn-anyway",
+      "title": "hidden=\"1\" shapes drawn anyway",
+      "category": "hidden",
+      "impact": "high",
+      "effort": "easy",
+      "confidence": "high",
+      "occurrences": 11,
+      "decks": [
+        "cisco-cloud-security",
+        "project17"
+      ],
+      "findings": [
+        "cisco-cloud-security/07/1",
+        "project17/04/2",
+        "project17/05/1",
+        "project17/06/1",
+        "project17/07/1",
+        "project17/08/1",
+        "project17/09/2",
+        "project17/10/1",
+        "project17/11/1",
+        "project17/12/1",
+        "project17/13/1"
+      ],
+      "symptom": "A shape whose p:cNvPr carries hidden=\"1\" is rendered regardless, overlapping titles and content with stray captions and accent shapes that PowerPoint and LibreOffice correctly suppress.",
+      "evidence": [
+        "project17/05",
+        "project17/08",
+        "project17/12",
+        "cisco-cloud-security/07"
+      ]
+    },
+    {
+      "id": "fill-grpfill-not-resolved",
+      "title": "a:grpFill (fill inherited from parent group) not resolved",
+      "category": "fill",
+      "impact": "high",
+      "effort": "easy",
+      "confidence": "high",
+      "occurrences": 16,
+      "decks": [
+        "cisco-cloud-security",
+        "project20"
+      ],
+      "findings": [
+        "cisco-cloud-security/05/1",
+        "cisco-cloud-security/07/2",
+        "cisco-cloud-security/08/1",
+        "cisco-cloud-security/09/5",
+        "cisco-cloud-security/10/2",
+        "cisco-cloud-security/12/2",
+        "cisco-cloud-security/15/2",
+        "cisco-cloud-security/16/3",
+        "cisco-cloud-security/17/1",
+        "cisco-cloud-security/18/1",
+        "cisco-cloud-security/23/2",
+        "project20/02/2",
+        "project20/06/2",
+        "project20/07/2",
+        "project20/08/1",
+        "project20/09/1"
+      ],
+      "symptom": "A child shape (preset roundRect bar or custGeom icon) whose spPr defers its fill to a:grpFill, expecting the enclosing group's solidFill, instead renders with no fill at all \u2014 the shape becomes invisible, taking any overlaid white text or numbers with it.",
+      "evidence": [
+        "cisco-cloud-security/12",
+        "cisco-cloud-security/17",
+        "cisco-cloud-security/18",
+        "project20/09"
+      ]
+    },
+    {
+      "id": "picture-srcrect-crop-ignored",
+      "title": "Picture srcRect crop (and ellipse crop mask) ignored",
+      "category": "picture",
+      "impact": "high",
+      "effort": "easy",
+      "confidence": "high",
+      "occurrences": 14,
+      "decks": [
+        "cisco-cloud-security",
+        "project17"
+      ],
+      "findings": [
+        "cisco-cloud-security/08/2",
+        "cisco-cloud-security/08/5",
+        "cisco-cloud-security/12/4",
+        "cisco-cloud-security/15/4",
+        "cisco-cloud-security/17/3",
+        "cisco-cloud-security/18/3",
+        "cisco-cloud-security/23/4",
+        "project17/02/3",
+        "project17/04/5",
+        "project17/06/5",
+        "project17/07/5",
+        "project17/10/4",
+        "project17/10/6",
+        "project17/12/5"
+      ],
+      "symptom": "A picture's a:srcRect crop, or an ellipse preset-geometry crop mask, is not applied; the full uncropped source bitmap is stretched into the frame instead, exposing content the crop was meant to hide (extra UI chrome, taglines, docked toolbars) or leaving square corners instead of round.",
+      "evidence": [
+        "cisco-cloud-security/08",
+        "cisco-cloud-security/17",
+        "cisco-cloud-security/18",
+        "project17/04"
+      ]
+    },
+    {
+      "id": "theme-color-scheme-color-resolution-broken",
+      "title": "Theme scheme-color resolution ignores style fontRef and clrMapOvr",
+      "category": "theme-color",
+      "impact": "high",
+      "effort": "medium",
+      "confidence": "high",
+      "occurrences": 20,
+      "decks": [
+        "cisco-cloud-security",
+        "ocp-psp-plan",
+        "project20",
+        "rollout-plan"
+      ],
+      "findings": [
+        "cisco-cloud-security/04/3",
+        "cisco-cloud-security/06/2",
+        "cisco-cloud-security/09/3",
+        "cisco-cloud-security/10/3",
+        "cisco-cloud-security/11/2",
+        "cisco-cloud-security/12/3",
+        "cisco-cloud-security/13/3",
+        "cisco-cloud-security/14/1",
+        "cisco-cloud-security/16/2",
+        "cisco-cloud-security/17/2",
+        "cisco-cloud-security/18/2",
+        "cisco-cloud-security/19/4",
+        "cisco-cloud-security/20/3",
+        "cisco-cloud-security/23/3",
+        "ocp-psp-plan/14/2",
+        "project20/03/1",
+        "project20/04/3",
+        "rollout-plan/01/1",
+        "rollout-plan/09/1",
+        "rollout-plan/11/1"
+      ],
+      "symptom": "Text whose color comes only from the shape's p:style/fontRef default, from a mapped scheme color resolved through the slide/layout color map, or from a layout clrMapOvr override renders in the theme's dark default text color instead of the correct (usually white/lt1) color. Bold headings and labels lose contrast or become invisible against colored fills.",
+      "evidence": [
+        "cisco-cloud-security/06",
+        "cisco-cloud-security/16",
+        "ocp-psp-plan/14",
+        "rollout-plan/01"
+      ]
+    },
+    {
+      "id": "text-inheritance-layout-lststyle-ignored",
+      "title": "Layout placeholder's own lstStyle/position override ignored",
+      "category": "text-inheritance",
+      "impact": "high",
+      "effort": "medium",
+      "confidence": "high",
+      "occurrences": 14,
+      "decks": [
+        "ocp-psp-plan",
+        "project17",
+        "project20",
+        "rollout-plan"
+      ],
+      "findings": [
+        "ocp-psp-plan/13/1",
+        "ocp-psp-plan/14/1",
+        "project17/01/1",
+        "project17/04/1",
+        "project17/06/2",
+        "project20/02/1",
+        "project20/06/1",
+        "project20/08/2",
+        "project20/10/1",
+        "project20/15/1",
+        "project20/17/1",
+        "rollout-plan/01/2",
+        "rollout-plan/05/4",
+        "rollout-plan/09/2"
+      ],
+      "symptom": "A placeholder whose layout defines its own size, position, and text style (lstStyle sz/b/color, or xfrm) instead inherits the master's generic titleStyle/bodyStyle, rendering far smaller, unbold, wrong-colored, mispositioned, and wrapped to the wrong number of lines.",
+      "evidence": [
+        "project20/08",
+        "project20/10",
+        "project20/17",
+        "rollout-plan/01"
+      ]
+    },
+    {
+      "id": "text-bullets-char-indent-dropped",
+      "title": "Bullet glyph and hanging indent dropped for buChar paragraphs",
+      "category": "text-bullets",
+      "impact": "high",
+      "effort": "medium",
+      "confidence": "high",
+      "occurrences": 9,
+      "decks": [
+        "ocp-psp-plan",
+        "project17",
+        "project20",
+        "rollout-plan"
+      ],
+      "findings": [
+        "ocp-psp-plan/02/1",
+        "project17/05/3",
+        "project17/06/3",
+        "project17/07/2",
+        "project17/10/5",
+        "project20/04/5",
+        "rollout-plan/02/3",
+        "rollout-plan/05/3",
+        "rollout-plan/08/2"
+      ],
+      "symptom": "Paragraphs with an explicit or lstStyle-inherited buChar/buFont bullet glyph and hanging indent (marL/indent) render with no bullet marker at all and flush-left text, losing the list structure.",
+      "evidence": [
+        "project17/06",
+        "project17/07",
+        "rollout-plan/02",
+        "rollout-plan/08"
+      ]
+    },
+    {
+      "id": "text-overflow-autofit-not-handled",
+      "title": "Text overflow/autofit semantics not implemented",
+      "category": "text-autofit",
+      "impact": "high",
+      "effort": "hard",
+      "confidence": "high",
+      "occurrences": 13,
+      "decks": [
+        "cisco-cloud-security",
+        "ocp-psp-plan",
+        "project17",
+        "project20",
+        "rollout-plan"
+      ],
+      "findings": [
+        "cisco-cloud-security/01/1",
+        "cisco-cloud-security/02/2",
+        "cisco-cloud-security/09/1",
+        "cisco-cloud-security/12/1",
+        "cisco-cloud-security/13/1",
+        "cisco-cloud-security/19/3",
+        "cisco-cloud-security/20/2",
+        "ocp-psp-plan/01/3",
+        "project17/03/1",
+        "project17/08/2",
+        "project17/11/3",
+        "project20/01/3",
+        "rollout-plan/06/2"
+      ],
+      "symptom": "When a text box has no autofit and is too short for its text, PowerPoint/LibreOffice let it visibly overflow the box; BetterOffice instead hard-clips at the box edge, or in a few cases silently shrinks the font to fit. A related spAutoFit case shows the box failing to grow to match its text instead.",
+      "evidence": [
+        "cisco-cloud-security/09",
+        "cisco-cloud-security/19",
+        "project17/08",
+        "project20/01"
+      ]
+    },
+    {
+      "id": "unsupported-table-not-rendered",
+      "title": "DrawingML tables (a:tbl) not rendered at all",
+      "category": "table",
+      "impact": "high",
+      "effort": "hard",
+      "confidence": "high",
+      "occurrences": 19,
+      "decks": [
+        "ocp-psp-plan",
+        "project20",
+        "rollout-plan"
+      ],
+      "findings": [
+        "ocp-psp-plan/04/1",
+        "ocp-psp-plan/05/1",
+        "ocp-psp-plan/06/1",
+        "ocp-psp-plan/07/1",
+        "ocp-psp-plan/08/1",
+        "ocp-psp-plan/09/1",
+        "ocp-psp-plan/10/1",
+        "ocp-psp-plan/11/1",
+        "ocp-psp-plan/15/1",
+        "ocp-psp-plan/16/1",
+        "ocp-psp-plan/17/1",
+        "ocp-psp-plan/18/1",
+        "project20/05/1",
+        "rollout-plan/03/1",
+        "rollout-plan/04/1",
+        "rollout-plan/05/1",
+        "rollout-plan/07/1",
+        "rollout-plan/10/1",
+        "rollout-plan/12/1"
+      ],
+      "symptom": "Every p:graphicFrame containing an a:tbl renders only as an empty dashed placeholder box labeled \"Table\" \u2014 no grid, cell fills, borders, or text \u2014 regardless of table size or style. The single largest and most consistently high-severity cluster in the dataset.",
+      "evidence": [
+        "ocp-psp-plan/04",
+        "ocp-psp-plan/09",
+        "rollout-plan/03",
+        "rollout-plan/12"
+      ]
+    },
+    {
+      "id": "geometry-custom-collapses-to-bbox",
+      "title": "custGeom shapes render as their bounding-box rectangle",
+      "category": "geometry-custom",
+      "impact": "high",
+      "effort": "hard",
+      "confidence": "high",
+      "occurrences": 17,
+      "decks": [
+        "cisco-cloud-security",
+        "ocp-psp-plan",
+        "project17",
+        "project20"
+      ],
+      "findings": [
+        "cisco-cloud-security/02/1",
+        "cisco-cloud-security/03/1",
+        "cisco-cloud-security/04/1",
+        "cisco-cloud-security/05/2",
+        "cisco-cloud-security/06/1",
+        "cisco-cloud-security/07/3",
+        "cisco-cloud-security/11/1",
+        "cisco-cloud-security/13/2",
+        "cisco-cloud-security/16/5",
+        "cisco-cloud-security/19/1",
+        "cisco-cloud-security/20/1",
+        "ocp-psp-plan/01/1",
+        "ocp-psp-plan/03/1",
+        "project17/04/3",
+        "project17/08/3",
+        "project17/11/5",
+        "project20/16/3"
+      ],
+      "symptom": "Any custGeom shape \u2014 whether its path is built from literal moveTo/lnTo/cubicBezTo points, legacy T-guide formulas, or connsiteX/Y guides \u2014 is drawn as a plain filled or unfilled axis-aligned rectangle spanning its a:off/a:ext box, discarding the actual outline. Icons, silhouettes, donut wedges, hexagons, country shapes, and decorative rules all reduce to rectangles or squares.",
+      "evidence": [
+        "cisco-cloud-security/04",
+        "cisco-cloud-security/19",
+        "project17/04",
+        "ocp-psp-plan/01"
+      ]
+    },
+    {
+      "id": "picture-fill-fails-to-render",
+      "title": "Picture fails to render at all (EMF/WMF, OLE fallback, one JPEG)",
+      "category": "picture",
+      "impact": "high",
+      "effort": "hard",
+      "confidence": "high",
+      "occurrences": 10,
+      "decks": [
+        "cisco-cloud-security",
+        "green-solutions",
+        "project17",
+        "rollout-plan"
+      ],
+      "findings": [
+        "cisco-cloud-security/01/2",
+        "cisco-cloud-security/16/4",
+        "cisco-cloud-security/22/1",
+        "green-solutions/01/1",
+        "project17/09/1",
+        "project17/11/4",
+        "rollout-plan/01/3",
+        "rollout-plan/06/1",
+        "rollout-plan/07/2",
+        "rollout-plan/08/3"
+      ],
+      "symptom": "A p:pic (or an OLE object's mc:Fallback picture) whose blip resolves to an EMF or WMF image is skipped entirely \u2014 logged as a skipped image \u2014 leaving a blank area where a logo, chart fallback, or illustration should be. One full-bleed JPEG background also fails to draw, leaving a solid black slide.",
+      "evidence": [
+        "cisco-cloud-security/01",
+        "cisco-cloud-security/22",
+        "rollout-plan/06",
+        "rollout-plan/07"
+      ]
+    },
+    {
+      "id": "text-slidenum-field-not-evaluated",
+      "title": "Slide-number field renders literal placeholder glyph",
+      "category": "field-eval",
+      "impact": "medium",
+      "effort": "easy",
+      "confidence": "high",
+      "occurrences": 13,
+      "decks": [
+        "cisco-cloud-security"
+      ],
+      "findings": [
+        "cisco-cloud-security/02/4",
+        "cisco-cloud-security/03/3",
+        "cisco-cloud-security/05/3",
+        "cisco-cloud-security/09/6",
+        "cisco-cloud-security/11/5",
+        "cisco-cloud-security/12/5",
+        "cisco-cloud-security/13/5",
+        "cisco-cloud-security/14/3",
+        "cisco-cloud-security/15/3",
+        "cisco-cloud-security/17/4",
+        "cisco-cloud-security/18/5",
+        "cisco-cloud-security/20/4",
+        "cisco-cloud-security/21/2"
+      ],
+      "symptom": "The <a:fld type=\"slidenum\"> field is drawn using its cached fallback text (\u2039#\u203a / \u00ab#\u00bb) instead of being evaluated to the slide's actual number. One instance also shows the same fallback text rendered through a dingbat-like font substitution.",
+      "evidence": [
+        "cisco-cloud-security/02",
+        "cisco-cloud-security/11",
+        "cisco-cloud-security/12",
+        "cisco-cloud-security/15"
+      ]
+    },
+    {
+      "id": "text-run-props-spc-ignored",
+      "title": "Run-level character spacing (spc) ignored",
+      "category": "text-run-props",
+      "impact": "medium",
+      "effort": "easy",
+      "confidence": "high",
+      "occurrences": 5,
+      "decks": [
+        "flat-chart",
+        "green-solutions",
+        "project20",
+        "stacked-bar"
+      ],
+      "findings": [
+        "flat-chart/01/1",
+        "flat-chart/02/1",
+        "green-solutions/01/3",
+        "project20/11/3",
+        "stacked-bar/04/6"
+      ],
+      "symptom": "The spc attribute on a:rPr (positive letter-spacing/tracking or negative kerning) is not applied. Text renders at default kerning; for larger tracking values this also shifts word-wrap points.",
+      "evidence": [
+        "flat-chart/01",
+        "flat-chart/02",
+        "green-solutions/01",
+        "stacked-bar/04"
+      ]
+    },
+    {
+      "id": "fill-alpha-modifier-ignored",
+      "title": "Alpha/opacity modifier on solid fills ignored",
+      "category": "fill",
+      "impact": "medium",
+      "effort": "easy",
+      "confidence": "high",
+      "occurrences": 5,
+      "decks": [
+        "ocp-psp-plan",
+        "project20"
+      ],
+      "findings": [
+        "ocp-psp-plan/03/2",
+        "project20/01/1",
+        "project20/06/3",
+        "project20/10/2",
+        "project20/15/2"
+      ],
+      "symptom": "The alpha child on a schemeClr or srgbClr solidFill is dropped; translucent overlays, shadow shapes, and layered backgrounds render fully opaque instead of blending with what is beneath them.",
+      "evidence": [
+        "project20/01",
+        "project20/10",
+        "project20/15",
+        "ocp-psp-plan/03"
+      ]
+    },
+    {
+      "id": "text-layout-master-lnspc-ignored",
+      "title": "Master title style's reduced line spacing (lnSpc) not applied",
+      "category": "text-layout",
+      "impact": "medium",
+      "effort": "easy",
+      "confidence": "high",
+      "occurrences": 7,
+      "decks": [
+        "cisco-cloud-security"
+      ],
+      "findings": [
+        "cisco-cloud-security/04/4",
+        "cisco-cloud-security/06/3",
+        "cisco-cloud-security/08/4",
+        "cisco-cloud-security/11/4",
+        "cisco-cloud-security/15/1",
+        "cisco-cloud-security/16/1",
+        "cisco-cloud-security/18/4"
+      ],
+      "symptom": "The master's titleStyle lnSpc override (80%) is not applied to two-line titles; the second line sits noticeably lower than spec, sagging into or being overdrawn by content below it.",
+      "evidence": [
+        "cisco-cloud-security/04",
+        "cisco-cloud-security/08",
+        "cisco-cloud-security/11",
+        "cisco-cloud-security/18"
+      ]
+    },
+    {
+      "id": "line-zero-extent-skipped",
+      "title": "Zero-extent straight lines and connectors skipped entirely",
+      "category": "line",
+      "impact": "medium",
+      "effort": "easy",
+      "confidence": "high",
+      "occurrences": 9,
+      "decks": [
+        "green-solutions",
+        "project17",
+        "project20"
+      ],
+      "findings": [
+        "green-solutions/01/2",
+        "project17/04/4",
+        "project20/03/3",
+        "project20/04/1",
+        "project20/05/4",
+        "project20/07/1",
+        "project20/09/2",
+        "project20/12/3",
+        "project20/13/3"
+      ],
+      "symptom": "A p:cxnSp connector or p:sp using prstGeom \"line\" with a degenerate (zero-width or zero-height) bounding box is culled entirely, dropping decorative rules, dividers, and leader lines that PowerPoint/LibreOffice still draw as a hairline.",
+      "evidence": [
+        "project20/07",
+        "project20/09",
+        "project17/04",
+        "green-solutions/01"
+      ]
+    },
+    {
+      "id": "chart-dlbls-shown-when-disabled",
+      "title": "Chart data labels drawn even though show flags are all disabled",
+      "category": "chart",
+      "impact": "medium",
+      "effort": "easy",
+      "confidence": "high",
+      "occurrences": 4,
+      "decks": [
+        "stacked-bar"
+      ],
+      "findings": [
+        "stacked-bar/01/1",
+        "stacked-bar/02/1",
+        "stacked-bar/03/1",
+        "stacked-bar/04/7"
+      ],
+      "symptom": "A series' c:dLbls block has every show* flag (showVal, showCatName, etc.) set to 0, yet BetterOffice still draws a numeric label at the end of every bar.",
+      "evidence": [
+        "stacked-bar/01",
+        "stacked-bar/02",
+        "stacked-bar/03",
+        "stacked-bar/04"
+      ]
+    },
+    {
+      "id": "text-run-props-solidfill-scope-bug",
+      "title": "Run-level solidFill/formatting not scoped to its own run",
+      "category": "text-run-props",
+      "impact": "medium",
+      "effort": "medium",
+      "confidence": "medium",
+      "occurrences": 6,
+      "decks": [
+        "project17",
+        "project20"
+      ],
+      "findings": [
+        "project17/05/4",
+        "project17/06/4",
+        "project17/07/4",
+        "project17/10/2",
+        "project17/13/2",
+        "project20/03/4"
+      ],
+      "symptom": "On multi-run paragraphs, an explicit run-level solidFill (sometimes along with bold/underline) is lost from its own run or bleeds onto a neighboring run: text takes the wrong run's color, or the run's whole styling is dropped while an adjacent run's color leaks across the visual line.",
+      "evidence": [
+        "project17/06",
+        "project17/07",
+        "project17/10",
+        "project17/13"
+      ]
+    },
+    {
+      "id": "text-bullets-autonum-not-drawn",
+      "title": "buAutoNum auto-numbering not drawn",
+      "category": "text-bullets",
+      "impact": "medium",
+      "effort": "medium",
+      "confidence": "high",
+      "occurrences": 5,
+      "decks": [
+        "project20"
+      ],
+      "findings": [
+        "project20/11/1",
+        "project20/12/1",
+        "project20/13/1",
+        "project20/14/2",
+        "project20/16/2"
+      ],
+      "symptom": "Paragraphs using buAutoNum (e.g. arabicPeriod) render with no number at all; the hanging indent is sometimes preserved but the \"1.\"/\"2.\" markers never appear.",
+      "evidence": [
+        "project20/11",
+        "project20/12",
+        "project20/13",
+        "project20/16"
+      ]
+    },
+    {
+      "id": "transform-text-orientation-wrong-under-rotation",
+      "title": "Text orientation not corrected for shape rotation/flip",
+      "category": "transform",
+      "impact": "medium",
+      "effort": "medium",
+      "confidence": "high",
+      "occurrences": 6,
+      "decks": [
+        "cisco-cloud-security"
+      ],
+      "findings": [
+        "cisco-cloud-security/07/4",
+        "cisco-cloud-security/08/3",
+        "cisco-cloud-security/09/2",
+        "cisco-cloud-security/10/1",
+        "cisco-cloud-security/21/1",
+        "cisco-cloud-security/23/1"
+      ],
+      "symptom": "Text inside a shape rotated 180\u00b0 with flipV=\"1\" (or 90\u00b0 with flipH) renders mirrored/reversed instead of staying upright; separately, text in a shape rotated via bodyPr vert=\"vert\"/\"vert270\" renders sideways following the shape's raw rotation instead of the compensated vertical reading direction.",
+      "evidence": [
+        "cisco-cloud-security/08",
+        "cisco-cloud-security/09",
+        "cisco-cloud-security/10",
+        "cisco-cloud-security/21"
+      ]
+    },
+    {
+      "id": "fill-nonsolid-fill-types-not-resolved",
+      "title": "Non-solid fill types (radial gradFill, pattFill) collapse to a flat fill",
+      "category": "fill",
+      "impact": "medium",
+      "effort": "medium",
+      "confidence": "high",
+      "occurrences": 6,
+      "decks": [
+        "cisco-cloud-security",
+        "minimal-chart",
+        "typography-trick"
+      ],
+      "findings": [
+        "cisco-cloud-security/03/2",
+        "cisco-cloud-security/07/5",
+        "minimal-chart/01/3",
+        "typography-trick/01/2",
+        "typography-trick/02/2",
+        "typography-trick/03/2"
+      ],
+      "symptom": "A radial (circle-path) gradient background, or a pattern fill (pattFill, e.g. dot/grid patterns), renders as a single flat color \u2014 the outer gradient stop, or a plain fill in place of the pattern \u2014 instead of the actual gradient/pattern.",
+      "evidence": [
+        "typography-trick/01",
+        "typography-trick/02",
+        "typography-trick/03",
+        "minimal-chart/01"
+      ]
+    },
+    {
+      "id": "line-stroke-color-resolution-broken",
+      "title": "Connector/line stroke color not resolved from style or gradFill",
+      "category": "connector",
+      "impact": "medium",
+      "effort": "medium",
+      "confidence": "high",
+      "occurrences": 4,
+      "decks": [
+        "cisco-cloud-security"
+      ],
+      "findings": [
+        "cisco-cloud-security/04/2",
+        "cisco-cloud-security/09/4",
+        "cisco-cloud-security/16/6",
+        "cisco-cloud-security/19/2"
+      ],
+      "symptom": "A connector whose only stroke definition is the shape style's lnRef (no explicit a:ln), or whose explicit a:ln uses a gradFill instead of a solidFill, is drawn with no visible stroke at all \u2014 whole diagrams lose their connecting lines.",
+      "evidence": [
+        "cisco-cloud-security/04",
+        "cisco-cloud-security/09",
+        "cisco-cloud-security/16",
+        "cisco-cloud-security/19"
+      ]
+    },
+    {
+      "id": "chart-axis-position-swapped",
+      "title": "Chart value axis c:axPos not honored \u2014 axes swapped",
+      "category": "chart",
+      "impact": "medium",
+      "effort": "medium",
+      "confidence": "high",
+      "occurrences": 4,
+      "decks": [
+        "stacked-bar"
+      ],
+      "findings": [
+        "stacked-bar/01/2",
+        "stacked-bar/02/2",
+        "stacked-bar/03/2",
+        "stacked-bar/04/2"
+      ],
+      "symptom": "A bar chart's value axis (axPos=\"b\") is drawn in the left label column instead of along the bottom, crowding out and truncating the category axis labels.",
+      "evidence": [
+        "stacked-bar/01",
+        "stacked-bar/02",
+        "stacked-bar/03",
+        "stacked-bar/04"
+      ]
+    },
+    {
+      "id": "chart-category-order-reversed",
+      "title": "Bar chart category order reversed top-to-bottom",
+      "category": "chart",
+      "impact": "medium",
+      "effort": "medium",
+      "confidence": "high",
+      "occurrences": 3,
+      "decks": [
+        "stacked-bar"
+      ],
+      "findings": [
+        "stacked-bar/02/3",
+        "stacked-bar/03/3",
+        "stacked-bar/04/1"
+      ],
+      "symptom": "For a horizontal bar chart with catAx orientation minMax, categories plot in ascending order top-to-bottom instead of the reference's descending order.",
+      "evidence": [
+        "stacked-bar/02",
+        "stacked-bar/03",
+        "stacked-bar/04"
+      ]
+    },
+    {
+      "id": "text-font-substitution-issues",
+      "title": "Theme/symbol font substitution differs from PowerPoint's, shifting wrap points",
+      "category": "text-font",
+      "impact": "medium",
+      "effort": "hard",
+      "confidence": "medium",
+      "occurrences": 8,
+      "decks": [
+        "project17"
+      ],
+      "findings": [
+        "project17/02/1",
+        "project17/02/2",
+        "project17/05/2",
+        "project17/10/3",
+        "project17/11/2",
+        "project17/12/2",
+        "project17/12/3",
+        "project17/12/4"
+      ],
+      "symptom": "The theme's majorFont (+mj-lt, Calibri) resolves to a noticeably wider fallback face, so lines wrap one word earlier than the reference and titles/body text overflow their boxes or collide with content below; a Wingdings/PUA glyph used as a bullet icon also renders as a missing-glyph tofu box.",
+      "evidence": [
+        "project17/10",
+        "project17/11",
+        "project17/12",
+        "project17/02"
+      ]
+    },
+    {
+      "id": "text-run-props-misc-property-ignored",
+      "title": "Misc run properties ignored (superscript baseline, italic)",
+      "category": "text-run-props",
+      "impact": "low",
+      "effort": "easy",
+      "confidence": "high",
+      "occurrences": 2,
+      "decks": [
+        "cisco-cloud-security",
+        "ocp-psp-plan"
+      ],
+      "findings": [
+        "cisco-cloud-security/05/4",
+        "ocp-psp-plan/02/3"
+      ],
+      "symptom": "A run's baseline=\"30000\" (superscript) or i=\"1\" (italic) flag is not applied; text renders on the baseline at full size, or upright instead of italic.",
+      "evidence": [
+        "cisco-cloud-security/05",
+        "ocp-psp-plan/02"
+      ]
+    },
+    {
+      "id": "geometry-preset-adj-values-wrong",
+      "title": "Preset geometry adjust values (chevron/homePlate notch) wrong",
+      "category": "geometry-preset",
+      "impact": "low",
+      "effort": "easy",
+      "confidence": "high",
+      "occurrences": 1,
+      "decks": [
+        "project20"
+      ],
+      "findings": [
+        "project20/04/2"
+      ],
+      "symptom": "A chevron or homePlate preset shape's notch is drawn far deeper than its adj guide specifies, breaking the seamless overlap between adjacent banner shapes.",
+      "evidence": [
+        "project20/04"
+      ]
+    },
+    {
+      "id": "chart-legend-and-title-position-wrong",
+      "title": "Chart legend position and title alignment not honored",
+      "category": "chart",
+      "impact": "low",
+      "effort": "easy",
+      "confidence": "high",
+      "occurrences": 5,
+      "decks": [
+        "stacked-bar"
+      ],
+      "findings": [
+        "stacked-bar/01/3",
+        "stacked-bar/02/4",
+        "stacked-bar/03/4",
+        "stacked-bar/04/4",
+        "stacked-bar/04/5"
+      ],
+      "symptom": "A legend with legendPos=\"b\" renders as a vertical list at the top-right instead of a horizontal row below the plot area; a centered chart title renders left-aligned to the frame edge instead.",
+      "evidence": [
+        "stacked-bar/01",
+        "stacked-bar/02",
+        "stacked-bar/04"
+      ]
+    },
+    {
+      "id": "effects-prsttxwarp-and-outershdw-ignored",
+      "title": "Text warp (prstTxWarp) and outer shadow effects not applied",
+      "category": "effects",
+      "impact": "low",
+      "effort": "medium",
+      "confidence": "high",
+      "occurrences": 3,
+      "decks": [
+        "ocp-psp-plan",
+        "project20"
+      ],
+      "findings": [
+        "ocp-psp-plan/01/2",
+        "ocp-psp-plan/03/3",
+        "project20/04/6"
+      ],
+      "symptom": "WordArt-style arc text (prstTxWarp textArchUp/Down) renders as straight horizontal/rotated text instead of following the curve; separately, an outerShdw drop shadow declared on marker shapes is not drawn at all.",
+      "evidence": [
+        "ocp-psp-plan/01",
+        "ocp-psp-plan/03",
+        "project20/04"
+      ]
+    },
+    {
+      "id": "picture-blip-duotone-bilevel-not-applied",
+      "title": "Blip color effects (duotone, biLevel) not applied or crash the picture",
+      "category": "picture",
+      "impact": "low",
+      "effort": "medium",
+      "confidence": "high",
+      "occurrences": 3,
+      "decks": [
+        "cisco-cloud-security"
+      ],
+      "findings": [
+        "cisco-cloud-security/02/3",
+        "cisco-cloud-security/07/6",
+        "cisco-cloud-security/11/3"
+      ],
+      "symptom": "A picture with a duotone or biLevel blip effect either ignores the effect (shows the original full-color raster) or disappears entirely instead of applying the recolor/threshold effect.",
+      "evidence": [
+        "cisco-cloud-security/02",
+        "cisco-cloud-security/07",
+        "cisco-cloud-security/11"
+      ]
+    },
+    {
+      "id": "unsupported-custgeom-picturefill-wordmark-not-drawn",
+      "title": "custGeom shape with a picture fill not drawn at all",
+      "category": "unsupported-element",
+      "impact": "low",
+      "effort": "medium",
+      "confidence": "high",
+      "occurrences": 3,
+      "decks": [
+        "typography-trick"
+      ],
+      "findings": [
+        "typography-trick/01/1",
+        "typography-trick/02/1",
+        "typography-trick/03/1"
+      ],
+      "symptom": "A freeform custGeom whose fill is a blipFill (a picture-filled wordmark/letterform outline) is not drawn at all, not even as a bounding-box fallback \u2014 the whole decorative element vanishes.",
+      "evidence": [
+        "typography-trick/01",
+        "typography-trick/02",
+        "typography-trick/03"
+      ]
+    },
+    {
+      "id": "chart-axis-autoscale-not-rounded",
+      "title": "Chart value-axis auto-scale doesn't round to friendly increments",
+      "category": "chart",
+      "impact": "low",
+      "effort": "medium",
+      "confidence": "medium",
+      "occurrences": 4,
+      "decks": [
+        "stacked-bar"
+      ],
+      "findings": [
+        "stacked-bar/01/4",
+        "stacked-bar/02/5",
+        "stacked-bar/03/5",
+        "stacked-bar/04/3"
+      ],
+      "symptom": "When neither c:max/min nor c:majorUnit is specified, BetterOffice derives the axis scale directly from the raw data max/step instead of rounding to human-friendly increments, producing an odd scale (e.g. 12.3 by 3.075) instead of a rounded one.",
+      "evidence": [
+        "stacked-bar/01",
+        "stacked-bar/02",
+        "stacked-bar/04"
+      ]
+    },
+    {
+      "id": "chart-minimal-chart-series-axis-broken",
+      "title": "Line chart series, axis labels, and noFill axis line all mis-rendered",
+      "category": "chart",
+      "impact": "low",
+      "effort": "medium",
+      "confidence": "medium",
+      "occurrences": 3,
+      "decks": [
+        "minimal-chart"
+      ],
+      "findings": [
+        "minimal-chart/01/1",
+        "minimal-chart/01/2",
+        "minimal-chart/01/4"
+      ],
+      "symptom": "A single chart's data series (line stroke and markers) is not drawn at all, its category/value axis tick labels are missing, and its axis line \u2014 explicitly set to noFill \u2014 is drawn anyway as a broken, segmented vertical stroke.",
+      "evidence": [
+        "minimal-chart/01"
+      ]
+    },
+    {
+      "id": "transform-group-child-rotation-scale-wrong",
+      "title": "Group child rotation + anisotropic scale computed wrong",
+      "category": "transform",
+      "impact": "low",
+      "effort": "hard",
+      "confidence": "medium",
+      "occurrences": 1,
+      "decks": [
+        "swot-analysis"
+      ],
+      "findings": [
+        "swot-analysis/01/1"
+      ],
+      "symptom": "A custGeom shape inside a non-uniformly scaled, rotated group renders as an oversized diamond far larger than the circle it should shade, consistent with the child's own rotation and the group's chOff/chExt scale factors being combined incorrectly.",
+      "evidence": [
+        "swot-analysis/01"
+      ]
+    }
+  ],
+  "deferred": [
+    {
+      "finding": "cisco-cloud-security/01/3",
+      "reason": "category lo-suspect: comparator judged the reference wrong (LO draws layout placeholder prompt text for empty placeholders; BetterOffice correctly renders nothing)."
+    },
+    {
+      "finding": "cisco-cloud-security/04/5",
+      "reason": "self-identified lo-suspect in the summary (wrap='none' + spAutoFit label): the reference wraps a label the XML says must stay on one line; BetterOffice's unwrapped render matches the XML."
+    },
+    {
+      "finding": "cisco-cloud-security/04/6",
+      "reason": "confidence low: wrap-point difference from font-metric differences on a default font (Arial) with no explicit override; not clearly a BetterOffice defect."
+    },
+    {
+      "finding": "cisco-cloud-security/10/4",
+      "reason": "font-metric wrap-point difference on a default font with no explicit override; likely a rendering-engine metric difference rather than a missed property, low actionability."
+    },
+    {
+      "finding": "cisco-cloud-security/13/4",
+      "reason": "font-metric wrap-point difference (off-slide banner text) with no explicit override; low actionability, same family as cisco-cloud-security/04/6."
+    },
+    {
+      "finding": "cisco-cloud-security/14/2",
+      "reason": "font-metric wrap-point difference (numbered callout boxes) with no explicit override; low actionability, same family as cisco-cloud-security/04/6."
+    },
+    {
+      "finding": "cisco-cloud-security/15/5",
+      "reason": "font-metric wrap-point difference (off-slide production note) with no explicit override; low actionability, same family as cisco-cloud-security/04/6."
+    },
+    {
+      "finding": "cisco-cloud-security/16/7",
+      "reason": "font-metric wrap-point difference (off-slide note) with no explicit override; low actionability, same family as cisco-cloud-security/04/6."
+    },
+    {
+      "finding": "cisco-cloud-security/19/5",
+      "reason": "category lo-suspect: reference drops a trailing character the source text has; BetterOffice's fuller render matches the XML."
+    },
+    {
+      "finding": "ocp-psp-plan/01/4",
+      "reason": "confidence low: wrap-count difference consistent with a different (but plausible) fallback substitute for the unavailable 'Segoe UI Semilight' face; not clearly a BetterOffice defect."
+    },
+    {
+      "finding": "ocp-psp-plan/03/4",
+      "reason": "category lo-suspect: LO mid-word-wraps a wrap='none' label; BetterOffice's unwrapped single line matches the XML."
+    },
+    {
+      "finding": "project17/03/2",
+      "reason": "category lo-suspect: neither renderer has the specified font; BetterOffice's substitute is judged closer to the source design than LO's."
+    },
+    {
+      "finding": "project17/05/5",
+      "reason": "category lo-suspect per comparator, but the symptom (text mirrored under xfrm flipH) matches the transform-text-orientation-wrong-under-rotation cluster (rot=180/flipV cases) \u2014 worth the investigator double-checking this deck too instead of writing it off."
+    },
+    {
+      "finding": "project17/09/3",
+      "reason": "corrupted/unusual field XML (fld type='datetime' containing a scrambled, repeated string) drives a dropped second line and a tofu glyph; looks like a source-document oddity rather than a generalizable BetterOffice defect."
+    },
+    {
+      "finding": "project17/11/6",
+      "reason": "ambiguous: wrap='none' labels wrap anyway, but several sibling lo-suspect findings in other decks show LO itself violating wrap='none' \u2014 unclear which renderer is at fault here without visual inspection."
+    },
+    {
+      "finding": "project20/05/5",
+      "reason": "category lo-suspect: LO appears to have wrapped/clipped a noAutofit single-line footer run; BetterOffice's unwrapped render matches the XML."
+    },
+    {
+      "finding": "project20/07/5",
+      "reason": "category lo-suspect: BetterOffice honors the run's explicit direct-formatting solidFill; LO overrides it with the auto hyperlink color, which is the LO-specific quirk."
+    },
+    {
+      "finding": "project20/09/5",
+      "reason": "category lo-suspect: same hyperlink-color override behavior as project20/07/5 \u2014 BetterOffice matches the explicit direct formatting, LO substitutes its theme hlink color."
+    },
+    {
+      "finding": "project20/13/4",
+      "reason": "confidence medium, severity low: a single paragraph wraps to one line instead of two, shifting a centered block ~7% of slide height; plausible font-metric difference rather than a missed property."
+    },
+    {
+      "finding": "project20/16/4",
+      "reason": "confidence medium, severity low: trailing empty paragraphs given less line height than expected, shifting a centered block; needs code-level investigation of empty-paragraph line-height handling before it can be scoped to a specific cause."
+    },
+    {
+      "finding": "rollout-plan/03/3",
+      "reason": "category lo-suspect: LO mid-word-wraps a wrap='none' label; BetterOffice's unwrapped single line matches the XML."
+    },
+    {
+      "finding": "rollout-plan/06/3",
+      "reason": "confidence medium: header placeholders sit ~46px/15px off from default insets with no explicit override in slide or layout; unclear root cause without more examples."
+    },
+    {
+      "finding": "swot-analysis/01/2",
+      "reason": "category lo-suspect: LO splits/drops a letter from a word that fits the box; BetterOffice's whole-word single line matches the XML."
+    },
+    {
+      "finding": "swot-analysis/01/3",
+      "reason": "category lo-suspect: LO wraps a title that fits on one line per the box width; BetterOffice's single-line render matches the XML."
+    }
+  ]
+}

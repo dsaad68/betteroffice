@@ -31,6 +31,7 @@ the taxonomist may add categories, but must record additions here in the same fo
 | `media-ole` | embedded objects, video posters, audio icons |
 | `hidden` | hidden shapes or hidden slides handled differently |
 | `lo-suspect` | the reference is probably wrong; BetterOffice matches the XML better |
+| `field-eval` | a field code (`a:fld`, e.g. `slidenum`, `datetime`) renders its cached fallback text instead of being evaluated |
 
 Severity: `high` = a reader would misread the slide; `medium` = clearly wrong but readable;
 `low` = cosmetic, only visible side by side.
