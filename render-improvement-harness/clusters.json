@@ -903,6 +903,18 @@
         "cisco-cloud-security/09",
         "cisco-cloud-security/16",
         "cisco-cloud-security/19"
+      ],
+      "files": [
+        "crates/pptx-parse/src/drawing.rs",
+        "crates/pptx-parse/src/model.rs",
+        "crates/pptx-parse/src/theme.rs",
+        "crates/ooxml-drawingml/src/theme.rs",
+        "crates/ooxml-drawingml/src/shape.rs",
+        "crates/ooxml-drawingml/src/color.rs",
+        "crates/pptx-render/src/layout.rs",
+        "crates/pptx-render/src/display_list.rs",
+        "crates/pptx-raster/src/lib.rs",
+        "packages/pptx/src/types.ts"
       ]
     },
     {
