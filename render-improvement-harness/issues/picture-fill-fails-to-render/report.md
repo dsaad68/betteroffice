@@ -6,9 +6,9 @@ impact: high
 effort: hard
 confidence: high
 status: open
-occurrences: 10
-decks: [cisco-cloud-security, green-solutions, project17, rollout-plan]
-findings: [cisco-cloud-security/01/2, cisco-cloud-security/16/4, cisco-cloud-security/22/1, green-solutions/01/1, project17/09/1, project17/11/4, rollout-plan/01/3, rollout-plan/06/1, rollout-plan/07/2, rollout-plan/08/3]
+occurrences: 9
+decks: [cisco-cloud-security, project17, rollout-plan]
+findings: [cisco-cloud-security/01/2, cisco-cloud-security/16/4, cisco-cloud-security/22/1, project17/09/1, project17/11/4, rollout-plan/01/3, rollout-plan/06/1, rollout-plan/07/2, rollout-plan/08/3]
 files: [crates/pptx-raster/Cargo.toml, crates/pptx-raster/src/lib.rs, crates/pptx-raster/README.md, crates/pptx-parse/src/drawing.rs, crates/pptx-parse/src/model.rs, crates/pptx-render/src/layout.rs, crates/pptx-render/src/lib.rs, crates/pptx-render/src/display_list.rs, packages/pptx/src/types.ts, packages/pptx/src/render/canvas.ts]
 ---
 
@@ -30,8 +30,8 @@ The cluster holds **two distinct causes**, not one:
    never parsed, so the frame degrades to a dashed `Placeholder`. Those two also point at
    EMF media, so both causes must be fixed for those slides to render.
 
-The tenth finding, `green-solutions/01/1`, **is not a picture failure** — see
-"Not confirmed" below.
+A tenth finding, `green-solutions/01/1`, **was not a picture failure** and has since been
+moved to `fill-alpha-modifier-ignored` — see "Not confirmed" below.
 
 ## Evidence
 
@@ -93,7 +93,8 @@ no non-metafile picture is skipped anywhere.
   `mc:Choice`/`mc:Fallback` is dropped even outside a graphic frame. Not exercised by a
   finding in this cluster, but the same gap.
 
-**Not confirmed — `green-solutions/01/1` does not belong in this cluster.** The finding
+**Not confirmed — `green-solutions/01/1` did not belong in this cluster and has been moved
+to `fill-alpha-modifier-ignored`.** The finding
 claims the full-bleed `image1.jpeg` is not drawn; the black slide has a different cause.
 `bo-log.json` reports `"01".skipped_images = 0`, so nothing was skipped. Re-rendering the
 deck with the single shape `Rectangle 109` deleted from `slide1.xml` — a full-slide

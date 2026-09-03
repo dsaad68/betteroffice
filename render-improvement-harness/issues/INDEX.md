@@ -23,7 +23,7 @@ Generated from `clusters.json` (2026-09-03). Ordered by impact, then effort.
 | 17 | [chart-dlbls-shown-when-disabled](chart-dlbls-shown-when-disabled/report.md) | chart | medium | easy | 4 | 1 | open |
 | 18 | [text-layout-master-lnspc-ignored](text-layout-master-lnspc-ignored/report.md) | text-layout | medium | medium | 7 | 1 | open |
 | 19 | `transform-text-orientation-wrong-under-rotation` | transform | medium | medium | 6 | 1 | triaged |
-| 20 | `fill-nonsolid-fill-types-not-resolved` | fill | medium | medium | 6 | 3 | triaged |
+| 20 | [fill-nonsolid-fill-types-not-resolved](fill-nonsolid-fill-types-not-resolved/report.md) | fill | medium | medium | 6 | 3 | open |
 | 21 | [text-run-props-spc-ignored](text-run-props-spc-ignored/report.md) | text-run-props | medium | medium | 5 | 4 | open |
 | 22 | [text-bullets-autonum-not-drawn](text-bullets-autonum-not-drawn/report.md) | text-bullets | medium | medium | 5 | 1 | open |
 | 23 | `line-stroke-color-resolution-broken` | connector | medium | medium | 4 | 1 | triaged |
