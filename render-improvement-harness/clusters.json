@@ -955,7 +955,7 @@
       "title": "Bar chart category order reversed top-to-bottom",
       "category": "chart",
       "impact": "medium",
-      "effort": "medium",
+      "effort": "easy",
       "confidence": "high",
       "occurrences": 3,
       "decks": [
@@ -971,6 +971,9 @@
         "stacked-bar/02",
         "stacked-bar/03",
         "stacked-bar/04"
+      ],
+      "files": [
+        "crates/ooxml-drawingml/src/chart/geometry.rs"
       ]
     },
     {
@@ -1108,11 +1111,24 @@
         "cisco-cloud-security/07/6",
         "cisco-cloud-security/11/3"
       ],
-      "symptom": "A picture with a duotone or biLevel blip effect either ignores the effect (shows the original full-color raster) or disappears entirely instead of applying the recolor/threshold effect.",
+      "symptom": "A picture with a duotone or biLevel blip effect ignores the effect and draws the raw bitmap; where the source colour matches the backdrop the picture reads as missing rather than being dropped. clrChange and lum are equally unparsed.",
       "evidence": [
         "cisco-cloud-security/02",
         "cisco-cloud-security/07",
         "cisco-cloud-security/11"
+      ],
+      "files": [
+        "crates/pptx-parse/src/drawing.rs",
+        "crates/pptx-parse/src/model.rs",
+        "crates/ooxml-drawingml/src/picture.rs",
+        "crates/pptx-edit/src/deck.rs",
+        "crates/pptx-edit/src/model.rs",
+        "crates/pptx-render/src/display_list.rs",
+        "crates/pptx-render/src/layout.rs",
+        "crates/pptx-render/src/lib.rs",
+        "crates/pptx-raster/src/lib.rs",
+        "packages/pptx/src/types.ts",
+        "packages/pptx/src/render/canvas.ts"
       ]
     },
     {
