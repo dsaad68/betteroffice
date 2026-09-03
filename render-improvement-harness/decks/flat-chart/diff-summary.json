@@ -1,0 +1,64 @@
+{
+  "01": {
+    "fine_pct": 3.51,
+    "coarse_pct": 0.0,
+    "verdict": "minor",
+    "hot_cells": [
+      {
+        "cell": "r2c1",
+        "pct": 21.5
+      },
+      {
+        "cell": "r1c1",
+        "pct": 17.2
+      },
+      {
+        "cell": "r1c2",
+        "pct": 6.8
+      },
+      {
+        "cell": "r2c2",
+        "pct": 2.0
+      }
+    ],
+    "lo_size": [
+      1280,
+      720
+    ],
+    "bo_size": [
+      1280,
+      720
+    ]
+  },
+  "02": {
+    "fine_pct": 3.29,
+    "coarse_pct": 0.0,
+    "verdict": "minor",
+    "hot_cells": [
+      {
+        "cell": "r2c1",
+        "pct": 21.2
+      },
+      {
+        "cell": "r1c1",
+        "pct": 16.3
+      },
+      {
+        "cell": "r1c2",
+        "pct": 6.2
+      },
+      {
+        "cell": "r2c2",
+        "pct": 2.0
+      }
+    ],
+    "lo_size": [
+      1280,
+      720
+    ],
+    "bo_size": [
+      1280,
+      720
+    ]
+  }
+}

@@ -1,0 +1,405 @@
+{
+  "01": {
+    "fine_pct": 1.56,
+    "coarse_pct": 0.0,
+    "verdict": "minor",
+    "hot_cells": [
+      {
+        "cell": "r3c1",
+        "pct": 8.0
+      },
+      {
+        "cell": "r4c1",
+        "pct": 5.8
+      },
+      {
+        "cell": "r4c2",
+        "pct": 3.2
+      },
+      {
+        "cell": "r3c2",
+        "pct": 2.5
+      }
+    ],
+    "lo_size": [
+      1040,
+      720
+    ],
+    "bo_size": [
+      1040,
+      720
+    ]
+  },
+  "02": {
+    "fine_pct": 3.1,
+    "coarse_pct": 0.0,
+    "verdict": "minor",
+    "hot_cells": [
+      {
+        "cell": "r3c2",
+        "pct": 7.4
+      },
+      {
+        "cell": "r3c1",
+        "pct": 6.7
+      },
+      {
+        "cell": "r2c2",
+        "pct": 5.8
+      },
+      {
+        "cell": "r1c1",
+        "pct": 4.9
+      }
+    ],
+    "lo_size": [
+      1040,
+      720
+    ],
+    "bo_size": [
+      1040,
+      720
+    ]
+  },
+  "03": {
+    "fine_pct": 4.79,
+    "coarse_pct": 0.0,
+    "verdict": "minor",
+    "hot_cells": [
+      {
+        "cell": "r2c2",
+        "pct": 29.4
+      },
+      {
+        "cell": "r2c3",
+        "pct": 13.5
+      },
+      {
+        "cell": "r1c2",
+        "pct": 7.8
+      },
+      {
+        "cell": "r3c2",
+        "pct": 7.0
+      }
+    ],
+    "lo_size": [
+      1040,
+      720
+    ],
+    "bo_size": [
+      1040,
+      720
+    ]
+  },
+  "04": {
+    "fine_pct": 13.07,
+    "coarse_pct": 2.04,
+    "verdict": "major",
+    "hot_cells": [
+      {
+        "cell": "r3c1",
+        "pct": 22.5
+      },
+      {
+        "cell": "r3c2",
+        "pct": 22.4
+      },
+      {
+        "cell": "r3c3",
+        "pct": 21.8
+      },
+      {
+        "cell": "r1c2",
+        "pct": 20.5
+      }
+    ],
+    "lo_size": [
+      1040,
+      720
+    ],
+    "bo_size": [
+      1040,
+      720
+    ]
+  },
+  "05": {
+    "fine_pct": 15.24,
+    "coarse_pct": 0.0,
+    "verdict": "major",
+    "hot_cells": [
+      {
+        "cell": "r1c2",
+        "pct": 23.6
+      },
+      {
+        "cell": "r1c1",
+        "pct": 21.1
+      },
+      {
+        "cell": "r3c2",
+        "pct": 20.5
+      },
+      {
+        "cell": "r3c3",
+        "pct": 19.7
+      }
+    ],
+    "lo_size": [
+      1040,
+      720
+    ],
+    "bo_size": [
+      1040,
+      720
+    ]
+  },
+  "06": {
+    "fine_pct": 13.99,
+    "coarse_pct": 0.0,
+    "verdict": "major",
+    "hot_cells": [
+      {
+        "cell": "r1c2",
+        "pct": 27.7
+      },
+      {
+        "cell": "r1c1",
+        "pct": 27.1
+      },
+      {
+        "cell": "r3c2",
+        "pct": 26.7
+      },
+      {
+        "cell": "r2c2",
+        "pct": 26.4
+      }
+    ],
+    "lo_size": [
+      1040,
+      720
+    ],
+    "bo_size": [
+      1040,
+      720
+    ]
+  },
+  "07": {
+    "fine_pct": 13.83,
+    "coarse_pct": 0.0,
+    "verdict": "major",
+    "hot_cells": [
+      {
+        "cell": "r2c3",
+        "pct": 27.5
+      },
+      {
+        "cell": "r2c2",
+        "pct": 26.2
+      },
+      {
+        "cell": "r1c2",
+        "pct": 20.4
+      },
+      {
+        "cell": "r3c3",
+        "pct": 20.2
+      }
+    ],
+    "lo_size": [
+      1040,
+      720
+    ],
+    "bo_size": [
+      1040,
+      720
+    ]
+  },
+  "08": {
+    "fine_pct": 8.95,
+    "coarse_pct": 7.77,
+    "verdict": "major",
+    "hot_cells": [
+      {
+        "cell": "r3c2",
+        "pct": 19.5
+      },
+      {
+        "cell": "r3c3",
+        "pct": 19.1
+      },
+      {
+        "cell": "r2c2",
+        "pct": 18.9
+      },
+      {
+        "cell": "r2c3",
+        "pct": 15.8
+      }
+    ],
+    "lo_size": [
+      1040,
+      720
+    ],
+    "bo_size": [
+      1040,
+      720
+    ]
+  },
+  "09": {
+    "fine_pct": 10.54,
+    "coarse_pct": 9.16,
+    "verdict": "major",
+    "hot_cells": [
+      {
+        "cell": "r3c2",
+        "pct": 36.7
+      },
+      {
+        "cell": "r3c3",
+        "pct": 34.8
+      },
+      {
+        "cell": "r3c4",
+        "pct": 23.6
+      },
+      {
+        "cell": "r3c1",
+        "pct": 19.8
+      }
+    ],
+    "lo_size": [
+      1040,
+      720
+    ],
+    "bo_size": [
+      1040,
+      720
+    ]
+  },
+  "10": {
+    "fine_pct": 11.1,
+    "coarse_pct": 0.04,
+    "verdict": "major",
+    "hot_cells": [
+      {
+        "cell": "r3c2",
+        "pct": 24.6
+      },
+      {
+        "cell": "r1c1",
+        "pct": 20.1
+      },
+      {
+        "cell": "r3c3",
+        "pct": 19.1
+      },
+      {
+        "cell": "r2c2",
+        "pct": 16.4
+      }
+    ],
+    "lo_size": [
+      1040,
+      720
+    ],
+    "bo_size": [
+      1040,
+      720
+    ]
+  },
+  "11": {
+    "fine_pct": 18.94,
+    "coarse_pct": 14.37,
+    "verdict": "major",
+    "hot_cells": [
+      {
+        "cell": "r3c2",
+        "pct": 72.7
+      },
+      {
+        "cell": "r3c1",
+        "pct": 53.4
+      },
+      {
+        "cell": "r2c2",
+        "pct": 52.0
+      },
+      {
+        "cell": "r2c1",
+        "pct": 36.4
+      }
+    ],
+    "lo_size": [
+      1040,
+      720
+    ],
+    "bo_size": [
+      1040,
+      720
+    ]
+  },
+  "12": {
+    "fine_pct": 11.15,
+    "coarse_pct": 0.0,
+    "verdict": "major",
+    "hot_cells": [
+      {
+        "cell": "r2c1",
+        "pct": 22.0
+      },
+      {
+        "cell": "r1c1",
+        "pct": 21.8
+      },
+      {
+        "cell": "r3c1",
+        "pct": 20.4
+      },
+      {
+        "cell": "r1c2",
+        "pct": 18.6
+      }
+    ],
+    "lo_size": [
+      1040,
+      720
+    ],
+    "bo_size": [
+      1040,
+      720
+    ]
+  },
+  "13": {
+    "fine_pct": 6.42,
+    "coarse_pct": 0.0,
+    "verdict": "minor",
+    "hot_cells": [
+      {
+        "cell": "r1c1",
+        "pct": 15.0
+      },
+      {
+        "cell": "r3c2",
+        "pct": 11.4
+      },
+      {
+        "cell": "r1c2",
+        "pct": 11.2
+      },
+      {
+        "cell": "r2c2",
+        "pct": 10.3
+      }
+    ],
+    "lo_size": [
+      1040,
+      720
+    ],
+    "bo_size": [
+      1040,
+      720
+    ]
+  }
+}

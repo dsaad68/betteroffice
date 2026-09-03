@@ -1,0 +1,560 @@
+{
+  "01": {
+    "fine_pct": 12.93,
+    "coarse_pct": 8.38,
+    "verdict": "major",
+    "hot_cells": [
+      {
+        "cell": "r3c2",
+        "pct": 30.0
+      },
+      {
+        "cell": "r3c3",
+        "pct": 28.3
+      },
+      {
+        "cell": "r2c2",
+        "pct": 25.1
+      },
+      {
+        "cell": "r2c3",
+        "pct": 17.5
+      }
+    ],
+    "lo_size": [
+      1280,
+      720
+    ],
+    "bo_size": [
+      1280,
+      720
+    ]
+  },
+  "02": {
+    "fine_pct": 14.25,
+    "coarse_pct": 0.3,
+    "verdict": "major",
+    "hot_cells": [
+      {
+        "cell": "r3c2",
+        "pct": 27.6
+      },
+      {
+        "cell": "r2c2",
+        "pct": 25.8
+      },
+      {
+        "cell": "r3c4",
+        "pct": 24.2
+      },
+      {
+        "cell": "r2c4",
+        "pct": 20.5
+      }
+    ],
+    "lo_size": [
+      1280,
+      720
+    ],
+    "bo_size": [
+      1280,
+      720
+    ]
+  },
+  "03": {
+    "fine_pct": 33.01,
+    "coarse_pct": 21.44,
+    "verdict": "major",
+    "hot_cells": [
+      {
+        "cell": "r4c1",
+        "pct": 84.5
+      },
+      {
+        "cell": "r1c1",
+        "pct": 69.9
+      },
+      {
+        "cell": "r2c1",
+        "pct": 69.6
+      },
+      {
+        "cell": "r3c1",
+        "pct": 52.1
+      }
+    ],
+    "lo_size": [
+      1280,
+      720
+    ],
+    "bo_size": [
+      1280,
+      720
+    ]
+  },
+  "04": {
+    "fine_pct": 16.16,
+    "coarse_pct": 10.03,
+    "verdict": "major",
+    "hot_cells": [
+      {
+        "cell": "r1c1",
+        "pct": 31.0
+      },
+      {
+        "cell": "r1c2",
+        "pct": 22.8
+      },
+      {
+        "cell": "r4c3",
+        "pct": 20.6
+      },
+      {
+        "cell": "r1c3",
+        "pct": 19.9
+      }
+    ],
+    "lo_size": [
+      1280,
+      720
+    ],
+    "bo_size": [
+      1280,
+      720
+    ]
+  },
+  "05": {
+    "fine_pct": 16.34,
+    "coarse_pct": 11.15,
+    "verdict": "major",
+    "hot_cells": [
+      {
+        "cell": "r1c1",
+        "pct": 31.5
+      },
+      {
+        "cell": "r1c2",
+        "pct": 28.2
+      },
+      {
+        "cell": "r1c3",
+        "pct": 21.4
+      },
+      {
+        "cell": "r4c2",
+        "pct": 20.4
+      }
+    ],
+    "lo_size": [
+      1280,
+      720
+    ],
+    "bo_size": [
+      1280,
+      720
+    ]
+  },
+  "06": {
+    "fine_pct": 14.23,
+    "coarse_pct": 11.89,
+    "verdict": "major",
+    "hot_cells": [
+      {
+        "cell": "r1c3",
+        "pct": 31.3
+      },
+      {
+        "cell": "r1c1",
+        "pct": 30.1
+      },
+      {
+        "cell": "r1c2",
+        "pct": 27.4
+      },
+      {
+        "cell": "r1c4",
+        "pct": 26.5
+      }
+    ],
+    "lo_size": [
+      1280,
+      720
+    ],
+    "bo_size": [
+      1280,
+      720
+    ]
+  },
+  "07": {
+    "fine_pct": 19.64,
+    "coarse_pct": 27.0,
+    "verdict": "major",
+    "hot_cells": [
+      {
+        "cell": "r1c1",
+        "pct": 34.0
+      },
+      {
+        "cell": "r3c1",
+        "pct": 28.4
+      },
+      {
+        "cell": "r3c2",
+        "pct": 28.3
+      },
+      {
+        "cell": "r3c3",
+        "pct": 27.8
+      }
+    ],
+    "lo_size": [
+      1280,
+      720
+    ],
+    "bo_size": [
+      1280,
+      720
+    ]
+  },
+  "08": {
+    "fine_pct": 14.32,
+    "coarse_pct": 16.36,
+    "verdict": "major",
+    "hot_cells": [
+      {
+        "cell": "r1c2",
+        "pct": 47.4
+      },
+      {
+        "cell": "r1c3",
+        "pct": 41.9
+      },
+      {
+        "cell": "r1c1",
+        "pct": 41.0
+      },
+      {
+        "cell": "r1c4",
+        "pct": 36.6
+      }
+    ],
+    "lo_size": [
+      1280,
+      720
+    ],
+    "bo_size": [
+      1280,
+      720
+    ]
+  },
+  "09": {
+    "fine_pct": 19.05,
+    "coarse_pct": 18.45,
+    "verdict": "major",
+    "hot_cells": [
+      {
+        "cell": "r1c2",
+        "pct": 49.0
+      },
+      {
+        "cell": "r1c3",
+        "pct": 45.7
+      },
+      {
+        "cell": "r1c1",
+        "pct": 42.0
+      },
+      {
+        "cell": "r1c4",
+        "pct": 38.1
+      }
+    ],
+    "lo_size": [
+      1280,
+      720
+    ],
+    "bo_size": [
+      1280,
+      720
+    ]
+  },
+  "10": {
+    "fine_pct": 10.2,
+    "coarse_pct": 15.84,
+    "verdict": "major",
+    "hot_cells": [
+      {
+        "cell": "r1c2",
+        "pct": 42.5
+      },
+      {
+        "cell": "r1c1",
+        "pct": 42.3
+      },
+      {
+        "cell": "r1c3",
+        "pct": 39.0
+      },
+      {
+        "cell": "r1c4",
+        "pct": 35.2
+      }
+    ],
+    "lo_size": [
+      1280,
+      720
+    ],
+    "bo_size": [
+      1280,
+      720
+    ]
+  },
+  "11": {
+    "fine_pct": 19.17,
+    "coarse_pct": 14.89,
+    "verdict": "major",
+    "hot_cells": [
+      {
+        "cell": "r1c2",
+        "pct": 45.4
+      },
+      {
+        "cell": "r1c1",
+        "pct": 42.5
+      },
+      {
+        "cell": "r1c3",
+        "pct": 41.3
+      },
+      {
+        "cell": "r1c4",
+        "pct": 33.2
+      }
+    ],
+    "lo_size": [
+      1280,
+      720
+    ],
+    "bo_size": [
+      1280,
+      720
+    ]
+  },
+  "12": {
+    "fine_pct": 0.61,
+    "coarse_pct": 0.0,
+    "verdict": "match",
+    "hot_cells": [
+      {
+        "cell": "r1c1",
+        "pct": 7.0
+      },
+      {
+        "cell": "r1c2",
+        "pct": 0.8
+      },
+      {
+        "cell": "r1c3",
+        "pct": 0.6
+      },
+      {
+        "cell": "r1c4",
+        "pct": 0.6
+      }
+    ],
+    "lo_size": [
+      1280,
+      720
+    ],
+    "bo_size": [
+      1280,
+      720
+    ]
+  },
+  "13": {
+    "fine_pct": 2.91,
+    "coarse_pct": 5.77,
+    "verdict": "major",
+    "hot_cells": [
+      {
+        "cell": "r2c1",
+        "pct": 14.5
+      },
+      {
+        "cell": "r2c2",
+        "pct": 11.1
+      },
+      {
+        "cell": "r2c3",
+        "pct": 10.9
+      },
+      {
+        "cell": "r2c4",
+        "pct": 6.9
+      }
+    ],
+    "lo_size": [
+      1280,
+      720
+    ],
+    "bo_size": [
+      1280,
+      720
+    ]
+  },
+  "14": {
+    "fine_pct": 1.13,
+    "coarse_pct": 1.95,
+    "verdict": "minor",
+    "hot_cells": [
+      {
+        "cell": "r2c1",
+        "pct": 12.6
+      },
+      {
+        "cell": "r2c2",
+        "pct": 2.3
+      },
+      {
+        "cell": "r1c1",
+        "pct": 0.9
+      },
+      {
+        "cell": "r1c2",
+        "pct": 0.6
+      }
+    ],
+    "lo_size": [
+      1280,
+      720
+    ],
+    "bo_size": [
+      1280,
+      720
+    ]
+  },
+  "15": {
+    "fine_pct": 15.0,
+    "coarse_pct": 10.55,
+    "verdict": "major",
+    "hot_cells": [
+      {
+        "cell": "r1c1",
+        "pct": 30.7
+      },
+      {
+        "cell": "r1c2",
+        "pct": 25.5
+      },
+      {
+        "cell": "r1c3",
+        "pct": 21.2
+      },
+      {
+        "cell": "r1c4",
+        "pct": 20.3
+      }
+    ],
+    "lo_size": [
+      1280,
+      720
+    ],
+    "bo_size": [
+      1280,
+      720
+    ]
+  },
+  "16": {
+    "fine_pct": 17.35,
+    "coarse_pct": 13.72,
+    "verdict": "major",
+    "hot_cells": [
+      {
+        "cell": "r1c1",
+        "pct": 36.8
+      },
+      {
+        "cell": "r1c2",
+        "pct": 35.1
+      },
+      {
+        "cell": "r1c3",
+        "pct": 27.2
+      },
+      {
+        "cell": "r1c4",
+        "pct": 25.8
+      }
+    ],
+    "lo_size": [
+      1280,
+      720
+    ],
+    "bo_size": [
+      1280,
+      720
+    ]
+  },
+  "17": {
+    "fine_pct": 11.57,
+    "coarse_pct": 8.2,
+    "verdict": "major",
+    "hot_cells": [
+      {
+        "cell": "r1c2",
+        "pct": 29.5
+      },
+      {
+        "cell": "r1c1",
+        "pct": 26.1
+      },
+      {
+        "cell": "r1c3",
+        "pct": 19.7
+      },
+      {
+        "cell": "r1c4",
+        "pct": 14.9
+      }
+    ],
+    "lo_size": [
+      1280,
+      720
+    ],
+    "bo_size": [
+      1280,
+      720
+    ]
+  },
+  "18": {
+    "fine_pct": 18.21,
+    "coarse_pct": 14.76,
+    "verdict": "major",
+    "hot_cells": [
+      {
+        "cell": "r2c1",
+        "pct": 56.6
+      },
+      {
+        "cell": "r4c1",
+        "pct": 54.3
+      },
+      {
+        "cell": "r3c1",
+        "pct": 53.8
+      },
+      {
+        "cell": "r1c1",
+        "pct": 39.3
+      }
+    ],
+    "lo_size": [
+      1280,
+      720
+    ],
+    "bo_size": [
+      1280,
+      720
+    ]
+  }
+}

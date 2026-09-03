@@ -1,0 +1,95 @@
+{
+  "01": {
+    "fine_pct": 2.88,
+    "coarse_pct": 0.0,
+    "verdict": "minor",
+    "hot_cells": [
+      {
+        "cell": "r2c3",
+        "pct": 12.6
+      },
+      {
+        "cell": "r2c2",
+        "pct": 11.2
+      },
+      {
+        "cell": "r2c4",
+        "pct": 10.5
+      },
+      {
+        "cell": "r2c1",
+        "pct": 8.4
+      }
+    ],
+    "lo_size": [
+      1280,
+      720
+    ],
+    "bo_size": [
+      1280,
+      720
+    ]
+  },
+  "02": {
+    "fine_pct": 3.54,
+    "coarse_pct": 5.12,
+    "verdict": "major",
+    "hot_cells": [
+      {
+        "cell": "r2c3",
+        "pct": 14.5
+      },
+      {
+        "cell": "r2c1",
+        "pct": 14.4
+      },
+      {
+        "cell": "r2c2",
+        "pct": 12.4
+      },
+      {
+        "cell": "r2c4",
+        "pct": 12.1
+      }
+    ],
+    "lo_size": [
+      1280,
+      720
+    ],
+    "bo_size": [
+      1280,
+      720
+    ]
+  },
+  "03": {
+    "fine_pct": 6.52,
+    "coarse_pct": 3.69,
+    "verdict": "minor",
+    "hot_cells": [
+      {
+        "cell": "r2c3",
+        "pct": 23.6
+      },
+      {
+        "cell": "r2c2",
+        "pct": 23.0
+      },
+      {
+        "cell": "r2c1",
+        "pct": 14.4
+      },
+      {
+        "cell": "r3c2",
+        "pct": 14.1
+      }
+    ],
+    "lo_size": [
+      1280,
+      720
+    ],
+    "bo_size": [
+      1280,
+      720
+    ]
+  }
+}

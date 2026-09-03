@@ -1,0 +1,186 @@
+{
+  "01": {
+    "ms": 1102,
+    "size": [
+      960,
+      540
+    ],
+    "skipped_images": 1
+  },
+  "02": {
+    "ms": 310,
+    "size": [
+      960,
+      540
+    ],
+    "skipped_images": 0
+  },
+  "03": {
+    "ms": 366,
+    "size": [
+      960,
+      540
+    ],
+    "skipped_images": 0
+  },
+  "04": {
+    "ms": 297,
+    "size": [
+      960,
+      540
+    ],
+    "skipped_images": 0
+  },
+  "05": {
+    "ms": 210,
+    "size": [
+      960,
+      540
+    ],
+    "skipped_images": 0
+  },
+  "06": {
+    "ms": 224,
+    "size": [
+      960,
+      540
+    ],
+    "skipped_images": 0
+  },
+  "07": {
+    "ms": 768,
+    "size": [
+      960,
+      540
+    ],
+    "skipped_images": 0
+  },
+  "08": {
+    "ms": 980,
+    "size": [
+      960,
+      540
+    ],
+    "skipped_images": 0
+  },
+  "09": {
+    "ms": 292,
+    "size": [
+      960,
+      540
+    ],
+    "skipped_images": 0
+  },
+  "10": {
+    "ms": 397,
+    "size": [
+      960,
+      540
+    ],
+    "skipped_images": 0
+  },
+  "11": {
+    "ms": 576,
+    "size": [
+      960,
+      540
+    ],
+    "skipped_images": 0
+  },
+  "12": {
+    "ms": 724,
+    "size": [
+      960,
+      540
+    ],
+    "skipped_images": 0
+  },
+  "13": {
+    "ms": 336,
+    "size": [
+      960,
+      540
+    ],
+    "skipped_images": 0
+  },
+  "14": {
+    "ms": 503,
+    "size": [
+      960,
+      540
+    ],
+    "skipped_images": 0
+  },
+  "15": {
+    "ms": 1076,
+    "size": [
+      960,
+      540
+    ],
+    "skipped_images": 0
+  },
+  "16": {
+    "ms": 434,
+    "size": [
+      960,
+      540
+    ],
+    "skipped_images": 1
+  },
+  "17": {
+    "ms": 1285,
+    "size": [
+      960,
+      540
+    ],
+    "skipped_images": 0
+  },
+  "18": {
+    "ms": 1110,
+    "size": [
+      960,
+      540
+    ],
+    "skipped_images": 0
+  },
+  "19": {
+    "ms": 287,
+    "size": [
+      960,
+      540
+    ],
+    "skipped_images": 0
+  },
+  "20": {
+    "ms": 217,
+    "size": [
+      960,
+      540
+    ],
+    "skipped_images": 0
+  },
+  "21": {
+    "ms": 169,
+    "size": [
+      960,
+      540
+    ],
+    "skipped_images": 0
+  },
+  "22": {
+    "ms": 1077,
+    "size": [
+      960,
+      540
+    ],
+    "skipped_images": 1
+  },
+  "23": {
+    "ms": 502,
+    "size": [
+      960,
+      540
+    ],
+    "skipped_images": 0
+  }
+}

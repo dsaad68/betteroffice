@@ -1,0 +1,33 @@
+{
+  "01": {
+    "fine_pct": 0.92,
+    "coarse_pct": 0.0,
+    "verdict": "match",
+    "hot_cells": [
+      {
+        "cell": "r3c2",
+        "pct": 3.2
+      },
+      {
+        "cell": "r3c3",
+        "pct": 2.0
+      },
+      {
+        "cell": "r2c3",
+        "pct": 1.6
+      },
+      {
+        "cell": "r4c2",
+        "pct": 1.3
+      }
+    ],
+    "lo_size": [
+      1280,
+      720
+    ],
+    "bo_size": [
+      1280,
+      720
+    ]
+  }
+}
