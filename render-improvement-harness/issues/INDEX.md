@@ -33,10 +33,10 @@ Generated from `clusters.json` (2026-09-03). Ordered by impact, then effort.
 | 27 | [geometry-preset-adj-values-wrong](geometry-preset-adj-values-wrong/report.md) | geometry-preset | low | easy | 1 | 1 | open |
 | 28 | [chart-legend-and-title-position-wrong](chart-legend-and-title-position-wrong/report.md) | chart | low | medium | 5 | 1 | open |
 | 29 | `chart-axis-autoscale-not-rounded` | chart | low | medium | 4 | 1 | triaged |
-| 30 | `effects-prsttxwarp-and-outershdw-ignored` | effects | low | medium | 3 | 2 | triaged |
-| 31 | [picture-blip-duotone-bilevel-not-applied](picture-blip-duotone-bilevel-not-applied/report.md) | picture | low | medium | 3 | 1 | open |
-| 32 | `chart-minimal-chart-series-axis-broken` | chart | low | medium | 3 | 1 | triaged |
-| 33 | [text-run-props-misc-property-ignored](text-run-props-misc-property-ignored/report.md) | text-run-props | low | medium | 2 | 2 | open |
+| 30 | [picture-blip-duotone-bilevel-not-applied](picture-blip-duotone-bilevel-not-applied/report.md) | picture | low | medium | 3 | 1 | open |
+| 31 | `chart-minimal-chart-series-axis-broken` | chart | low | medium | 3 | 1 | triaged |
+| 32 | [text-run-props-misc-property-ignored](text-run-props-misc-property-ignored/report.md) | text-run-props | low | medium | 2 | 2 | open |
+| 33 | [effects-prsttxwarp-and-outershdw-ignored](effects-prsttxwarp-and-outershdw-ignored/report.md) | effects | low | hard | 3 | 2 | open |
 | 34 | [unsupported-custgeom-picturefill-wordmark-not-drawn](unsupported-custgeom-picturefill-wordmark-not-drawn/report.md) | unsupported-element | low | hard | 3 | 1 | open |
 | 35 | `transform-group-child-rotation-scale-wrong` | transform | low | hard | 1 | 1 | triaged |
 
