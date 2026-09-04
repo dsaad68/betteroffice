@@ -256,6 +256,15 @@ fn parse_group(
     budget: &mut ParseBudget<'_>,
 ) -> Result<GroupShape, PptxError> {
     budget.charge_shape(part)?;
+    let own_fill = element.child("grpSpPr").and_then(parse_fill);
+    let mut children = parse_shape_children(element, relationships, part, budget)?;
+    // A group whose own fill is itself inherited leaves the markers in place for its ancestor.
+    if let Some(fill) = own_fill
+        .as_ref()
+        .filter(|fill| fill.fill_type != GROUP_FILL)
+    {
+        resolve_group_fill(&mut children, fill);
+    }
     Ok(GroupShape {
         base: parse_base(
             element.child("nvGrpSpPr"),
@@ -263,7 +272,7 @@ fn parse_group(
                 .child("grpSpPr")
                 .and_then(|value| value.child("xfrm")),
         ),
-        children: parse_shape_children(element, relationships, part, budget)?,
+        children,
     })
 }
 
@@ -579,7 +588,42 @@ fn parse_fill(element: &XmlElement) -> Option<ShapeFill> {
     if element.child("blipFill").is_some() {
         return Some(ShapeFill::named("picture"));
     }
+    if element.child("grpFill").is_some() {
+        return Some(ShapeFill::named(GROUP_FILL));
+    }
     None
+}
+
+/// Marker left by `<a:grpFill/>`: this shape takes the fill of the group that contains it.
+/// It survives until an ancestor group resolves it, so a group nested inside a filled group
+/// needs no second pass.
+const GROUP_FILL: &str = "group";
+
+fn fill_slot(node: &mut ShapeNode) -> Option<&mut Option<ShapeFill>> {
+    match node {
+        ShapeNode::Shape(shape) => Some(&mut shape.fill),
+        ShapeNode::Picture(picture) => Some(&mut picture.fill),
+        ShapeNode::GraphicFrame(_) | ShapeNode::Group(_) => None,
+    }
+}
+
+/// Hand `fill` to every descendant still waiting on `<a:grpFill/>`. Groups resolve their own
+/// children first, so a nested group that declares a fill has already claimed its subtree and
+/// only the shapes still carrying the marker are touched here.
+fn resolve_group_fill(children: &mut [ShapeNode], fill: &ShapeFill) {
+    for child in children {
+        if let Some(slot) = fill_slot(child) {
+            if slot
+                .as_ref()
+                .is_some_and(|current| current.fill_type == GROUP_FILL)
+            {
+                *slot = Some(fill.clone());
+            }
+        }
+        if let ShapeNode::Group(group) = child {
+            resolve_group_fill(&mut group.children, fill);
+        }
+    }
 }
 
 fn parse_gradient_fill(element: &XmlElement) -> ShapeFill {
@@ -952,6 +996,51 @@ mod tests {
     use super::*;
     use crate::ParseLimits;
     use crate::xml::parse_xml;
+
+    #[test]
+    fn group_fill_reaches_every_shape_that_asks_for_it() {
+        let limits = ParseLimits::default();
+        let mut budget = ParseBudget::new(&limits);
+        let root = parse_xml(
+            br#"<p:sld><p:cSld><p:spTree><p:grpSp><p:nvGrpSpPr><p:cNvPr id="10" name="Outer"/></p:nvGrpSpPr><p:grpSpPr><a:solidFill><a:schemeClr val="accent1"/></a:solidFill></p:grpSpPr><p:sp><p:nvSpPr><p:cNvPr id="11" name="Inherits"/><p:nvPr/></p:nvSpPr><p:spPr><a:grpFill/></p:spPr></p:sp><p:sp><p:nvSpPr><p:cNvPr id="12" name="Explicit none"/><p:nvPr/></p:nvSpPr><p:spPr><a:noFill/></p:spPr></p:sp><p:grpSp><p:nvGrpSpPr><p:cNvPr id="13" name="Middle"/></p:nvGrpSpPr><p:grpSpPr><a:grpFill/></p:grpSpPr><p:sp><p:nvSpPr><p:cNvPr id="14" name="Two levels up"/><p:nvPr/></p:nvSpPr><p:spPr><a:grpFill/></p:spPr></p:sp></p:grpSp><p:grpSp><p:nvGrpSpPr><p:cNvPr id="15" name="Own fill"/></p:nvGrpSpPr><p:grpSpPr><a:solidFill><a:srgbClr val="FF0000"/></a:solidFill></p:grpSpPr><p:sp><p:nvSpPr><p:cNvPr id="16" name="Nearest wins"/><p:nvPr/></p:nvSpPr><p:spPr><a:grpFill/></p:spPr></p:sp></p:grpSp></p:grpSp></p:spTree></p:cSld></p:sld>"#,
+            "ppt/slides/slide1.xml",
+            &mut budget,
+        )
+        .unwrap();
+        let data = common_slide_data(&root, &[], "ppt/slides/slide1.xml", &mut budget).unwrap();
+        let ShapeNode::Group(outer) = &data.shapes[0] else {
+            panic!("expected a group");
+        };
+
+        let fill_of = |node: &ShapeNode| match node {
+            ShapeNode::Shape(shape) => shape.fill.clone(),
+            _ => panic!("expected a shape"),
+        };
+
+        // A direct child takes the group's own fill.
+        let inherited = fill_of(&outer.children[0]).expect("the child should have a fill");
+        assert_eq!(inherited.fill_type, "solid");
+        assert_eq!(
+            inherited.color.as_ref().unwrap().theme_color.as_deref(),
+            Some("accent1")
+        );
+
+        // An explicit noFill is left alone.
+        assert_eq!(fill_of(&outer.children[1]).unwrap().fill_type, "none");
+
+        // A group that inherits passes the fill down to its own children.
+        let ShapeNode::Group(middle) = &outer.children[2] else {
+            panic!("expected a nested group");
+        };
+        assert_eq!(fill_of(&middle.children[0]), Some(inherited));
+
+        // The nearest ancestor that declares a fill wins.
+        let ShapeNode::Group(own) = &outer.children[3] else {
+            panic!("expected a nested group");
+        };
+        let nearest = fill_of(&own.children[0]).expect("the child should have a fill");
+        assert_eq!(nearest.color.as_ref().unwrap().rgb.as_deref(), Some("FF0000"));
+    }
 
     #[test]
     fn parses_text_formatting_and_nested_shape_types() {
