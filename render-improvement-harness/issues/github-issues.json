@@ -31,6 +31,15 @@
     "state": "pr-open",
     "url": "https://github.com/openooxml/betteroffice/issues/268"
   },
+  "line-arrowheads-not-drawn": {
+    "branch": "fix/pptx-line-arrowheads",
+    "note": "raster half held on fix/pptx-line-arrowheads-full until pull request 264 lands",
+    "number": 280,
+    "pr": 281,
+    "pr_url": "https://github.com/openooxml/betteroffice/pull/281",
+    "state": "pr-open",
+    "url": "https://github.com/openooxml/betteroffice/issues/280"
+  },
   "line-zero-extent-skipped": {
     "branch": "fix/pptx-connectors",
     "number": 272,
