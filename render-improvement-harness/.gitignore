@@ -9,3 +9,9 @@ findings.jsonl
 
 # Per-attempt verification artifacts from verify_fix.py.
 issues/*/verify/
+
+# Renders of third-party decks are never published: two of the sample decks are marked
+# confidential and all of them are copyrighted works.
+issues/*/evidence-*.png
+issues/*/pr/
+**/*.png
