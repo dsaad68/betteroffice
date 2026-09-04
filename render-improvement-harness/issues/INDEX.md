@@ -22,23 +22,24 @@ Generated from `clusters.json` (2026-09-03). Ordered by impact, then effort.
 | 16 | [text-run-props-solidfill-scope-bug](text-run-props-solidfill-scope-bug/report.md) | text-run-props | medium | easy | 6 | 2 | open |
 | 17 | [chart-dlbls-shown-when-disabled](chart-dlbls-shown-when-disabled/report.md) | chart | medium | easy | 4 | 1 | open |
 | 18 | [chart-category-order-reversed](chart-category-order-reversed/report.md) | chart | medium | easy | 3 | 1 | open |
-| 19 | [text-font-substitution-issues](text-font-substitution-issues/report.md) | text-font | medium | medium | 8 | 1 | open |
-| 20 | [text-layout-master-lnspc-ignored](text-layout-master-lnspc-ignored/report.md) | text-layout | medium | medium | 7 | 1 | open |
-| 21 | [transform-text-orientation-wrong-under-rotation](transform-text-orientation-wrong-under-rotation/report.md) | transform | medium | medium | 7 | 2 | open |
-| 22 | [fill-nonsolid-fill-types-not-resolved](fill-nonsolid-fill-types-not-resolved/report.md) | fill | medium | medium | 6 | 3 | open |
-| 23 | [text-run-props-spc-ignored](text-run-props-spc-ignored/report.md) | text-run-props | medium | medium | 5 | 4 | open |
-| 24 | [text-bullets-autonum-not-drawn](text-bullets-autonum-not-drawn/report.md) | text-bullets | medium | medium | 5 | 1 | open |
-| 25 | [line-stroke-color-resolution-broken](line-stroke-color-resolution-broken/report.md) | connector | medium | medium | 4 | 1 | open |
-| 26 | [chart-axis-position-swapped](chart-axis-position-swapped/report.md) | chart | medium | medium | 4 | 1 | open |
-| 27 | [geometry-preset-adj-values-wrong](geometry-preset-adj-values-wrong/report.md) | geometry-preset | low | easy | 1 | 1 | open |
-| 28 | [transform-group-child-rotation-scale-wrong](transform-group-child-rotation-scale-wrong/report.md) | transform | low | easy | 1 | 1 | duplicate |
-| 29 | [chart-legend-and-title-position-wrong](chart-legend-and-title-position-wrong/report.md) | chart | low | medium | 5 | 1 | open |
-| 30 | [chart-axis-autoscale-not-rounded](chart-axis-autoscale-not-rounded/report.md) | chart | low | medium | 4 | 1 | open |
-| 31 | [picture-blip-duotone-bilevel-not-applied](picture-blip-duotone-bilevel-not-applied/report.md) | picture | low | medium | 3 | 1 | open |
-| 32 | [chart-minimal-chart-series-axis-broken](chart-minimal-chart-series-axis-broken/report.md) | chart | low | medium | 3 | 1 | open |
-| 33 | [text-run-props-misc-property-ignored](text-run-props-misc-property-ignored/report.md) | text-run-props | low | medium | 2 | 2 | open |
-| 34 | [effects-prsttxwarp-and-outershdw-ignored](effects-prsttxwarp-and-outershdw-ignored/report.md) | effects | low | hard | 3 | 2 | open |
-| 35 | [unsupported-custgeom-picturefill-wordmark-not-drawn](unsupported-custgeom-picturefill-wordmark-not-drawn/report.md) | unsupported-element | low | hard | 3 | 1 | open |
+| 19 | [line-arrowheads-not-drawn](line-arrowheads-not-drawn/report.md) | line | medium | medium | 18 | 3 | open |
+| 20 | [text-font-substitution-issues](text-font-substitution-issues/report.md) | text-font | medium | medium | 8 | 1 | open |
+| 21 | [text-layout-master-lnspc-ignored](text-layout-master-lnspc-ignored/report.md) | text-layout | medium | medium | 7 | 1 | open |
+| 22 | [transform-text-orientation-wrong-under-rotation](transform-text-orientation-wrong-under-rotation/report.md) | transform | medium | medium | 7 | 2 | open |
+| 23 | [fill-nonsolid-fill-types-not-resolved](fill-nonsolid-fill-types-not-resolved/report.md) | fill | medium | medium | 6 | 3 | open |
+| 24 | [text-run-props-spc-ignored](text-run-props-spc-ignored/report.md) | text-run-props | medium | medium | 5 | 4 | open |
+| 25 | [text-bullets-autonum-not-drawn](text-bullets-autonum-not-drawn/report.md) | text-bullets | medium | medium | 5 | 1 | open |
+| 26 | [line-stroke-color-resolution-broken](line-stroke-color-resolution-broken/report.md) | connector | medium | medium | 4 | 1 | open |
+| 27 | [chart-axis-position-swapped](chart-axis-position-swapped/report.md) | chart | medium | medium | 4 | 1 | open |
+| 28 | [geometry-preset-adj-values-wrong](geometry-preset-adj-values-wrong/report.md) | geometry-preset | low | easy | 1 | 1 | open |
+| 29 | [transform-group-child-rotation-scale-wrong](transform-group-child-rotation-scale-wrong/report.md) | transform | low | easy | 1 | 1 | duplicate |
+| 30 | [chart-legend-and-title-position-wrong](chart-legend-and-title-position-wrong/report.md) | chart | low | medium | 5 | 1 | open |
+| 31 | [chart-axis-autoscale-not-rounded](chart-axis-autoscale-not-rounded/report.md) | chart | low | medium | 4 | 1 | open |
+| 32 | [picture-blip-duotone-bilevel-not-applied](picture-blip-duotone-bilevel-not-applied/report.md) | picture | low | medium | 3 | 1 | open |
+| 33 | [chart-minimal-chart-series-axis-broken](chart-minimal-chart-series-axis-broken/report.md) | chart | low | medium | 3 | 1 | open |
+| 34 | [text-run-props-misc-property-ignored](text-run-props-misc-property-ignored/report.md) | text-run-props | low | medium | 2 | 2 | open |
+| 35 | [effects-prsttxwarp-and-outershdw-ignored](effects-prsttxwarp-and-outershdw-ignored/report.md) | effects | low | hard | 3 | 2 | open |
+| 36 | [unsupported-custgeom-picturefill-wordmark-not-drawn](unsupported-custgeom-picturefill-wordmark-not-drawn/report.md) | unsupported-element | low | hard | 3 | 1 | open |
 
 ## Deferred
 

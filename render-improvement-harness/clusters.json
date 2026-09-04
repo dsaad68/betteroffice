@@ -1293,6 +1293,40 @@
         "crates/pptx-parse/src/drawing.rs",
         "crates/pptx-render/src/layout.rs"
       ]
+    },
+    {
+      "id": "line-arrowheads-not-drawn",
+      "title": "Line arrowheads are parsed and never drawn",
+      "category": "line",
+      "impact": "medium",
+      "effort": "medium",
+      "confidence": "high",
+      "occurrences": 18,
+      "decks": [
+        "cisco-cloud-security",
+        "project17",
+        "project20"
+      ],
+      "findings": [
+        "project20/04/a1",
+        "cisco-cloud-security/11/a1",
+        "cisco-cloud-security/07/a1",
+        "cisco-cloud-security/04/a1",
+        "cisco-cloud-security/19/a1",
+        "project17/04/a1"
+      ],
+      "files": [
+        "crates/pptx-render/src/layout.rs",
+        "crates/pptx-render/src/display_list.rs",
+        "crates/pptx-raster/src/lib.rs",
+        "packages/pptx/src/types.ts",
+        "packages/pptx/src/render/canvas.ts"
+      ],
+      "symptom": "A line that ends in an arrow is drawn as a bare line; the ends are parsed and consumed by nothing.",
+      "evidence": [
+        "project20/04",
+        "cisco-cloud-security/11"
+      ]
     }
   ],
   "deferred": [
