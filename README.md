@@ -23,8 +23,11 @@ customer material.
 | `tpl-modern-business-infographic-presentation` | Modern Business Infographic (PowerPoint School) | PowerPoint School |
 | `tpl-attractive-presentation-slide-animation-by-s` | Attractive Presentation Slide with animation (PowerPoint School) | PowerPoint School |
 | `tpl-write-and-quote-slide-business-presentation` | Quote Slide for Business Presentation (PowerPoint School) | PowerPoint School |
+| `cc-durand` | student presentation on Jean-Nicolas-Louis Durand, by Mayank | [Internet Archive](https://archive.org/details/jeannicolaslouisdurand), Public Domain Mark 1.0 |
 
-Deck files are not redistributed here; only the renders are.
+Deck files are not redistributed here; only the renders are. The one non-template deck,
+`cc-durand`, appears as a tight crop of a Durand engraving — a 19th-century work in the public
+domain — chosen so no part of the slide carrying the author's name or student number is shown.
 
 ## Test corpora used locally
 
