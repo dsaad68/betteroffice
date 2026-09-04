@@ -1,0 +1,18 @@
+# Gitignored files worth carrying into a new worktree (see `wt step copy-ignored`).
+# A file is copied only if it is BOTH gitignored AND matched here.
+
+# Rust build cache: makes the first `maturin develop` in the worktree incremental
+# instead of a cold build of the whole dependency graph.
+target/
+
+# Python environment: pillow, numpy, pyyaml and maturin, so setup works offline.
+# The binding inside it points at the primary worktree and is relinked by the
+# post-start hook; see scripts/setup_worktree.sh.
+.venv/
+
+# Harness inputs that cannot be re-derived from the repository.
+# Source decks are third-party and deliberately untracked.
+render-improvement-harness/decks/*/source.pptx
+# LibreOffice reference renders: slow to regenerate, and the harness compares
+# against them rather than reproducing them, so reuse keeps runs comparable.
+render-improvement-harness/decks/*/lo-img/
