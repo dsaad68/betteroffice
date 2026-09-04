@@ -1,6 +1,10 @@
 {
   "text-run-props-bold-ignored": {
+    "branch": "fix/pptx-font-fallback-style",
     "number": 266,
+    "pr": 267,
+    "pr_url": "https://github.com/openooxml/betteroffice/pull/267",
+    "state": "pr-open",
     "url": "https://github.com/openooxml/betteroffice/issues/266"
   }
 }
