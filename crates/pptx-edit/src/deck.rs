@@ -110,6 +110,7 @@ fn seed_shape(
     shape_map.insert(txn, "rotationDeg", base.transform.rotation_deg);
     shape_map.insert(txn, "flipH", base.transform.flip_h);
     shape_map.insert(txn, "flipV", base.transform.flip_v);
+    shape_map.insert(txn, "hidden", base.hidden);
     insert_json(
         &shape_map,
         txn,
@@ -895,6 +896,7 @@ fn snapshot_shape<T: ReadTxn>(
         rotation_deg: map_number(&shape, txn, "rotationDeg").unwrap_or_default(),
         flip_h: map_bool(&shape, txn, "flipH").unwrap_or_default(),
         flip_v: map_bool(&shape, txn, "flipV").unwrap_or_default(),
+        hidden: map_bool(&shape, txn, "hidden").unwrap_or_default(),
         geometry: required_string(&shape, txn, "geometry")?,
         adjust_values: optional_json(&shape, txn, "adjustValuesJson")?.unwrap_or_default(),
         placeholder: optional_json(&shape, txn, "placeholderJson")?,

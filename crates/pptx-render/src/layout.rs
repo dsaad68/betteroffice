@@ -412,6 +412,9 @@ impl<'a> LayoutBuilder<'a> {
         space: Space,
     ) -> Result<(), RenderError> {
         self.charge_shape()?;
+        if shape.hidden {
+            return Ok(());
+        }
         let original = (shape.source_id != 0)
             .then(|| {
                 self.parsed_slide
@@ -2974,6 +2977,62 @@ mod tests {
     }
 
     #[test]
+    fn a_hidden_slide_shape_is_not_painted() {
+        let package = pptx_parse::parse_pptx(FIXTURE).unwrap();
+        let session = DeckSession::open(FIXTURE, 8_101).unwrap();
+        let mut snapshot = session.snapshot().unwrap();
+
+        let before = renderer().layout_slide(&package, &snapshot, 0).unwrap();
+        let index = snapshot.slides[0]
+            .shapes
+            .iter()
+            .position(|shape| shape.children.is_empty())
+            .expect("the fixture has a leaf shape on its first slide");
+        let hidden_id = snapshot.slides[0].shapes[index].id.clone();
+        assert!(before.hit_regions.iter().any(|region| region.shape_id == hidden_id));
+
+        snapshot.slides[0].shapes[index].hidden = true;
+        let after = renderer().layout_slide(&package, &snapshot, 0).unwrap();
+
+        assert!(after.display_list.primitives.len() < before.display_list.primitives.len());
+        assert!(!after.hit_regions.iter().any(|region| region.shape_id == hidden_id));
+    }
+
+    #[test]
+    fn a_hidden_group_takes_its_children_with_it() {
+        let package = pptx_parse::parse_pptx(FIXTURE).unwrap();
+        let session = DeckSession::open(FIXTURE, 8_102).unwrap();
+        let mut snapshot = session.snapshot().unwrap();
+
+        let group = snapshot
+            .slides
+            .iter()
+            .enumerate()
+            .find_map(|(slide, snap)| {
+                snap.shapes
+                    .iter()
+                    .position(|shape| !shape.children.is_empty())
+                    .map(|index| (slide, index))
+            });
+        let (slide, index) = group.expect("the fixture has a grouped shape");
+        let child_ids: Vec<String> = snapshot.slides[slide].shapes[index]
+            .children
+            .iter()
+            .map(|child| child.id.clone())
+            .collect();
+
+        snapshot.slides[slide].shapes[index].hidden = true;
+        let after = renderer().layout_slide(&package, &snapshot, slide).unwrap();
+
+        for child in &child_ids {
+            assert!(
+                !after.hit_regions.iter().any(|region| &region.shape_id == child),
+                "child {child} of a hidden group was still drawn"
+            );
+        }
+    }
+
+    #[test]
     fn hit_testing_a_rotated_shape_follows_its_painted_frame() {
         let slide = |transform| RenderedSlide {
             display_list: SurfaceDisplayList {
@@ -3478,6 +3537,7 @@ mod tests {
             rotation_deg: 0.0,
             flip_h: false,
             flip_v: false,
+            hidden: false,
             geometry: "rect".to_owned(),
             adjust_values: BTreeMap::new(),
             placeholder: Some(title.clone()),

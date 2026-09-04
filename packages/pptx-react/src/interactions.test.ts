@@ -259,6 +259,7 @@ function shape(id: string, x: number, y: number, width: number, height: number):
     rotationDeg: 0,
     flipH: false,
     flipV: false,
+    hidden: false,
     geometry: 'rect',
     adjustValues: {},
     placeholder: null,

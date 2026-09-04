@@ -108,6 +108,8 @@ pub struct ShapeSnapshot {
     pub rotation_deg: f64,
     pub flip_h: bool,
     pub flip_v: bool,
+    /// `p:cNvPr/@hidden`. A hidden shape is not painted and takes its subtree with it.
+    pub hidden: bool,
     pub geometry: String,
     pub adjust_values: BTreeMap<String, f64>,
     pub placeholder: Option<Placeholder>,
