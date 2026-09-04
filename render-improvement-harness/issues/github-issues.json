@@ -15,6 +15,14 @@
     "state": "pr-open",
     "url": "https://github.com/openooxml/betteroffice/issues/268"
   },
+  "line-zero-extent-skipped": {
+    "branch": "fix/pptx-connectors",
+    "number": 272,
+    "pr": 273,
+    "pr_url": "https://github.com/openooxml/betteroffice/pull/273",
+    "state": "pr-open",
+    "url": "https://github.com/openooxml/betteroffice/issues/272"
+  },
   "text-run-props-bold-ignored": {
     "branch": "fix/pptx-font-fallback-style",
     "number": 266,
