@@ -383,6 +383,52 @@ impl Painter<'_, '_> {
         }
         if let Some(stroke) = stroke {
             self.stroke_path(&path, stroke, transform, clip)?;
+            self.paint_line_ends(commands, x, y, w, h, stroke, transform, clip)?;
+        }
+        Ok(())
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn paint_line_ends(
+        &mut self,
+        commands: &[GeometryPathCommand],
+        x: f32,
+        y: f32,
+        w: f32,
+        h: f32,
+        stroke: &SlideStroke,
+        transform: Transform,
+        clip: Option<&Mask>,
+    ) -> Result<(), String> {
+        if stroke.head_end.is_none() && stroke.tail_end.is_none() {
+            return Ok(());
+        }
+        let points = path_points(commands, x, y, w, h);
+        if points.len() < 2 {
+            return Ok(());
+        }
+        let Some(color) = parse_hex_color(stroke.color.trim_start_matches('#')) else {
+            return Ok(());
+        };
+        let mut paint = Paint::default();
+        paint.set_color(color);
+        paint.anti_alias = true;
+        let width = stroke.width.max(0.5);
+        let ends = [
+            (stroke.head_end.as_deref(), points[1], points[0]),
+            (
+                stroke.tail_end.as_deref(),
+                points[points.len() - 2],
+                points[points.len() - 1],
+            ),
+        ];
+        for (kind, from, tip) in ends {
+            let Some(kind) = kind else { continue };
+            let Some(mark) = line_end_path(kind, from, tip, width) else {
+                continue;
+            };
+            self.pixmap
+                .fill_path(&mark, &paint, FillRule::Winding, transform, clip);
         }
         Ok(())
     }
@@ -572,6 +618,59 @@ fn frame_rect(x: f32, y: f32, w: f32, h: f32) -> Result<Rect, String> {
 /// Geometry commands are fractions of the primitive's box, so each coordinate
 /// scales by the box before it is placed — the same mapping `buildPath` does in
 /// the canvas backend.
+/// The on-path anchor points, in the order the path visits them, so a line end can be placed
+/// at the first and last and oriented along the segment that reaches it.
+fn path_points(
+    commands: &[GeometryPathCommand],
+    x: f32,
+    y: f32,
+    w: f32,
+    h: f32,
+) -> Vec<(f32, f32)> {
+    let px = |value: f64| x + value as f32 * w;
+    let py = |value: f64| y + value as f32 * h;
+    commands
+        .iter()
+        .filter_map(|command| match *command {
+            GeometryPathCommand::Move { x, y }
+            | GeometryPathCommand::Line { x, y }
+            | GeometryPathCommand::Quad { x, y, .. }
+            | GeometryPathCommand::Cubic { x, y, .. } => Some((px(x), py(y))),
+            GeometryPathCommand::Close => None,
+        })
+        .collect()
+}
+
+fn line_end_path(kind: &str, from: (f32, f32), tip: (f32, f32), width: f32) -> Option<Path> {
+    let (dx, dy) = (tip.0 - from.0, tip.1 - from.1);
+    let length = (dx * dx + dy * dy).sqrt();
+    if length < f32::EPSILON {
+        return None;
+    }
+    let (ux, uy) = (dx / length, dy / length);
+    let mut builder = PathBuilder::new();
+    match kind {
+        "triangle" | "arrow" | "stealth" | "diamond" => {
+            let reach = width * 3.0;
+            let half = width * 1.5;
+            let (bx, by) = (tip.0 - ux * reach, tip.1 - uy * reach);
+            builder.move_to(tip.0, tip.1);
+            builder.line_to(bx - uy * half, by + ux * half);
+            if kind == "diamond" {
+                builder.line_to(tip.0 - ux * reach * 2.0, tip.1 - uy * reach * 2.0);
+            }
+            builder.line_to(bx + uy * half, by - ux * half);
+            builder.close();
+        }
+        "oval" => {
+            let radius = width * 1.5;
+            builder.push_circle(tip.0, tip.1, radius);
+        }
+        _ => return None,
+    }
+    builder.finish()
+}
+
 fn geometry_path(commands: &[GeometryPathCommand], x: f32, y: f32, w: f32, h: f32) -> Option<Path> {
     if commands.is_empty() {
         return None;
