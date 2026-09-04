@@ -16,7 +16,7 @@ pub fn preset_geometry_default_adjustments(shape_type: &str) -> HashMap<String, 
         "rightArrow" | "leftArrow" | "upArrow" | "downArrow" => {
             vec![("adj1", 0.5), ("adj2", 0.5)]
         }
-        "chevron" => vec![("adj", 0.35)],
+        "chevron" | "homePlate" => vec![("adj", 0.5)],
         value
             if value
                 .strip_prefix("star")
@@ -197,17 +197,32 @@ pub fn preset_geometry_to_path(
             (0.0, 0.25),
         ]),
         "chevron" => {
-            let adjustment = clamp_fraction(adjustments.get("adj").copied(), 0.35).min(0.5);
+            let notch = shortest_side_fraction(
+                clamp_fraction(adjustments.get("adj").copied(), 0.5).min(0.5),
+                aspect_ratio,
+            );
             polygon(&[
                 (0.0, 0.0),
-                (1.0 - adjustment, 0.0),
+                (1.0 - notch, 0.0),
                 (1.0, 0.5),
-                (1.0 - adjustment, 1.0),
+                (1.0 - notch, 1.0),
                 (0.0, 1.0),
-                (adjustment, 0.5),
+                (notch, 0.5),
             ])
         }
-        "homePlate" => polygon(&[(0.0, 0.0), (0.75, 0.0), (1.0, 0.5), (0.75, 1.0), (0.0, 1.0)]),
+        "homePlate" => {
+            let point = shortest_side_fraction(
+                clamp_fraction(adjustments.get("adj").copied(), 0.5).min(0.5),
+                aspect_ratio,
+            );
+            polygon(&[
+                (0.0, 0.0),
+                (1.0 - point, 0.0),
+                (1.0, 0.5),
+                (1.0 - point, 1.0),
+                (0.0, 1.0),
+            ])
+        }
         "flowChartProcess"
         | "flowChartAlternateProcess"
         | "flowChartPredefinedProcess"
@@ -227,6 +242,18 @@ pub fn preset_geometry_to_path(
         _ => return None,
     };
     Some(result)
+}
+
+/// An adjust value is a fraction of the shape's *shortest side*, not of its width. Express it
+/// as a fraction of the width, which is the space the path is drawn in, so a wide banner gets
+/// a shallow notch instead of one scaled to its length.
+fn shortest_side_fraction(adjustment: f64, aspect_ratio: f64) -> f64 {
+    let aspect_ratio = if aspect_ratio.is_finite() && aspect_ratio > 0.0 {
+        aspect_ratio
+    } else {
+        1.0
+    };
+    adjustment / aspect_ratio.max(1.0)
 }
 
 fn rounded_rect(aspect_ratio: f64, adjustment: f64) -> Vec<GeometryPathCommand> {
@@ -443,6 +470,53 @@ mod tests {
             panic!("round rectangle must curve its first corner");
         };
         (rx, ry)
+    }
+
+    /// The x of the first line command, which is where a chevron's or home plate's leading
+    /// edge stops before the point begins.
+    fn leading_edge(shape: &str, adjust: Option<f64>, aspect_ratio: f64) -> f64 {
+        let mut adjustments = HashMap::new();
+        if let Some(value) = adjust {
+            adjustments.insert("adj".to_owned(), value);
+        }
+        let path = preset_geometry_to_path(shape, &adjustments, aspect_ratio).unwrap();
+        let GeometryPathCommand::Line { x, .. } = path[1] else {
+            panic!("expected a line after the opening move");
+        };
+        x
+    }
+
+    #[test]
+    fn an_adjust_value_is_a_fraction_of_the_shortest_side() {
+        // On a square the shortest side is the width, so the notch is the adjust value itself.
+        assert_close(1.0 - leading_edge("chevron", Some(0.5), 1.0), 0.5);
+
+        // On the banner measured in the report, 171.3 x 55.6, the notch must be half the
+        // height expressed against the width, not half the width.
+        let aspect = 171.3 / 55.6;
+        assert_close(1.0 - leading_edge("chevron", Some(0.5), aspect), 0.5 / aspect);
+
+        // Home plate takes the same adjust value, and used to ignore it entirely.
+        assert_close(1.0 - leading_edge("homePlate", Some(0.5), 1.0), 0.5);
+        let aspect = 280.9 / 37.5;
+        assert_close(1.0 - leading_edge("homePlate", Some(0.5), aspect), 0.5 / aspect);
+        assert_close(
+            1.0 - leading_edge("homePlate", Some(0.25), aspect),
+            0.25 / aspect,
+        );
+    }
+
+    #[test]
+    fn chevron_and_home_plate_default_to_half_the_shortest_side() {
+        for shape in ["chevron", "homePlate"] {
+            assert_eq!(
+                preset_geometry_default_adjustments(shape).get("adj").copied(),
+                Some(0.5),
+                "{shape} must default to the value the spec gives it"
+            );
+            let aspect = 4.0;
+            assert_close(1.0 - leading_edge(shape, None, aspect), 0.5 / aspect);
+        }
     }
 
     fn assert_close(actual: f64, expected: f64) {
