@@ -199,11 +199,23 @@ pub struct Shape {
     #[serde(flatten)]
     pub base: ShapeBase,
     pub geometry: String,
+    /// `p:style`, the shape's own defaults for text and outline.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub style: Option<ShapeStyle>,
     #[serde(default)]
     pub adjust_values: BTreeMap<String, f64>,
     pub fill: Option<ShapeFill>,
     pub outline: Option<ShapeOutline>,
     pub text: Option<TextBody>,
+}
+
+/// `p:style`. Only the parts the renderer reads are kept.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ShapeStyle {
+    /// `a:fontRef`, the shape's default text colour.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub font_color: Option<ColorValue>,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]

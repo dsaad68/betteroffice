@@ -2,7 +2,7 @@ use std::collections::{BTreeMap, HashMap, HashSet};
 
 use ooxml_drawingml::chart::PlotRect;
 use ooxml_drawingml::{
-    ShapeFill, ShapeOutline, Theme, preset_geometry_to_path, resolve_color_value_to_hex_with_theme,
+    ColorValue, ShapeFill, ShapeOutline, Theme, preset_geometry_to_path, resolve_color_value_to_hex_with_theme,
     resolve_theme_font_ref,
 };
 use ooxml_text::{CompatFlags, FontId, FontStore, break_opportunities, shape, single_line_box};
@@ -452,6 +452,7 @@ impl<'a> LayoutBuilder<'a> {
                 transform,
                 content,
                 body_cascade,
+                shape_style_color(original),
             )?)
         } else {
             None
@@ -563,6 +564,7 @@ impl<'a> LayoutBuilder<'a> {
                     master_slide: self.master,
                     placeholder: base.placeholder.as_ref(),
                 },
+                shape_style_color(Some(shape)),
             )?)
         } else {
             None
@@ -650,8 +652,10 @@ impl<'a> LayoutBuilder<'a> {
         transform: Transform,
         content: TextContent,
         cascade: BodyCascade<'_>,
+        style_color: Option<&ColorValue>,
     ) -> Result<TextHit, RenderError> {
-        let resolved = resolve_content(self.renderer, self.theme, &content, cascade)?;
+        let resolved =
+            resolve_content(self.renderer, self.theme, &content, cascade, style_color)?;
         let left = cascade.inset_left().unwrap_or(DEFAULT_INSET_HORIZONTAL_EMU);
         let right = cascade
             .inset_right()
@@ -924,6 +928,7 @@ fn resolve_content(
     theme: &Theme,
     content: &TextContent,
     cascade: BodyCascade<'_>,
+    style_color: Option<&ColorValue>,
 ) -> Result<ResolvedContent, RenderError> {
     let total_bytes = content
         .paragraphs
@@ -957,8 +962,13 @@ fn resolve_content(
         let properties = cascade.paragraph_properties(index, paragraph.level);
         let mut runs = Vec::with_capacity(paragraph.runs.len().max(1));
         for run in &paragraph.runs {
-            let style =
-                resolve_style(renderer, theme, &run.style, properties.default_run.as_ref())?;
+            let style = resolve_style(
+                renderer,
+                theme,
+                &run.style,
+                properties.default_run.as_ref(),
+                style_color,
+            )?;
             let start = story_offset;
             story_offset = story_offset.saturating_add(utf16_len(&run.text));
             runs.push(ResolvedRun {
@@ -976,6 +986,7 @@ fn resolve_content(
                     theme,
                     &TextStyle::default(),
                     properties.default_run.as_ref(),
+                    style_color,
                 )?,
             });
         }
@@ -1000,6 +1011,7 @@ fn resolve_style(
     theme: &Theme,
     direct: &TextStyle,
     fallback: Option<&RunProperties>,
+    style_color: Option<&ColorValue>,
 ) -> Result<ResolvedStyle, RenderError> {
     let bold = direct
         .bold
@@ -1027,11 +1039,14 @@ fn resolve_style(
         })
         .unwrap_or_else(|| resolve_theme_font_ref(Some(theme), "+mn-lt"));
     let face = renderer.resolve_face(&family, bold, italic)?;
+    // p:style belongs to the shape, so it outranks the document-wide default the cascade
+    // supplies, but never an explicit colour on the run.
     let color = direct
         .color
         .as_deref()
         .filter(|color| valid_color(color))
         .map(str::to_owned)
+        .or_else(|| resolve_color_value_to_hex_with_theme(style_color, Some(theme)))
         .or_else(|| {
             fallback.and_then(|value| {
                 resolve_color_value_to_hex_with_theme(value.color.as_ref(), Some(theme))
@@ -1915,6 +1930,13 @@ fn paint(fill: &ShapeFill, theme: &Theme) -> Option<Paint> {
         .map(|color| Paint::Solid { color })
 }
 
+fn shape_style_color(shape: Option<&ShapeNode>) -> Option<&ColorValue> {
+    match shape? {
+        ShapeNode::Shape(shape) => shape.style.as_ref()?.font_color.as_ref(),
+        _ => None,
+    }
+}
+
 fn stroke(outline: &ShapeOutline, theme: &Theme) -> Option<Stroke> {
     let color = resolve_color_value_to_hex_with_theme(outline.color.as_ref(), Some(theme))?;
     Some(Stroke {
@@ -2528,6 +2550,7 @@ mod tests {
             children: Vec::new(),
         };
         let layout_shape = ShapeNode::Shape(pptx_parse::Shape {
+            style: None,
             base: pptx_parse::ShapeBase {
                 id: 2,
                 name: "Layout title".to_owned(),
