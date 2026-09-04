@@ -1,4 +1,12 @@
 {
+  "fill-alpha-modifier-ignored": {
+    "branch": "fix/pptx-fill-alpha",
+    "number": 274,
+    "pr": 275,
+    "pr_url": "https://github.com/openooxml/betteroffice/pull/275",
+    "state": "pr-open",
+    "url": "https://github.com/openooxml/betteroffice/issues/274"
+  },
   "fill-grpfill-not-resolved": {
     "branch": "fix/pptx-grpfill",
     "number": 270,
