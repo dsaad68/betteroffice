@@ -680,7 +680,10 @@ impl Prefixes {
 // --- slide patching ---------------------------------------------------------
 
 fn is_shape_element(local: &str) -> bool {
-    matches!(local, "sp" | "pic" | "graphicFrame" | "grpSp")
+    // Must list exactly what parse_shape_children accepts: a shape's id encodes its ordinal
+    // among these elements, and the save path resolves that ordinal against this filter. A
+    // mismatch silently writes edits into the wrong element.
+    matches!(local, "sp" | "cxnSp" | "pic" | "graphicFrame" | "grpSp")
 }
 
 fn patch_slide(
@@ -1848,4 +1851,26 @@ fn slide_relationships_xml(part_path: &str, layout_part_path: &str) -> Vec<u8> {
                 .with_attribute("Target", relative_target(part_path, layout_part_path)),
         );
     serialize_xml(&root)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::is_shape_element;
+
+    #[test]
+    fn the_writer_recognises_exactly_what_the_parser_reads() {
+        // A shape's id encodes its ordinal among these elements, and the save path resolves
+        // that ordinal against is_shape_element. If this list ever disagrees with the one
+        // parse_shape_children dispatches on, edits are written into the wrong element from
+        // the first mismatch onwards, without any error.
+        for local in ["sp", "cxnSp", "pic", "graphicFrame", "grpSp"] {
+            assert!(
+                is_shape_element(local),
+                "{local} is parsed as a shape but not recognised here"
+            );
+        }
+        for local in ["txBody", "nvGrpSpPr", "extLst"] {
+            assert!(!is_shape_element(local), "{local} is not a shape element");
+        }
+    }
 }
