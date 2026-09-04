@@ -60,7 +60,14 @@ same six lines of plot-rectangle arithmetic. The legend report says to sequence 
 ## The plan
 
 Tracks are independent of each other and can run in parallel worktrees. Within a track, order is
-mandatory. Base every branch on `main`, never on the harness branch.
+mandatory.
+
+**Base every branch on `feat/pptx-screenshot`, not on `main`.** The rasterizer the harness measures
+with is that branch, proposed upstream as pull request 264 and still open, and `crates/pptx-raster`
+does not exist on `main` at all. A branch cut from `main` cannot render a slide, so nothing could be
+verified on it. That branch carries the rasterizer and none of the harness, which is exactly the
+base a fix wants. Switch to `main` once 264 merges. Never base on the harness branch itself: it
+carries hundreds of report files that must not reach a pull request.
 
 ### Track A — parse gaps with no metric side effects
 

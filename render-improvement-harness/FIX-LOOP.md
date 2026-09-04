@@ -28,11 +28,14 @@ a deck's content is someone's real presentation.
 ### 3. Create the worktree
 
 ```
-wt switch --create fix/pptx-<slug> --base main
+wt switch --create fix/pptx-<slug> --base feat/pptx-screenshot
 ```
 
-Base on `main`, never on the harness branch, which carries hundreds of report files that must not
-appear in a pull request. The hooks copy the build cache, the Python environment and the decks,
+Base on `feat/pptx-screenshot`, not on `main`. That branch is the rasterizer, proposed upstream as
+pull request 264 and still open; `crates/pptx-raster` is absent from `main`, so a branch cut from
+`main` cannot render a slide and step 5 would have nothing to measure. It carries the rasterizer
+and none of the harness, which is what a fix wants. Move to `main` once 264 merges, and never base
+on the harness branch, which carries hundreds of report files that must not reach a pull request. The hooks copy the build cache, the Python environment and the decks,
 then rebuild the binding against the new worktree. Roughly a minute. Add `-x claude` to open an
 agent in the worktree.
 
@@ -52,9 +55,9 @@ Build, run the crate tests, then:
     --engine ~/GitHub/fork/betteroffice.fix-pptx-<slug>
 ```
 
-Run this from the harness worktree. The fix worktree is based on `main` and has no harness, so the
-decks, the reference renders and the baseline all live here while only the compiled engine comes
-from there, imported ahead of the local one.
+Run this from the harness worktree. The fix worktree carries no harness, so the decks, the
+reference renders and the baseline all live here while only the compiled engine comes from there,
+imported ahead of the local one.
 
 It re-renders just the slides the issue names and prints, per slide, the diff before the fix, the
 diff after it, and the delta. It also writes a labelled three-pane image per slide, LibreOffice
