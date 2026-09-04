@@ -1440,6 +1440,25 @@ impl PyPresentation {
         Ok(PyTransformEdit::from_core(receipt))
     }
 
+    fn set_shape_rect(
+        &self,
+        slide: &Bound<'_, PyAny>,
+        shape_id: &str,
+        x: i64,
+        y: i64,
+        width: i64,
+        height: i64,
+    ) -> PyResult<PyTransformEdit> {
+        let slide_id = self.resolve_slide_id(slide)?;
+        let receipt = self.committed(self.presentation.set_shape_rect(
+            &self.edit_ctx(),
+            &slide_id,
+            shape_id,
+            rect(x, y, width, height),
+        ))?;
+        Ok(PyTransformEdit::from_core(receipt))
+    }
+
     /// `index` is a UTF-16 offset into the story.
     #[pyo3(signature = (
         story_id, index, text, *,

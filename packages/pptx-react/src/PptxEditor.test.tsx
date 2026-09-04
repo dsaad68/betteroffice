@@ -9,9 +9,9 @@ import { afterAll, afterEach, beforeAll, describe, expect, it } from 'bun:test';
 import { readFile } from 'node:fs/promises';
 import { resolve } from 'node:path';
 import { initWasm } from '@betteroffice/pptx';
-import type { PptxFontFace } from '@betteroffice/pptx';
+import type { PptxFontFace, SlideDisplayList } from '@betteroffice/pptx';
 import type { PptxEditorApi } from './PptxEditor';
-import { PptxEditor } from './PptxEditor';
+import { paintSelection, PptxEditor, SelectionOverlay } from './PptxEditor';
 
 const root = resolve(import.meta.dir, '../../..');
 
@@ -19,7 +19,7 @@ const root = resolve(import.meta.dir, '../../..');
 // installed it may tear it down.
 const ownsDom = !GlobalRegistrator.isRegistered;
 if (ownsDom) GlobalRegistrator.register();
-const { act, cleanup, render, waitFor } = await import('@testing-library/react');
+const { act, cleanup, fireEvent, render, waitFor } = await import('@testing-library/react');
 
 let fixture: Uint8Array;
 let fontBytes: Uint8Array;
@@ -66,4 +66,149 @@ describe('PptxEditor font stability', () => {
     },
     60_000
   );
+});
+
+describe('PptxEditor caret painting', () => {
+  const frame: SlideDisplayList = {
+    contractVersion: 1,
+    width: 320,
+    height: 180,
+    primitives: [
+      {
+        kind: 'textBox',
+        objectId: 1,
+        shapeId: 'shape',
+        storyId: 'story',
+        x: 20,
+        y: 10,
+        w: 200,
+        h: 80,
+        anchor: 'top',
+        paragraphs: [],
+        lines: [
+          {
+            x: 20,
+            y: 10,
+            width: 100,
+            height: 20,
+            baseline: 25,
+            start: 0,
+            end: 5,
+            runs: [],
+            caretStops: [
+              { position: 0, x: 20 },
+              { position: 5, x: 120 },
+            ],
+          },
+          {
+            x: 20,
+            y: 40,
+            width: 100,
+            height: 20,
+            baseline: 55,
+            start: 5,
+            end: 10,
+            runs: [],
+            caretStops: [
+              { position: 5, x: 20 },
+              { position: 10, x: 120 },
+            ],
+          },
+        ],
+      },
+    ],
+  };
+
+  it('paints a shared endpoint on its visual line', () => {
+    const calls: number[][] = [];
+    const ctx = {
+      save: () => undefined,
+      restore: () => undefined,
+      setTransform: () => undefined,
+      fillRect: (...values: number[]) => calls.push(values),
+      fillStyle: '',
+    } as unknown as CanvasRenderingContext2D;
+
+    paintSelection(
+      ctx,
+      frame,
+      { shapeId: 'shape', storyId: 'story', anchor: 5, focus: 5, focusLine: 0 },
+      1,
+      1
+    );
+
+    expect(calls).toEqual([[120, 10, 1.5, 20]]);
+  });
+
+  it('stops caret blinking while blurred or hidden', async () => {
+    const originalSetInterval = window.setInterval;
+    const originalClearInterval = window.clearInterval;
+    const visibility = Object.getOwnPropertyDescriptor(document, 'visibilityState');
+    const started: number[] = [];
+    const cleared: number[] = [];
+    const active = new Set<number>();
+    window.setInterval = ((() => {
+      const id = started.length + 1;
+      started.push(id);
+      active.add(id);
+      return id;
+    }) as unknown) as typeof window.setInterval;
+    window.clearInterval = (((id?: number) => {
+      if (id !== undefined) {
+        cleared.push(id);
+        active.delete(id);
+      }
+    }) as unknown) as typeof window.clearInterval;
+    Object.defineProperty(document, 'visibilityState', {
+      configurable: true,
+      value: 'visible',
+    });
+    const selection = {
+      shapeId: 'shape',
+      storyId: 'story',
+      anchor: 5,
+      focus: 5,
+    };
+    const view = render(
+      <SelectionOverlay frame={frame} selection={selection} scale={1} focused />
+    );
+
+    try {
+      await waitFor(() => expect(started.length).toBeGreaterThan(0));
+      const focusedTimer = started[started.length - 1];
+      await act(async () => {
+        view.rerender(
+          <SelectionOverlay frame={frame} selection={selection} scale={1} focused={false} />
+        );
+      });
+      expect(cleared).toContain(focusedTimer);
+      expect(active.size).toBe(0);
+
+      const beforeRefocus = started.length;
+      await act(async () => {
+        view.rerender(
+          <SelectionOverlay frame={frame} selection={selection} scale={1} focused />
+        );
+      });
+      expect(started.length).toBeGreaterThan(beforeRefocus);
+      expect(active.size).toBe(1);
+
+      const visibleTimer = started[started.length - 1];
+      Object.defineProperty(document, 'visibilityState', {
+        configurable: true,
+        value: 'hidden',
+      });
+      await act(async () => {
+        fireEvent(document, new Event('visibilitychange'));
+      });
+      expect(cleared).toContain(visibleTimer);
+      expect(active.size).toBe(0);
+    } finally {
+      view.unmount();
+      window.setInterval = originalSetInterval;
+      window.clearInterval = originalClearInterval;
+      if (visibility) Object.defineProperty(document, 'visibilityState', visibility);
+      else Reflect.deleteProperty(document, 'visibilityState');
+    }
+  });
 });

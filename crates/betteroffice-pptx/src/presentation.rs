@@ -2,9 +2,9 @@ use std::collections::BTreeMap;
 
 use pptx_edit::{
     CaretAnchor, DeckSession, DeckSnapshot, EditCtx, PresetShapeDraft, ShapeAdjustReceipt,
-    ShapeDraft, ShapeFillReceipt, ShapeReceipt, ShapeStroke, ShapeStrokeReceipt, SlideReceipt,
-    StorySnapshot, TextReceipt, TextStyle, TextStylePatch, TransformReceipt, UpdateEvent,
-    UpdateSubscription,
+    ShapeDraft, ShapeFillReceipt, ShapeReceipt, ShapeRect, ShapeStroke, ShapeStrokeReceipt,
+    SlideReceipt, StorySnapshot, TextReceipt, TextStyle, TextStylePatch, TransformReceipt,
+    UpdateEvent, UpdateSubscription,
 };
 use pptx_parse::{
     MediaPart, ParseLimits, PptxPackage, Presentation as PresentationModel, Slide, SlideLayout,
@@ -212,6 +212,18 @@ impl Presentation {
         Ok(self
             .session
             .resize_shape(context, slide_id, shape_id, width, height)?)
+    }
+
+    pub fn set_shape_rect(
+        &self,
+        context: &EditCtx,
+        slide_id: &str,
+        shape_id: &str,
+        rect: ShapeRect,
+    ) -> Result<TransformReceipt> {
+        Ok(self
+            .session
+            .set_shape_rect(context, slide_id, shape_id, rect)?)
     }
 
     pub fn insert_text(

@@ -621,6 +621,30 @@ impl DeckSession {
             },
         })
     }
+
+    pub fn set_shape_rect(
+        &self,
+        context: &EditCtx,
+        slide_id: &str,
+        shape_id: &str,
+        rect: ShapeRect,
+    ) -> EditResult<TransformReceipt> {
+        validate_rect(rect)?;
+        let mut txn = self.transact_for(context);
+        require_shape_membership(&txn, slide_id, shape_id)?;
+        let shape = shape_ref(&txn, shape_id)?;
+        let before = shape_rect(&shape, &txn)?;
+        shape.insert(&mut txn, "x", rect.x as f64);
+        shape.insert(&mut txn, "y", rect.y as f64);
+        shape.insert(&mut txn, "width", rect.width as f64);
+        shape.insert(&mut txn, "height", rect.height as f64);
+        Ok(TransformReceipt {
+            slide_id: slide_id.to_owned(),
+            shape_id: shape_id.to_owned(),
+            before,
+            after: rect,
+        })
+    }
 }
 
 pub(crate) fn validate_doc(doc: &Doc) -> EditResult<()> {

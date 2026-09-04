@@ -297,6 +297,17 @@ class Presentation:
     ) -> TransformEdit:
         return self._inner.resize_shape(slide, shape_id, width, height)
 
+    def set_shape_rect(
+        self,
+        slide: SlideKey,
+        shape_id: str,
+        x: int,
+        y: int,
+        width: int,
+        height: int,
+    ) -> TransformEdit:
+        return self._inner.set_shape_rect(slide, shape_id, x, y, width, height)
+
     def insert_text(
         self,
         story_id: str,

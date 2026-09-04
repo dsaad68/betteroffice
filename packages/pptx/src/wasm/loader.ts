@@ -20,6 +20,7 @@ import type {
   ShapeDraft,
   ShapeFillReceipt,
   ShapeReceipt,
+  ShapeRect,
   ShapeStroke,
   ShapeStrokeReceipt,
   SlideDisplayList,
@@ -86,6 +87,7 @@ export interface PresentationHandle extends CollaborationReplica {
   removeShape(slideId: string, shapeId: string): ShapeReceipt;
   moveShape(slideId: string, shapeId: string, x: number, y: number): TransformReceipt;
   resizeShape(slideId: string, shapeId: string, width: number, height: number): TransformReceipt;
+  setShapeRect(slideId: string, shapeId: string, rect: ShapeRect): TransformReceipt;
   canUndo(): boolean;
   canRedo(): boolean;
   undo(): HistoryResult;
@@ -364,6 +366,12 @@ export function openPresentation(
     resizeShape(slideId, shapeId, width, height): TransformReceipt {
       return jsonWasmCall(
         () => doc.resizeShapeJson(JSON.stringify({ slideId, shapeId, width, height })),
+        true
+      );
+    },
+    setShapeRect(slideId, shapeId, rect): TransformReceipt {
+      return jsonWasmCall(
+        () => doc.setShapeRectJson(JSON.stringify({ slideId, shapeId, rect })),
         true
       );
     },

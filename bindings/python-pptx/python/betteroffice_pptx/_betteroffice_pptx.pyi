@@ -333,6 +333,15 @@ class Presentation:
     def resize_shape(
         self, slide: int | str, shape_id: str, width: int, height: int
     ) -> TransformEdit: ...
+    def set_shape_rect(
+        self,
+        slide: int | str,
+        shape_id: str,
+        x: int,
+        y: int,
+        width: int,
+        height: int,
+    ) -> TransformEdit: ...
     def insert_text(
         self,
         story_id: str,
