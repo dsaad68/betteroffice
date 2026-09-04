@@ -33,17 +33,23 @@ def verdict(coarse_pct: float, fine_pct: float) -> str:
     return "minor"
 
 
-def compare(lo_path, bo_path, heat_path, sbs_path) -> dict:
+def metrics(lo_path, bo_path) -> tuple[dict, "Image.Image", "Image.Image", "np.ndarray"]:
+    """Diff percentages for a reference/candidate pair, plus the images and mask for drawing."""
     lo_img = Image.open(lo_path).convert("RGB")
     bo_img = Image.open(bo_path).convert("RGB")
-    bo_sizes = {"lo_size": list(lo_img.size), "bo_size": list(bo_img.size)}
+    sizes = {"lo_size": list(lo_img.size), "bo_size": list(bo_img.size)}
     if bo_img.size != lo_img.size:
         bo_img = bo_img.resize(lo_img.size, Image.LANCZOS)
     lo, bo = load(lo_path), np.asarray(bo_img, dtype=np.int16)
     mask = np.abs(lo - bo).max(axis=2) > THRESHOLD
     fine_pct = float(mask.mean() * 100)
-    c_lo, c_bo = coarse(lo_img), coarse(bo_img)
-    coarse_pct = float((np.abs(c_lo - c_bo) > THRESHOLD).mean() * 100)
+    coarse_pct = float((np.abs(coarse(lo_img) - coarse(bo_img)) > THRESHOLD).mean() * 100)
+    return {"fine_pct": round(fine_pct, 2), "coarse_pct": round(coarse_pct, 2), "verdict": verdict(coarse_pct, fine_pct), **sizes}, lo_img, bo_img, mask
+
+
+def compare(lo_path, bo_path, heat_path, sbs_path) -> dict:
+    stats, lo_img, bo_img, mask = metrics(lo_path, bo_path)
+    fine_pct = stats["fine_pct"]
     h, w = mask.shape
     cells = []
     for gy in range(GRID[1]):
@@ -64,7 +70,14 @@ def compare(lo_path, bo_path, heat_path, sbs_path) -> dict:
         sbs.paste(img, (i * (w + gap), 24))
         ImageDraw.Draw(sbs).text((i * (w + gap) + 4, 6), label, fill="black")
     sbs.save(sbs_path)
-    return {"fine_pct": round(fine_pct, 2), "coarse_pct": round(coarse_pct, 2), "verdict": verdict(coarse_pct, fine_pct), "hot_cells": cells[:4], **bo_sizes}
+    return {
+        "fine_pct": stats["fine_pct"],
+        "coarse_pct": stats["coarse_pct"],
+        "verdict": stats["verdict"],
+        "hot_cells": cells[:4],
+        "lo_size": stats["lo_size"],
+        "bo_size": stats["bo_size"],
+    }
 
 
 def run(deck_id: str) -> None:

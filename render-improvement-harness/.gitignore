@@ -6,3 +6,6 @@ decks/*/diff-img/
 decks/*/xml/
 decks/*/lo-log.txt
 findings.jsonl
+
+# Per-attempt verification artifacts from verify_fix.py.
+issues/*/verify/
