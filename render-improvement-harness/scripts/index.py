@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Render issues/INDEX.md from clusters.json, merging effort/status from investigated issue reports."""
+"""Render issues/INDEX.md from clusters.json; issue report frontmatter is written back to clusters.json first."""
 
 from __future__ import annotations
 
@@ -27,7 +27,11 @@ def main() -> None:
             m = re.match(r"^---\n(.*?)\n---\n", report.read_text(), re.S)
             head = yaml.safe_load(m.group(1)) if m else {}
             status, effort = head.get("status", "investigated"), head.get("effort", effort)
+            for key in ("effort", "confidence", "files"):
+                if head.get(key):
+                    c[key] = head[key]
         rows.append((c, status, effort))
+    path.write_text(json.dumps(data, indent=2, ensure_ascii=False) + "\n")
     rows.sort(key=lambda r: (IMPACT.get(r[0].get("impact"), 9), EFFORT.get(r[2], 9), -r[0].get("occurrences", 0)))
     lines = ["# Issues", "", f"Generated from `clusters.json` ({data.get('generated', '?')}). Ordered by impact, then effort.", "", "| # | issue | category | impact | effort | occurrences | decks | status |", "|---|---|---|---|---|---|---|---|"]
     for i, (c, status, effort) in enumerate(rows, 1):
