@@ -207,6 +207,7 @@ impl SlideRenderer {
             shape_count: 0,
             line_count: 0,
             chart_budget: MAX_CHART_PRIMITIVES,
+            slide_number: slide_index + 1,
         };
         let root_space = Space::root();
         let show_master = parsed_slide.is_none_or(|slide| slide.show_master_shapes)
@@ -347,6 +348,8 @@ struct LayoutBuilder<'a> {
     shape_count: usize,
     line_count: usize,
     chart_budget: usize,
+    /// The number a `slidenum` field resolves to on this slide.
+    slide_number: usize,
 }
 
 impl<'a> LayoutBuilder<'a> {
@@ -591,7 +594,7 @@ impl<'a> LayoutBuilder<'a> {
             ShapeNode::Group(_) => unreachable!(),
         }
         let text_hit = if let Some(body) = node_text(shape) {
-            let content = content_from_body(stable_id, body, self.theme);
+            let content = content_from_body(stable_id, body, self.theme, self.slide_number);
             Some(self.render_text_box(
                 base.id,
                 stable_id,
@@ -911,7 +914,22 @@ fn content_from_story(story: &StorySnapshot) -> TextContent {
     }
 }
 
-fn content_from_body(story_id: &str, body: &TextBody, theme: &Theme) -> TextContent {
+/// A `<a:fld>` carries PowerPoint's cached rendering of the field. For a field on a master or
+/// layout that cache is the authoring placeholder, so it must be replaced rather than copied;
+/// on a slide PowerPoint usually caches the real number, and substituting agrees with it.
+fn field_text(run: &pptx_parse::TextRun, slide_number: usize) -> String {
+    match run.field_type.as_deref() {
+        Some("slidenum") => slide_number.to_string(),
+        _ => run.text.clone(),
+    }
+}
+
+fn content_from_body(
+    story_id: &str,
+    body: &TextBody,
+    theme: &Theme,
+    slide_number: usize,
+) -> TextContent {
     TextContent {
         story_id: format!("inherited:{story_id}"),
         paragraphs: body
@@ -924,7 +942,7 @@ fn content_from_body(story_id: &str, body: &TextBody, theme: &Theme) -> TextCont
                     .runs
                     .iter()
                     .map(|run| ContentRun {
-                        text: run.text.clone(),
+                        text: field_text(run, slide_number),
                         style: style_from_properties(&run.properties, theme),
                     })
                     .collect(),
@@ -2739,6 +2757,28 @@ mod tests {
             stroke(&outline(None), &theme).map(|stroke| stroke.color),
             Some("#112233".to_owned())
         );
+    }
+
+    #[test]
+    fn a_slide_number_field_resolves_to_the_slide_it_is_drawn_on() {
+        let run = |field_type: Option<&str>, text: &str| pptx_parse::TextRun {
+            text: text.to_owned(),
+            properties: RunProperties::default(),
+            field_id: field_type.map(|_| "{GUID}".to_owned()),
+            field_type: field_type.map(str::to_owned),
+            line_break: false,
+        };
+
+        // PowerPoint caches its authoring placeholder in the field's own text, so copying it
+        // is what put a literal marker on every slide of a deck.
+        assert_eq!(field_text(&run(Some("slidenum"), "\u{2039}#\u{203a}"), 7), "7");
+        // A field this renderer does not evaluate keeps whatever was cached for it.
+        assert_eq!(
+            field_text(&run(Some("datetime"), "16/08/2026"), 7),
+            "16/08/2026"
+        );
+        // Ordinary text is untouched.
+        assert_eq!(field_text(&run(None, "Chapter 3"), 7), "Chapter 3");
     }
 
     #[test]
