@@ -14,9 +14,10 @@ copy-ignored = "wt step copy-ignored"
 
 [[post-start]]
 # Rebuild the pptx Python binding so it resolves inside this worktree rather
-# than the one the copied .venv was built in, then report what the harness has
-# to work with. Exits immediately on branches that do not carry the harness.
-harness = "render-improvement-harness/scripts/setup_worktree.sh"
+# than the one the copied .venv was built in. Invoked from the primary
+# worktree, because a fix branch carries no harness and so has no copy of the
+# script; it is passed the new worktree to operate on.
+harness = "s='{{ primary_worktree_path }}/render-improvement-harness/scripts/setup_worktree.sh'; if [ -x \"$s\" ]; then \"$s\" '{{ worktree_path }}'; else echo 'setup script not on the primary worktree; skipping'; fi"
 
 [step.copy-ignored]
 # node_modules is excluded on purpose: it is a very large file count, copy time

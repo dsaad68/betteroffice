@@ -4,11 +4,13 @@
 # Safe to re-run, and a no-op on branches that do not carry the harness.
 set -euo pipefail
 
-root="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
-cd "$root"
+# The worktree to prepare, given as an argument because this script is invoked from the
+# primary worktree: a branch without the harness has no copy of it to run.
+root="${1:-$PWD}"
+cd "$root" || exit 1
 
-if [ ! -d render-improvement-harness ]; then
-  echo "no render-improvement-harness/ on this branch; nothing to set up"
+if [ ! -d bindings/python-pptx ]; then
+  echo "no bindings/python-pptx in $root; nothing to build"
   exit 0
 fi
 
@@ -53,6 +55,12 @@ case "$resolved" in
   *) echo "ERROR: binding resolves outside this worktree: $resolved" >&2; exit 1 ;;
 esac
 .venv/bin/python -c 'import betteroffice_pptx as b; assert hasattr(b.Presentation, "render_png"); print("render_png present")'
+
+if [ ! -d render-improvement-harness ]; then
+  echo "binding built; this branch carries no harness, so verify from the harness worktree with:"
+  echo "  verify_fix.py <issue-id> --engine $root"
+  exit 0
+fi
 
 decks="$(ls -d render-improvement-harness/decks/*/ 2>/dev/null | wc -l | tr -d ' ')"
 sources="$(ls render-improvement-harness/decks/*/source.pptx 2>/dev/null | wc -l | tr -d ' ')"
