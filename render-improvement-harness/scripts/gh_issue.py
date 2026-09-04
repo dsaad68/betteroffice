@@ -77,7 +77,7 @@ class Linker:
         return f"https://github.com/{self.fork}/blob/{self.branch}/render-improvement-harness/issues/{issue_id}/report.md"
 
 
-def evidence_block(secs: dict[str, str], issue_id: str, lk: Linker, folder) -> str:
+def evidence_block(secs: dict[str, str], issue_id: str, lk: Linker, folder, only: set[int] | None = None) -> str:
     captions = {}
     for row in secs.get("Evidence", "").split("\n"):
         cells = [c.strip() for c in row.strip("|").split("|")]
@@ -86,10 +86,22 @@ def evidence_block(secs: dict[str, str], issue_id: str, lk: Linker, folder) -> s
     parts = []
     for png in sorted(folder.glob("evidence-*.png"), key=lambda p: int(re.search(r"(\d+)", p.stem).group(1))):
         n = int(re.search(r"(\d+)", png.stem).group(1))
+        if only and n not in only:
+            continue
         where, what = captions.get(n, ("", ""))
         caption = f"**{n}. {where}** {what}".strip() if where else f"**{n}.**"
         parts.append(f"{caption}\n\n![{png.stem}]({lk.raw(issue_id, png.name)})")
     return "\n\n".join(parts)
+
+
+def drop_evidence_refs(text: str, dropped: set[int]) -> str:
+    """Remove prose citations of evidence images that are not embedded, then tidy the punctuation."""
+    for n in dropped:
+        text = re.sub(r"\s*\bevidence-%d\.png\b" % n, "", text)
+    text = re.sub(r"\(\s*(?:,\s*)+", "(", text)
+    text = re.sub(r"(?:,\s*)+\)", ")", text)
+    text = re.sub(r"\s*\(\s*\)", "", text)
+    return re.sub(r"[ \t]{2,}", " ", text)
 
 
 def repro_decks(head: dict) -> tuple[str, int]:
@@ -115,7 +127,7 @@ def related(issue_id: str, text: str, mapping: dict) -> str:
     return ", ".join(f"#{mapping[i]['number']}" if i in mapping else f"`{i}`" for i in hits)
 
 
-def render(issue_id: str) -> tuple[str, str]:
+def render(issue_id: str, only: set[int] | None = None) -> tuple[str, str]:
     folder = ISSUES / issue_id
     head, body = frontmatter((folder / "report.md").read_text())
     _, sol_body = (None, (folder / "possible-solution.md").read_text())
@@ -123,6 +135,11 @@ def render(issue_id: str) -> tuple[str, str]:
     lk = Linker()
     mapping = json.loads(MAPPING.read_text()) if MAPPING.exists() else {}
     root_key, root = pick(secs, "root cause")
+    if only:
+        dropped = {int(re.search(r"(\d+)", q.stem).group(1)) for q in folder.glob("evidence-*.png")} - only
+        secs = {k: drop_evidence_refs(v, dropped) for k, v in secs.items()}
+        sol = {k: drop_evidence_refs(v, dropped) for k, v in sol.items()}
+        root = drop_evidence_refs(root, dropped)
     known = {"symptom", "evidence", "verification", root_key.lower()}
     extra = "\n\n".join(f"*{k}*\n\n{v}" for k, v in secs.items() if k.lower() not in known and k != "_pre" and v)
     sketch = sol.get("Sketch", "")
@@ -142,7 +159,7 @@ def render(issue_id: str) -> tuple[str, str]:
         "impact": head.get("impact", "?"),
         "effort": head.get("effort", "?"),
         "confidence": head.get("confidence", "?"),
-        "evidence": evidence_block(secs, issue_id, lk, folder),
+        "evidence": evidence_block(secs, issue_id, lk, folder, only),
         "repro_decks": decks_md,
         "repro_slide_index": first_index,
         "expected": "PowerPoint and LibreOffice agree on this behaviour; the XML in the report shows the property that should be honoured.",
@@ -169,8 +186,10 @@ def main() -> None:
     ap.add_argument("issue_id")
     ap.add_argument("--create", action="store_true", help="file it on GitHub with gh and record the number")
     ap.add_argument("--repo", default=UPSTREAM)
+    ap.add_argument("--evidence", help="comma-separated evidence numbers to embed (default: all)")
     args = ap.parse_args()
-    title, body = render(args.issue_id)
+    only = {int(n) for n in args.evidence.split(",")} if args.evidence else None
+    title, body = render(args.issue_id, only)
     out = ISSUES / args.issue_id / "github-issue.md"
     out.write_text(f"# {title}\n\n{body}")
     print(f"{args.issue_id}: {len(body):,} chars -> {out.relative_to(ROOT)}")
