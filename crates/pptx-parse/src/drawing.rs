@@ -107,7 +107,9 @@ fn parse_shape_children(
     let mut shapes = Vec::new();
     for child in parent.child_elements() {
         let shape = match child.local_name() {
-            "sp" => Some(ShapeNode::Shape(parse_shape(child, part, budget)?)),
+            // A connector carries the same spPr as a shape, so it parses the same way; only
+            // its non-visual container is named differently.
+            "sp" | "cxnSp" => Some(ShapeNode::Shape(parse_shape(child, part, budget)?)),
             "pic" => Some(ShapeNode::Picture(parse_picture(
                 child,
                 relationships,
@@ -144,7 +146,12 @@ fn parse_shape(
     let properties = element.child("spPr");
     let transform = properties.and_then(|value| value.child("xfrm"));
     Ok(Shape {
-        base: parse_base(element.child("nvSpPr"), transform),
+        base: parse_base(
+            element
+                .child("nvSpPr")
+                .or_else(|| element.child("nvCxnSpPr")),
+            transform,
+        ),
         geometry: parse_geometry(properties),
         adjust_values: parse_adjust_values(properties, parse_shape_extent(transform)),
         fill: properties.and_then(parse_fill),
@@ -952,6 +959,37 @@ mod tests {
     use super::*;
     use crate::ParseLimits;
     use crate::xml::parse_xml;
+
+    #[test]
+    fn a_connector_parses_as_a_shape_and_keeps_its_place_in_the_tree() {
+        let limits = ParseLimits::default();
+        let mut budget = ParseBudget::new(&limits);
+        let root = parse_xml(
+            br#"<p:sld><p:cSld><p:spTree><p:sp><p:nvSpPr><p:cNvPr id="2" name="First"/><p:nvPr/></p:nvSpPr><p:spPr/></p:sp><p:cxnSp><p:nvCxnSpPr><p:cNvPr id="3" name="Straight Connector 2"/><p:cNvCxnSpPr/><p:nvPr/></p:nvCxnSpPr><p:spPr><a:xfrm><a:off x="100" y="200"/><a:ext cx="0" cy="500"/></a:xfrm><a:prstGeom prst="line"><a:avLst/></a:prstGeom><a:ln w="19050"><a:solidFill><a:srgbClr val="FF0000"/></a:solidFill></a:ln></p:spPr></p:cxnSp><p:sp><p:nvSpPr><p:cNvPr id="4" name="Third"/><p:nvPr/></p:nvSpPr><p:spPr/></p:sp></p:spTree></p:cSld></p:sld>"#,
+            "ppt/slides/slide1.xml",
+            &mut budget,
+        )
+        .unwrap();
+        let data = common_slide_data(&root, &[], "ppt/slides/slide1.xml", &mut budget).unwrap();
+
+        // The connector must occupy its own slot, or every later shape's index shifts and the
+        // save path writes edits into the wrong element.
+        assert_eq!(data.shapes.len(), 3);
+        let ShapeNode::Shape(connector) = &data.shapes[1] else {
+            panic!("expected the connector to parse as a shape");
+        };
+        assert_eq!(connector.base.id, 3);
+        assert_eq!(connector.base.name, "Straight Connector 2");
+        assert_eq!(connector.geometry, "line");
+        // A zero-width connector is a vertical line, not something to discard.
+        assert_eq!(connector.base.transform.width, 0);
+        assert_eq!(connector.base.transform.height, 500);
+        let outline = connector.outline.as_ref().expect("connector has an outline");
+        assert_eq!(
+            outline.color.as_ref().unwrap().rgb.as_deref(),
+            Some("FF0000")
+        );
+    }
 
     #[test]
     fn parses_text_formatting_and_nested_shape_types() {
