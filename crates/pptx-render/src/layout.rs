@@ -8,15 +8,16 @@ use ooxml_drawingml::{
 use ooxml_text::{CompatFlags, FontId, FontStore, break_opportunities, shape, single_line_box};
 use pptx_edit::{DeckSnapshot, ShapeKind, ShapeSnapshot, StorySnapshot, TextStyle};
 use pptx_parse::{
-    ChartSpace, GraphicFrameData, ParagraphProperties, Placeholder, PptxPackage, RunProperties,
-    ShapeNode, ShapeTransform, Slide, SlideLayout, SlideMaster, TextAutofit, TextBody,
+    ChartSpace, GraphicFrameData, ParagraphProperties, Picture, PictureCrop, Placeholder,
+    PptxPackage, RunProperties, ShapeNode, ShapeTransform, Slide, SlideLayout, SlideMaster,
+    TextAutofit, TextBody,
 };
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
 use crate::chart::{ChartFrame, ChartText, chart_primitive};
 use crate::{
-    CONTRACT_VERSION, CaretStop, GradientStop, GradientType, Paint, PositionedGlyph,
+    CONTRACT_VERSION, CaretStop, GradientStop, GradientType, ImageCrop, Paint, PositionedGlyph,
     PositionedTextLine, PositionedTextRun, Primitive, Stroke, SurfaceDisplayList, TextAlign,
     TextAnchor, TextParagraph, TextRun, Transform,
 };
@@ -423,6 +424,7 @@ impl<'a> LayoutBuilder<'a> {
                 });
             }
             ShapeKind::Picture => {
+                let source = picture_source(original);
                 self.primitives.push(Primitive::Image {
                     object_id: shape.source_id,
                     shape_id: Some(stable_id.clone()),
@@ -432,6 +434,10 @@ impl<'a> LayoutBuilder<'a> {
                     w: rect.w,
                     h: rect.h,
                     asset_id: shape.media_part_path.clone(),
+                    crop: source
+                        .map(|value| image_crop(&value.crop))
+                        .unwrap_or_default(),
+                    path: source.and_then(|value| picture_mask(value, rect)),
                     stroke: outline,
                     transform,
                 });
@@ -541,6 +547,8 @@ impl<'a> LayoutBuilder<'a> {
                     w: rect.w,
                     h: rect.h,
                     asset_id: value.media_part_path.clone(),
+                    crop: image_crop(&value.crop),
+                    path: picture_mask(value, rect),
                     stroke: value
                         .outline
                         .as_ref()
@@ -2037,6 +2045,52 @@ fn stroke(outline: &ShapeOutline, theme: &Theme) -> Option<Stroke> {
     })
 }
 
+/// The parsed picture behind a snapshot shape. A crop and a picture's preset mask are not
+/// editable, so the parsed model is the only place they can come from and the snapshot never
+/// needs to carry them.
+fn picture_source(shape: Option<&ShapeNode>) -> Option<&Picture> {
+    match shape? {
+        ShapeNode::Picture(picture) => Some(picture),
+        _ => None,
+    }
+}
+
+/// `a:srcRect` gives each edge in thousandths of a percent of the source. Negative values are
+/// outsets, which no backend can draw, and a crop that keeps nothing would divide by zero; both
+/// fall back to drawing the whole source.
+fn image_crop(crop: &PictureCrop) -> ImageCrop {
+    let fraction = |value: i32| (value as f32 / 100_000.0).clamp(0.0, 1.0);
+    let cropped = ImageCrop {
+        left: fraction(crop.left),
+        top: fraction(crop.top),
+        right: fraction(crop.right),
+        bottom: fraction(crop.bottom),
+    };
+    let (kept_x, kept_y) = cropped.kept();
+    if kept_x <= 0.0 || kept_y <= 0.0 {
+        ImageCrop::default()
+    } else {
+        cropped
+    }
+}
+
+/// The outline a picture is masked to by its own `spPr` geometry. `rect` needs no mask: the
+/// frame already is the rectangle.
+fn picture_mask(
+    picture: &Picture,
+    rect: PxRect,
+) -> Option<Vec<ooxml_drawingml::GeometryPathCommand>> {
+    if picture.geometry.is_empty() || picture.geometry == "rect" || rect.h <= 0.0 {
+        return None;
+    }
+    let path = geometry_path(
+        &picture.geometry,
+        &picture.adjust_values,
+        f64::from(rect.w) / f64::from(rect.h),
+    );
+    (!path.is_empty()).then_some(path)
+}
+
 fn geometry_path(
     geometry: &str,
     adjustments: &BTreeMap<String, f64>,
@@ -2105,12 +2159,83 @@ fn utf16_len(value: &str) -> u32 {
 #[cfg(test)]
 mod tests {
     use pptx_edit::{DeckSession, EditCtx};
+    use pptx_parse::ShapeBase;
 
     use super::*;
 
     const FIXTURE: &[u8] = include_bytes!("../../../apps/demo/public/betteroffice-demo.pptx");
     const CHART_FIXTURE: &[u8] = include_bytes!("../../pptx-parse/tests/fixtures/chart-deck.pptx");
     const FONT: &[u8] = include_bytes!("../../ooxml-text/tests/fonts/LiberationSans-Regular.ttf");
+
+    #[test]
+    fn a_source_crop_converts_to_fractions_and_refuses_what_cannot_be_drawn() {
+        assert_eq!(
+            image_crop(&PictureCrop {
+                left: 0,
+                top: 251,
+                right: 0,
+                bottom: 16_720,
+            }),
+            ImageCrop {
+                left: 0.0,
+                top: 0.002_51,
+                right: 0.0,
+                bottom: 0.167_2,
+            }
+        );
+        // A negative edge is an outset, which no backend can express; it clamps to no crop on
+        // that edge alone and leaves the others intact.
+        assert_eq!(
+            image_crop(&PictureCrop {
+                left: -5_000,
+                right: 20_000,
+                ..PictureCrop::default()
+            }),
+            ImageCrop {
+                right: 0.2,
+                ..ImageCrop::default()
+            }
+        );
+        // Keeping nothing would divide by zero when the fit transform is built.
+        assert_eq!(
+            image_crop(&PictureCrop {
+                left: 60_000,
+                right: 60_000,
+                ..PictureCrop::default()
+            }),
+            ImageCrop::default()
+        );
+    }
+
+    #[test]
+    fn only_a_picture_with_its_own_geometry_gets_a_mask() {
+        let mut picture = Picture {
+            base: ShapeBase {
+                id: 1,
+                name: "Photo".to_owned(),
+                description: None,
+                hidden: false,
+                placeholder: None,
+                transform: ShapeTransform::default(),
+            },
+            relationship_id: None,
+            media_part_path: None,
+            crop: PictureCrop::default(),
+            geometry: "rect".to_owned(),
+            adjust_values: BTreeMap::new(),
+            fill: None,
+            outline: None,
+        };
+        let rect = PxRect {
+            x: 0.0,
+            y: 0.0,
+            w: 100.0,
+            h: 50.0,
+        };
+        assert!(picture_mask(&picture, rect).is_none());
+        picture.geometry = "ellipse".to_owned();
+        assert!(picture_mask(&picture, rect).is_some_and(|path| !path.is_empty()));
+    }
 
     fn renderer() -> SlideRenderer {
         let mut renderer = SlideRenderer::new();

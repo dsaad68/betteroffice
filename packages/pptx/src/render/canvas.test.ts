@@ -302,3 +302,79 @@ describe('PPTX canvas replay', () => {
     ]);
   });
 });
+
+describe('PPTX picture cropping', () => {
+  function harness() {
+    const calls: string[] = [];
+    const ctx = new Proxy(
+      {
+        drawImage: (...args: unknown[]) => calls.push(`draw:${args.slice(1).join(',')}`),
+        clip: () => calls.push('clip'),
+        save: () => calls.push('save'),
+        restore: () => calls.push('restore'),
+        rect: (...args: unknown[]) => calls.push(`rect:${args.join(',')}`),
+      } as Record<string, unknown>,
+      {
+        get(target, property) {
+          if (property in target) return target[property as string];
+          return () => undefined;
+        },
+        set(target, property, value) {
+          target[property as string] = value;
+          return true;
+        },
+      }
+    ) as unknown as CanvasRenderingContext2D;
+    return { calls, ctx };
+  }
+
+  function list(image: Record<string, unknown>): SlideDisplayList {
+    return {
+      contractVersion: 1,
+      width: 320,
+      height: 180,
+      primitives: [
+        {
+          kind: 'image',
+          objectId: 1,
+          name: 'Screenshot',
+          x: 10,
+          y: 20,
+          w: 200,
+          h: 100,
+          assetId: 'ppt/media/image1.png',
+          ...image,
+        },
+      ],
+    } as SlideDisplayList;
+  }
+
+  const source = { width: 400, height: 300 } as unknown as CanvasImageSource;
+
+  test('draws only the kept sub-rectangle, masked to the frame', async () => {
+    const { calls, ctx } = harness();
+    await paintSlide(ctx, list({ crop: { top: 0.1, bottom: 0.2 } }), 1, 1, {
+      resolveImage: async () => source,
+    });
+    expect(calls).toContain('save');
+    expect(calls).toContain('clip');
+    expect(calls).toContain('restore');
+    // source y = 0.1*300, source height = (1 - 0.1 - 0.2)*300, drawn into the whole frame
+    expect(calls).toContain('draw:0,30,400,210,10,20,200,100');
+  });
+
+  test('an uncropped picture draws the whole source and needs no mask', async () => {
+    const { calls, ctx } = harness();
+    await paintSlide(ctx, list({}), 1, 1, { resolveImage: async () => source });
+    expect(calls).toContain('draw:0,0,400,300,10,20,200,100');
+    expect(calls).not.toContain('clip');
+  });
+
+  test('a crop that keeps nothing draws nothing', async () => {
+    const { calls, ctx } = harness();
+    await paintSlide(ctx, list({ crop: { left: 0.6, right: 0.6 } }), 1, 1, {
+      resolveImage: async () => source,
+    });
+    expect(calls.some((call) => call.startsWith('draw:'))).toBe(false);
+  });
+});

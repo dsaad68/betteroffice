@@ -214,6 +214,12 @@ pub struct Picture {
     pub relationship_id: Option<String>,
     pub media_part_path: Option<String>,
     pub crop: PictureCrop,
+    // Pictures gained a geometry after v1 snapshots were persisted; an absent one means the
+    // frame rectangle, which is what every such picture was already drawn as.
+    #[serde(default)]
+    pub geometry: String,
+    #[serde(default)]
+    pub adjust_values: BTreeMap<String, f64>,
     pub fill: Option<ShapeFill>,
     pub outline: Option<ShapeOutline>,
 }

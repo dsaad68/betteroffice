@@ -69,6 +69,32 @@ pub struct Transform {
     pub flip_v: bool,
 }
 
+/// The fraction of a source bitmap each edge discards, from `a:srcRect`. All zero means the
+/// whole source is drawn, which is what a picture without a crop serializes as.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ImageCrop {
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub left: f32,
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub top: f32,
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub right: f32,
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub bottom: f32,
+}
+
+impl ImageCrop {
+    pub fn is_whole(&self) -> bool {
+        *self == Self::default()
+    }
+
+    /// The fraction of the source that survives on each axis.
+    pub fn kept(&self) -> (f32, f32) {
+        (1.0 - self.left - self.right, 1.0 - self.top - self.bottom)
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(
     tag = "kind",
@@ -107,6 +133,10 @@ pub enum Primitive {
         h: f32,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         asset_id: Option<String>,
+        #[serde(default, skip_serializing_if = "ImageCrop::is_whole")]
+        crop: ImageCrop,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        path: Option<Vec<GeometryPathCommand>>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         stroke: Option<Stroke>,
         #[serde(default, skip_serializing_if = "Transform::is_identity")]
