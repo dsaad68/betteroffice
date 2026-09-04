@@ -120,7 +120,58 @@ function paintShape(ctx: CanvasRenderingContext2D, shape: ShapePrimitive): void 
     ctx.fillStyle = paintStyle(ctx, shape.fill, shape.x, shape.y, shape.w, shape.h);
     ctx.fill();
   }
-  if (shape.stroke) strokeCurrentPath(ctx, shape.stroke);
+  if (shape.stroke) {
+    strokeCurrentPath(ctx, shape.stroke);
+    paintLineEnds(ctx, shape);
+  }
+}
+
+function pathPoints(shape: ShapePrimitive): Array<[number, number]> {
+  const points: Array<[number, number]> = [];
+  for (const command of shape.path) {
+    if (command.type === 'close') continue;
+    points.push([shape.x + command.x * shape.w, shape.y + command.y * shape.h]);
+  }
+  return points;
+}
+
+function paintLineEnds(ctx: CanvasRenderingContext2D, shape: ShapePrimitive): void {
+  const stroke = shape.stroke;
+  if (!stroke || (!stroke.headEnd && !stroke.tailEnd)) return;
+  const points = pathPoints(shape);
+  if (points.length < 2) return;
+  const width = Math.max(0.5, stroke.width);
+  const ends: Array<[string | undefined, [number, number], [number, number]]> = [
+    [stroke.headEnd, points[1], points[0]],
+    [stroke.tailEnd, points[points.length - 2], points[points.length - 1]],
+  ];
+  ctx.save();
+  ctx.setLineDash([]);
+  ctx.fillStyle = stroke.color;
+  for (const [kind, from, tip] of ends) {
+    if (!kind) continue;
+    const [dx, dy] = [tip[0] - from[0], tip[1] - from[1]];
+    const length = Math.hypot(dx, dy);
+    if (length < 1e-6) continue;
+    const [ux, uy] = [dx / length, dy / length];
+    ctx.beginPath();
+    if (kind === 'oval') {
+      ctx.arc(tip[0], tip[1], width * 1.5, 0, Math.PI * 2);
+    } else if (kind === 'triangle' || kind === 'arrow' || kind === 'stealth' || kind === 'diamond') {
+      const reach = width * 3;
+      const half = width * 1.5;
+      const [bx, by] = [tip[0] - ux * reach, tip[1] - uy * reach];
+      ctx.moveTo(tip[0], tip[1]);
+      ctx.lineTo(bx - uy * half, by + ux * half);
+      if (kind === 'diamond') ctx.lineTo(tip[0] - ux * reach * 2, tip[1] - uy * reach * 2);
+      ctx.lineTo(bx + uy * half, by - ux * half);
+      ctx.closePath();
+    } else {
+      continue;
+    }
+    ctx.fill();
+  }
+  ctx.restore();
 }
 
 function buildPath(

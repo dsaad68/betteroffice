@@ -2,7 +2,7 @@ use std::collections::{BTreeMap, HashMap, HashSet};
 
 use ooxml_drawingml::chart::PlotRect;
 use ooxml_drawingml::{
-    ShapeFill, ShapeOutline, Theme, preset_geometry_to_path, resolve_color_value_to_hex_with_theme,
+    LineEnd, ShapeFill, ShapeOutline, Theme, preset_geometry_to_path, resolve_color_value_to_hex_with_theme,
     resolve_theme_font_ref,
 };
 use ooxml_text::{CompatFlags, FontId, FontStore, break_opportunities, shape, single_line_box};
@@ -2021,6 +2021,12 @@ fn paint(fill: &ShapeFill, theme: &Theme) -> Option<Paint> {
         .map(|color| Paint::Solid { color })
 }
 
+fn line_end(end: Option<&LineEnd>) -> Option<String> {
+    end.map(|end| end.end_type.as_str())
+        .filter(|kind| *kind != "none")
+        .map(str::to_owned)
+}
+
 fn stroke(outline: &ShapeOutline, theme: &Theme) -> Option<Stroke> {
     let color = resolve_color_value_to_hex_with_theme(outline.color.as_ref(), Some(theme))?;
     Some(Stroke {
@@ -2034,6 +2040,8 @@ fn stroke(outline: &ShapeOutline, theme: &Theme) -> Option<Stroke> {
             .style
             .as_deref()
             .is_some_and(|style| style != "solid"),
+        head_end: line_end(outline.head_end.as_ref()),
+        tail_end: line_end(outline.tail_end.as_ref()),
     })
 }
 

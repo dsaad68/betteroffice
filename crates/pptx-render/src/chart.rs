@@ -149,7 +149,9 @@ impl PlotSink for ChartSink<'_> {
                         color,
                         width: width as f32,
                         dashed: false,
-                    }),
+                head_end: None,
+                tail_end: None,
+            }),
                 )
             }
             PlotOp::Path {
@@ -175,7 +177,9 @@ impl PlotSink for ChartSink<'_> {
                     color: stroke.color,
                     width: stroke.width as f32,
                     dashed: false,
-                }),
+                head_end: None,
+                tail_end: None,
+            }),
             ),
             PlotOp::Text {
                 text,

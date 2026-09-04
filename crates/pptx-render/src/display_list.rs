@@ -56,6 +56,10 @@ pub struct Stroke {
     pub width: f32,
     #[serde(default, skip_serializing_if = "is_false")]
     pub dashed: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub head_end: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tail_end: Option<String>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Default, Serialize, Deserialize)]

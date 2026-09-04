@@ -215,6 +215,8 @@ export interface Stroke {
   color: string;
   width: number;
   dashed?: boolean;
+  headEnd?: string;
+  tailEnd?: string;
 }
 
 export interface PrimitiveTransform {
