@@ -35,7 +35,14 @@ if ! .venv/bin/python -c "import PIL, numpy, yaml" 2>/dev/null || [ ! -x .venv/b
   .venv/bin/pip install -q pillow numpy pyyaml maturin
 fi
 
-echo "building betteroffice_pptx from this worktree (first build is slow; the copied target/ keeps it incremental)"
+# maturin resolves the target environment from VIRTUAL_ENV before it looks at
+# its own location. The hook inherits whatever venv the invoking shell had
+# active -- typically the primary worktree's -- so without pinning this it
+# installs there and repoints that venv at this worktree, breaking both.
+export VIRTUAL_ENV="$root/.venv"
+export PATH="$root/.venv/bin:$PATH"
+unset PYTHONPATH PYTHONHOME
+echo "building betteroffice_pptx from this worktree (the copied target/ keeps it incremental)"
 (cd bindings/python-pptx && "$root/.venv/bin/maturin" develop)
 
 # The binding must resolve inside this worktree, or every render would measure
