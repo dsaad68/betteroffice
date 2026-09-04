@@ -38,5 +38,13 @@
     "pr_url": "https://github.com/openooxml/betteroffice/pull/267",
     "state": "pr-open",
     "url": "https://github.com/openooxml/betteroffice/issues/266"
+  },
+  "text-slidenum-field-not-evaluated": {
+    "branch": "fix/pptx-slidenum-field",
+    "number": 276,
+    "pr": 277,
+    "pr_url": "https://github.com/openooxml/betteroffice/pull/277",
+    "state": "pr-open",
+    "url": "https://github.com/openooxml/betteroffice/issues/276"
   }
 }
