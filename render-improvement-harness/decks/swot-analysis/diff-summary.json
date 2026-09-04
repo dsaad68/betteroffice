@@ -2,7 +2,7 @@
   "01": {
     "fine_pct": 8.86,
     "coarse_pct": 1.35,
-    "verdict": "minor",
+    "verdict": "major",
     "hot_cells": [
       {
         "cell": "r1c1",
