@@ -755,8 +755,8 @@
       "title": "Run-level solidFill/formatting not scoped to its own run",
       "category": "text-run-props",
       "impact": "medium",
-      "effort": "medium",
-      "confidence": "medium",
+      "effort": "easy",
+      "confidence": "high",
       "occurrences": 6,
       "decks": [
         "project17",
@@ -776,6 +776,11 @@
         "project17/07",
         "project17/10",
         "project17/13"
+      ],
+      "files": [
+        "crates/pptx-render/src/layout.rs",
+        "crates/pptx-raster/src/font.rs",
+        "packages/pptx/src/render/canvas.ts"
       ]
     },
     {
@@ -1060,6 +1065,13 @@
       "symptom": "A chevron or homePlate preset shape's notch is drawn far deeper than its adj guide specifies, breaking the seamless overlap between adjacent banner shapes.",
       "evidence": [
         "project20/04"
+      ],
+      "files": [
+        "crates/ooxml-drawingml/src/geometry.rs",
+        "crates/pptx-render/src/layout.rs",
+        "crates/pptx-render/src/lib.rs",
+        "crates/pptx-edit/src/deck.rs",
+        "crates/docx-parse/src/drawingml.rs"
       ]
     },
     {
@@ -1163,6 +1175,7 @@
         "crates/pptx-render/src/layout.rs",
         "crates/pptx-render/src/lib.rs",
         "crates/pptx-raster/src/lib.rs",
+        "crates/pptx-raster/README.md",
         "packages/pptx/src/types.ts",
         "packages/pptx/src/render/canvas.ts"
       ]
@@ -1208,7 +1221,7 @@
       "category": "chart",
       "impact": "low",
       "effort": "medium",
-      "confidence": "medium",
+      "confidence": "high",
       "occurrences": 4,
       "decks": [
         "stacked-bar"
@@ -1224,6 +1237,10 @@
         "stacked-bar/01",
         "stacked-bar/02",
         "stacked-bar/04"
+      ],
+      "files": [
+        "crates/ooxml-drawingml/src/chart/geometry.rs",
+        "crates/docx-layout/tests/chart_snapshots.rs"
       ]
     },
     {
@@ -1232,7 +1249,7 @@
       "category": "chart",
       "impact": "low",
       "effort": "medium",
-      "confidence": "medium",
+      "confidence": "high",
       "occurrences": 3,
       "decks": [
         "minimal-chart"
@@ -1245,6 +1262,13 @@
       "symptom": "A single chart's data series (line stroke and markers) is not drawn at all, its category/value axis tick labels are missing, and its axis line — explicitly set to noFill — is drawn anyway as a broken, segmented vertical stroke.",
       "evidence": [
         "minimal-chart/01"
+      ],
+      "files": [
+        "crates/ooxml-drawingml/src/chart/geometry.rs",
+        "crates/ooxml-drawingml/src/chart/parse.rs",
+        "crates/ooxml-drawingml/src/chart/model.rs",
+        "crates/pptx-render/src/chart.rs",
+        "crates/pptx-parse/src/chart.rs"
       ]
     },
     {
