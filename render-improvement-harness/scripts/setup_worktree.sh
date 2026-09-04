@@ -9,6 +9,25 @@ set -euo pipefail
 root="${1:-$PWD}"
 cd "$root" || exit 1
 
+# copy-ignored brings the harness decks and reference renders into every worktree, but the
+# ignore rules for them live in render-improvement-harness/.gitignore, which only exists on the
+# harness branch. Without this, `git add -A` on a fix branch stages several hundred megabytes of
+# third-party decks. info/exclude is shared by every worktree of the repository, and these paths
+# are already ignored on the harness branch, so writing it once is harmless there.
+exclude="$(git rev-parse --git-common-dir)/info/exclude"
+if [ -w "$(dirname "$exclude")" ] && ! grep -q "render-improvement-harness/decks/\*/source.pptx" "$exclude" 2>/dev/null; then
+  {
+    echo ""
+    echo "# Harness inputs copied into every worktree by wt; see render-improvement-harness/.gitignore."
+    echo "render-improvement-harness/decks/*/source.pptx"
+    echo "render-improvement-harness/decks/*/lo-img/"
+    echo "render-improvement-harness/decks/*/bo-img/"
+    echo "render-improvement-harness/decks/*/diff-img/"
+    echo "render-improvement-harness/decks/*/xml/"
+  } >> "$exclude"
+  echo "added harness deck paths to $exclude"
+fi
+
 if [ ! -d bindings/python-pptx ]; then
   echo "no bindings/python-pptx in $root; nothing to build"
   exit 0
