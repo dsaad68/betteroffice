@@ -15,6 +15,14 @@
     "state": "pr-open",
     "url": "https://github.com/openooxml/betteroffice/issues/270"
   },
+  "geometry-preset-adj-values-wrong": {
+    "branch": "fix/pptx-preset-adjust",
+    "number": 278,
+    "pr": 279,
+    "pr_url": "https://github.com/openooxml/betteroffice/pull/279",
+    "state": "pr-open",
+    "url": "https://github.com/openooxml/betteroffice/issues/278"
+  },
   "hidden-shape-drawn-anyway": {
     "branch": "fix/pptx-hidden-shapes",
     "number": 268,
