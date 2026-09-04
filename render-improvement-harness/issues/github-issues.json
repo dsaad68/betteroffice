@@ -1,4 +1,12 @@
 {
+  "fill-grpfill-not-resolved": {
+    "branch": "fix/pptx-grpfill",
+    "number": 270,
+    "pr": 271,
+    "pr_url": "https://github.com/openooxml/betteroffice/pull/271",
+    "state": "pr-open",
+    "url": "https://github.com/openooxml/betteroffice/issues/270"
+  },
   "hidden-shape-drawn-anyway": {
     "branch": "fix/pptx-hidden-shapes",
     "number": 268,
