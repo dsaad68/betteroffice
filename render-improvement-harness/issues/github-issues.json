@@ -63,5 +63,14 @@
     "pr_url": "https://github.com/openooxml/betteroffice/pull/277",
     "state": "pr-open",
     "url": "https://github.com/openooxml/betteroffice/issues/276"
+  },
+  "theme-color-scheme-color-resolution-broken": {
+    "branch": "fix/pptx-shape-style-fontref",
+    "note": "fontRef half only; clrMap/clrMapOvr half still open",
+    "number": 282,
+    "pr": 283,
+    "pr_url": "https://github.com/openooxml/betteroffice/pull/283",
+    "state": "pr-open",
+    "url": "https://github.com/openooxml/betteroffice/issues/282"
   }
 }
