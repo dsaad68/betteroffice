@@ -1,4 +1,12 @@
 {
+  "hidden-shape-drawn-anyway": {
+    "branch": "fix/pptx-hidden-shapes",
+    "number": 268,
+    "pr": 269,
+    "pr_url": "https://github.com/openooxml/betteroffice/pull/269",
+    "state": "pr-open",
+    "url": "https://github.com/openooxml/betteroffice/issues/268"
+  },
   "text-run-props-bold-ignored": {
     "branch": "fix/pptx-font-fallback-style",
     "number": 266,
