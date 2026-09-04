@@ -15,6 +15,14 @@
     "state": "pr-open",
     "url": "https://github.com/openooxml/betteroffice/issues/270"
   },
+  "geometry-custom-collapses-to-bbox": {
+    "branch": "fix/pptx-custom-geometry",
+    "number": 284,
+    "pr": 285,
+    "pr_url": "https://github.com/openooxml/betteroffice/pull/285",
+    "state": "pr-open",
+    "url": "https://github.com/openooxml/betteroffice/issues/284"
+  },
   "geometry-preset-adj-values-wrong": {
     "branch": "fix/pptx-preset-adjust",
     "number": 278,
