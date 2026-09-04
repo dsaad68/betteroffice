@@ -1,9 +1,11 @@
 use std::collections::BTreeMap;
 
 use ooxml_drawingml::{
-    ColorValue, GradientFill, GradientStop, LineEnd, ShapeFill, ShapeOutline, ShapeStyle,
+    ColorValue, GeometryPathCommand, GradientFill, GradientStop, LineEnd, ShapeFill, ShapeOutline, ShapeStyle,
     StyleReference,
 };
+
+const MAX_CUSTOM_PATH_COMMANDS: usize = 2_048;
 
 use crate::PptxError;
 use crate::model::*;
@@ -143,6 +145,57 @@ fn parse_shape_children(
     Ok(shapes)
 }
 
+fn parse_custom_geometry(custom: &XmlElement) -> Option<Vec<GeometryPathCommand>> {
+    let mut out: Vec<GeometryPathCommand> = Vec::new();
+    for path in custom.child("pathLst")?.child_elements() {
+        if path.local_name() != "path" {
+            continue;
+        }
+        let width = path.attribute("w").and_then(|v| v.parse::<f64>().ok())?;
+        let height = path.attribute("h").and_then(|v| v.parse::<f64>().ok())?;
+        if !(width > 0.0 && height > 0.0) {
+            return None;
+        }
+        let point = |element: &XmlElement| -> Option<(f64, f64)> {
+            let x = element.attribute("x")?.parse::<f64>().ok()?;
+            let y = element.attribute("y")?.parse::<f64>().ok()?;
+            (x.is_finite() && y.is_finite()).then_some((x / width, y / height))
+        };
+        for command in path.child_elements() {
+            if out.len() >= MAX_CUSTOM_PATH_COMMANDS {
+                return None;
+            }
+            let points: Vec<(f64, f64)> = command
+                .child_elements()
+                .filter(|child| child.local_name() == "pt")
+                .map(point)
+                .collect::<Option<Vec<_>>>()?;
+            out.push(match (command.local_name(), points.as_slice()) {
+                ("moveTo", [(x, y)]) => GeometryPathCommand::Move { x: *x, y: *y },
+                ("lnTo", [(x, y)]) => GeometryPathCommand::Line { x: *x, y: *y },
+                ("quadBezTo", [(cpx, cpy), (x, y)]) => GeometryPathCommand::Quad {
+                    cpx: *cpx,
+                    cpy: *cpy,
+                    x: *x,
+                    y: *y,
+                },
+                ("cubicBezTo", [(cp1x, cp1y), (cp2x, cp2y), (x, y)]) => GeometryPathCommand::Cubic {
+                    cp1x: *cp1x,
+                    cp1y: *cp1y,
+                    cp2x: *cp2x,
+                    cp2y: *cp2y,
+                    x: *x,
+                    y: *y,
+                },
+                ("close", _) => GeometryPathCommand::Close,
+                // Anything else, an arc among them, would leave a gap in the outline.
+                _ => return None,
+            });
+        }
+    }
+    (!out.is_empty()).then_some(out)
+}
+
 fn parse_shape(
     element: &XmlElement,
     part: &str,
@@ -152,6 +205,7 @@ fn parse_shape(
     let properties = element.child("spPr");
     let transform = properties.and_then(|value| value.child("xfrm"));
     Ok(Shape {
+        path: properties.and_then(|value| value.child("custGeom")).and_then(parse_custom_geometry),
         base: parse_base(
             element
                 .child("nvSpPr")
@@ -1063,6 +1117,40 @@ mod tests {
     use super::*;
     use crate::ParseLimits;
     use crate::xml::parse_xml;
+
+    #[test]
+    fn a_custom_geometry_becomes_a_path_normalised_to_the_shape() {
+        let limits = ParseLimits::default();
+        let mut budget = ParseBudget::new(&limits);
+        let root = parse_xml(
+            br#"<p:sld><p:cSld><p:spTree><p:sp><p:nvSpPr><p:cNvPr id="2" name="Freeform"/><p:nvPr/></p:nvSpPr><p:spPr><a:custGeom><a:pathLst><a:path w="200" h="100"><a:moveTo><a:pt x="0" y="0"/></a:moveTo><a:lnTo><a:pt x="200" y="50"/></a:lnTo><a:cubicBezTo><a:pt x="150" y="100"/><a:pt x="50" y="100"/><a:pt x="0" y="50"/></a:cubicBezTo><a:close/></a:path></a:pathLst></a:custGeom></p:spPr></p:sp><p:sp><p:nvSpPr><p:cNvPr id="3" name="Guided"/><p:nvPr/></p:nvSpPr><p:spPr><a:custGeom><a:gdLst><a:gd name="x1" fmla="*/ w 1 2"/></a:gdLst><a:pathLst><a:path w="10" h="10"><a:moveTo><a:pt x="0" y="0"/></a:moveTo><a:lnTo><a:pt x="x1" y="10"/></a:lnTo></a:path></a:pathLst></a:custGeom></p:spPr></p:sp></p:spTree></p:cSld></p:sld>"#,
+            "ppt/slides/slide1.xml",
+            &mut budget,
+        )
+        .unwrap();
+        let data = common_slide_data(&root, &[], "ppt/slides/slide1.xml", &mut budget, ShapeElements::WithConnectors).unwrap();
+
+        let ShapeNode::Shape(freeform) = &data.shapes[0] else {
+            panic!("expected a shape");
+        };
+        assert_eq!(freeform.geometry, "custom");
+        let path = freeform.path.as_ref().expect("custGeom yields a path");
+        assert_eq!(
+            path[0],
+            GeometryPathCommand::Move { x: 0.0, y: 0.0 },
+            "coordinates are fractions of the path box, not raw units"
+        );
+        assert_eq!(path[1], GeometryPathCommand::Line { x: 1.0, y: 0.5 });
+        assert!(matches!(path[2], GeometryPathCommand::Cubic { x, y, .. } if x == 0.0 && y == 0.5));
+        assert_eq!(path[3], GeometryPathCommand::Close);
+
+        // A guide formula is not evaluated, so the whole outline is dropped and the shape
+        // falls back to its bounding box rather than drawing a half-resolved path.
+        let ShapeNode::Shape(guided) = &data.shapes[1] else {
+            panic!("expected a shape");
+        };
+        assert!(guided.path.is_none());
+    }
 
     #[test]
     fn a_shape_style_supplies_the_default_text_colour() {

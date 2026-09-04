@@ -485,11 +485,13 @@ impl<'a> LayoutBuilder<'a> {
                     w: rect.w,
                     h: rect.h,
                     geometry: shape.geometry.clone(),
-                    path: geometry_path(
-                        &shape.geometry,
-                        &shape.adjust_values,
-                        f64::from(rect.w) / f64::from(rect.h),
-                    ),
+                    path: custom_path(original).map(<[_]>::to_vec).unwrap_or_else(|| {
+                        geometry_path(
+                            &shape.geometry,
+                            &shape.adjust_values,
+                            f64::from(rect.w) / f64::from(rect.h),
+                        )
+                    }),
                     adjust_values: shape
                         .adjust_values
                         .iter()
@@ -597,11 +599,13 @@ impl<'a> LayoutBuilder<'a> {
                     w: rect.w,
                     h: rect.h,
                     geometry: value.geometry.clone(),
-                    path: geometry_path(
-                        &value.geometry,
-                        &value.adjust_values,
-                        f64::from(rect.w) / f64::from(rect.h),
-                    ),
+                    path: value.path.clone().unwrap_or_else(|| {
+                        geometry_path(
+                            &value.geometry,
+                            &value.adjust_values,
+                            f64::from(rect.w) / f64::from(rect.h),
+                        )
+                    }),
                     adjust_values: value
                         .adjust_values
                         .iter()
@@ -2250,6 +2254,13 @@ fn picture_mask(
     (!path.is_empty()).then_some(path)
 }
 
+fn custom_path(shape: Option<&ShapeNode>) -> Option<&[ooxml_drawingml::GeometryPathCommand]> {
+    match shape? {
+        ShapeNode::Shape(shape) => shape.path.as_deref(),
+        _ => None,
+    }
+}
+
 fn geometry_path(
     geometry: &str,
     adjustments: &BTreeMap<String, f64>,
@@ -2397,6 +2408,7 @@ mod tests {
             fill: None,
             outline: None,
             style: None,
+            path: None,
         };
         let rect = PxRect {
             x: 0.0,

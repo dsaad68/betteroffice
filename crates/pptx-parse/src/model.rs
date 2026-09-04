@@ -1,7 +1,7 @@
 use std::collections::BTreeMap;
 
 pub use ooxml_drawingml::ShapeStyle;
-use ooxml_drawingml::{ColorValue, ShapeFill, ShapeOutline, Theme, ThemeFormatScheme};
+use ooxml_drawingml::{ColorValue, GeometryPathCommand, ShapeFill, ShapeOutline, Theme, ThemeFormatScheme};
 use serde::{Deserialize, Serialize};
 
 use crate::relationships::Relationship;
@@ -244,6 +244,8 @@ pub struct Shape {
     #[serde(flatten)]
     pub base: ShapeBase,
     pub geometry: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub path: Option<Vec<GeometryPathCommand>>,
     /// Theme formatting and text defaults.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub style: Option<Box<ShapeStyle>>,
