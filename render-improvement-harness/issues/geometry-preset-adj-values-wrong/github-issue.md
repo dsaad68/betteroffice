@@ -71,7 +71,7 @@ ECMA-376 defines it as a fraction of the shape's *shortest side* (`ss`).**
    ([`crates/ooxml-drawingml/src/geometry.rs:199-209`](https://github.com/openooxml/betteroffice/blob/187cebc9ef5d414e4e65ccd96fe68b8f46c7f528/crates/ooxml-drawingml/src/geometry.rs#L199-L209)) builds
    `polygon(&[(0,0), (1-adj,0), (1,0.5), (1-adj,1), (0,1), (adj,0.5)])`. The polygon *topology* is
    exactly the ECMA `chevron` path (`moveTo 0,0 -> x2,0 -> r,vc -> x2,b -> 0,b -> x1,vc`), but the
-   x coordinates emitted here are fractions of the shape's width - [`crates/pptx-raster/src/lib.rs:575`](https://github.com/dsaad68/betteroffice/blob/a47dbde7498c781ab81b141e834da1950dcf4175/crates/pptx-raster/src/lib.rs#L575)
+   x coordinates emitted here are fractions of the shape's width - [`crates/pptx-raster/src/lib.rs:575`](https://github.com/dsaad68/betteroffice/blob/98d8c0e8d6852c129f629f2a8dda34f6b8801092/crates/pptx-raster/src/lib.rs#L575)
    and its `px()` helper multiply x by `w`. The spec's `x1` is `*/ ss a 100000`, i.e. `adj` times the
    *shortest side*. For `Arrow: Chevron 47` (`w/h = 3.08`) that alone is a 3.08x overshoot, before
    the default-value error below.
@@ -97,9 +97,9 @@ ECMA-376 defines it as a fraction of the shape's *shortest side* (`ss`).**
    `dx <= w`, for both presets) must be read off the spec before the clamp is rewritten.
 
 6. One fix covers every surface. Both `pptx-render` call sites already pass the aspect ratio
-   ([`crates/pptx-render/src/layout.rs:410-414`](https://github.com/dsaad68/betteroffice/blob/a47dbde7498c781ab81b141e834da1950dcf4175/crates/pptx-render/src/layout.rs#L410-L414), [`crates/pptx-render/src/layout.rs:516-520`](https://github.com/dsaad68/betteroffice/blob/a47dbde7498c781ab81b141e834da1950dcf4175/crates/pptx-render/src/layout.rs#L516-L520), and the
+   ([`crates/pptx-render/src/layout.rs:410-414`](https://github.com/dsaad68/betteroffice/blob/98d8c0e8d6852c129f629f2a8dda34f6b8801092/crates/pptx-render/src/layout.rs#L410-L414), [`crates/pptx-render/src/layout.rs:516-520`](https://github.com/dsaad68/betteroffice/blob/98d8c0e8d6852c129f629f2a8dda34f6b8801092/crates/pptx-render/src/layout.rs#L516-L520), and the
    composed path at [`crates/pptx-render/src/lib.rs:170`](https://github.com/openooxml/betteroffice/blob/187cebc9ef5d414e4e65ccd96fe68b8f46c7f528/crates/pptx-render/src/lib.rs#L170), all funnelling into the two `geometry_path`
-   helpers at [`crates/pptx-render/src/layout.rs:1946`](https://github.com/dsaad68/betteroffice/blob/a47dbde7498c781ab81b141e834da1950dcf4175/crates/pptx-render/src/layout.rs#L1946) and [`crates/pptx-render/src/lib.rs:237`](https://github.com/openooxml/betteroffice/blob/187cebc9ef5d414e4e65ccd96fe68b8f46c7f528/crates/pptx-render/src/lib.rs#L237)), so
+   helpers at [`crates/pptx-render/src/layout.rs:1946`](https://github.com/dsaad68/betteroffice/blob/98d8c0e8d6852c129f629f2a8dda34f6b8801092/crates/pptx-render/src/layout.rs#L1946) and [`crates/pptx-render/src/lib.rs:237`](https://github.com/openooxml/betteroffice/blob/187cebc9ef5d414e4e65ccd96fe68b8f46c7f528/crates/pptx-render/src/lib.rs#L237)), so
    `preset_geometry_to_path` already has the `w/h` it needs and nothing above it has to change.
    There is no second preset table under `packages/` - the web canvas consumes the same command
    list - so raster and canvas are fixed together.
@@ -127,7 +127,7 @@ _(hypothesis, not yet confirmed by a fix)_
 **Suggested fix**
 
 One file: `crates/ooxml-drawingml/src/geometry.rs`. Nothing above it changes - both `pptx-render`
-`geometry_path` helpers ([`crates/pptx-render/src/layout.rs:1946`](https://github.com/dsaad68/betteroffice/blob/a47dbde7498c781ab81b141e834da1950dcf4175/crates/pptx-render/src/layout.rs#L1946),
+`geometry_path` helpers ([`crates/pptx-render/src/layout.rs:1946`](https://github.com/dsaad68/betteroffice/blob/98d8c0e8d6852c129f629f2a8dda34f6b8801092/crates/pptx-render/src/layout.rs#L1946),
 [`crates/pptx-render/src/lib.rs:237`](https://github.com/openooxml/betteroffice/blob/187cebc9ef5d414e4e65ccd96fe68b8f46c7f528/crates/pptx-render/src/lib.rs#L237)) and `docx-parse`
 ([`crates/docx-parse/src/drawingml.rs:273`](https://github.com/openooxml/betteroffice/blob/187cebc9ef5d414e4e65ccd96fe68b8f46c7f528/crates/docx-parse/src/drawingml.rs#L273)) already hand `preset_geometry_to_path` the aspect ratio,
 and every consumer below it draws the normalised command list as-is.
