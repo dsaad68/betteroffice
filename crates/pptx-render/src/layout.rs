@@ -58,6 +58,8 @@ pub struct SlideRenderer {
     fonts: FontStore,
     faces: HashMap<(String, bool, bool), FontFace>,
     fallback: Option<FontFace>,
+    /// Normalized family of the first registration, used as a style-aware fallback.
+    fallback_family: Option<String>,
     font_count: usize,
 }
 
@@ -73,6 +75,7 @@ impl SlideRenderer {
             fonts: FontStore::new(),
             faces: HashMap::new(),
             fallback: None,
+            fallback_family: None,
             font_count: 0,
         }
     }
@@ -109,6 +112,8 @@ impl SlideRenderer {
         self.faces
             .insert((normalize_family(family), bold, italic), face.clone());
         self.fallback.get_or_insert(face);
+        self.fallback_family
+            .get_or_insert_with(|| normalize_family(family));
         self.font_count += 1;
         Ok(id.to_u32())
     }
@@ -236,13 +241,20 @@ impl SlideRenderer {
         bold: bool,
         italic: bool,
     ) -> Result<FontFace, RenderError> {
-        let normalized = normalize_family(family);
-        self.faces
-            .get(&(normalized.clone(), bold, italic))
-            .or_else(|| self.faces.get(&(normalized, false, false)))
-            .or(self.fallback.as_ref())
-            .cloned()
-            .ok_or(RenderError::NoFont)
+        let requested = normalize_family(family);
+        // Degrade the family before the style so a missing family keeps its weight.
+        let styles = [(bold, italic), (bold, false), (false, italic), (false, false)];
+        for name in [Some(&requested), self.fallback_family.as_ref()]
+            .into_iter()
+            .flatten()
+        {
+            for (bold, italic) in styles {
+                if let Some(face) = self.faces.get(&(name.clone(), bold, italic)) {
+                    return Ok(face.clone());
+                }
+            }
+        }
+        self.fallback.clone().ok_or(RenderError::NoFont)
     }
 }
 
@@ -2008,6 +2020,50 @@ mod tests {
             renderer.register_font("Arial", bold, false, FONT).unwrap();
         }
         renderer
+    }
+
+    #[test]
+    fn an_unregistered_family_keeps_its_weight_through_the_fallback() {
+        let renderer = renderer();
+        let regular = renderer.resolve_face("Arial", false, false).unwrap();
+        let bold = renderer.resolve_face("Arial", true, false).unwrap();
+        assert_ne!(regular.id, bold.id, "the fixture must register two distinct faces");
+
+        let resolved = renderer.resolve_face("Segoe UI", true, false).unwrap();
+        assert_eq!(resolved.id, bold.id);
+    }
+
+    #[test]
+    fn an_unregistered_family_keeps_its_slant_through_the_fallback() {
+        let mut renderer = SlideRenderer::new();
+        renderer.register_font("Arial", false, false, FONT).unwrap();
+        renderer.register_font("Arial", false, true, FONT).unwrap();
+        let italic = renderer.resolve_face("Arial", false, true).unwrap();
+
+        let resolved = renderer.resolve_face("Segoe UI", false, true).unwrap();
+        assert_eq!(resolved.id, italic.id);
+    }
+
+    #[test]
+    fn a_registered_family_wins_over_the_fallback_family() {
+        let mut renderer = SlideRenderer::new();
+        renderer.register_font("Arial", false, false, FONT).unwrap();
+        renderer.register_font("Arial", true, false, FONT).unwrap();
+        renderer.register_font("Georgia", false, false, FONT).unwrap();
+        let georgia = renderer.resolve_face("Georgia", false, false).unwrap();
+
+        let resolved = renderer.resolve_face("Georgia", true, false).unwrap();
+        assert_eq!(resolved.id, georgia.id);
+    }
+
+    #[test]
+    fn the_fallback_family_degrades_style_when_nothing_matches() {
+        let mut renderer = SlideRenderer::new();
+        renderer.register_font("Arial", false, false, FONT).unwrap();
+        let regular = renderer.resolve_face("Arial", false, false).unwrap();
+
+        let resolved = renderer.resolve_face("Segoe UI", true, true).unwrap();
+        assert_eq!(resolved.id, regular.id);
     }
 
     #[test]
