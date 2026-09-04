@@ -62,7 +62,7 @@ Match the reference render. PowerPoint and LibreOffice agree on this behaviour; 
 
 **Confirmed, and reproduced against the real display list.** Rendering slide 1 through the same
 entry point the harness uses (`Presentation::render_slide`,
-[`crates/betteroffice-pptx/src/presentation.rs:312`](https://github.com/dsaad68/betteroffice/blob/df1a57dae7a091ea9ca8176ca013274cced71fdd/crates/betteroffice-pptx/src/presentation.rs#L312)) emits this primitive for shape id 6:
+[`crates/betteroffice-pptx/src/presentation.rs:312`](https://github.com/dsaad68/betteroffice/blob/a47dbde7498c781ab81b141e834da1950dcf4175/crates/betteroffice-pptx/src/presentation.rs#L312)) emits this primitive for shape id 6:
 
 ```json
 { "kind": "shape", "objectId": 6, "name": "Freeform: Shape 5",
@@ -98,16 +98,16 @@ existed: unlike `parse_picture` ([`crates/pptx-parse/src/drawing.rs:159`](https:
 relationship table. Its single call site already has one in scope
 ([`crates/pptx-parse/src/drawing.rs:110`](https://github.com/openooxml/betteroffice/blob/187cebc9ef5d414e4e65ccd96fe68b8f46c7f528/crates/pptx-parse/src/drawing.rs#L110)), so this is a signature change, not a plumbing problem.
 
-`layout::paint` ([`crates/pptx-render/src/layout.rs:1897`](https://github.com/dsaad68/betteroffice/blob/df1a57dae7a091ea9ca8176ca013274cced71fdd/crates/pptx-render/src/layout.rs#L1897)) then does the visible damage: `"picture"`
+`layout::paint` ([`crates/pptx-render/src/layout.rs:1897`](https://github.com/dsaad68/betteroffice/blob/a47dbde7498c781ab81b141e834da1950dcf4175/crates/pptx-render/src/layout.rs#L1897)) then does the visible damage: `"picture"`
 is not `"none"`, there is no gradient, and `fill.color` is `None`, so it falls through to
 `resolve_color_value_to_hex_with_theme(None, ..)` and returns `None`. That `None` is what both emit
-sites store — [`crates/pptx-render/src/layout.rs:384-388`](https://github.com/dsaad68/betteroffice/blob/df1a57dae7a091ea9ca8176ca013274cced71fdd/crates/pptx-render/src/layout.rs#L384-L388) and `:420` for the snapshot path,
-[`crates/pptx-render/src/layout.rs:526`](https://github.com/dsaad68/betteroffice/blob/df1a57dae7a091ea9ca8176ca013274cced71fdd/crates/pptx-render/src/layout.rs#L526) for the parsed path (a third caller,
-[`crates/pptx-render/src/layout.rs:183`](https://github.com/dsaad68/betteroffice/blob/df1a57dae7a091ea9ca8176ca013274cced71fdd/crates/pptx-render/src/layout.rs#L183), resolves the slide background the same way). The shape's
+sites store — [`crates/pptx-render/src/layout.rs:384-388`](https://github.com/dsaad68/betteroffice/blob/a47dbde7498c781ab81b141e834da1950dcf4175/crates/pptx-render/src/layout.rs#L384-L388) and `:420` for the snapshot path,
+[`crates/pptx-render/src/layout.rs:526`](https://github.com/dsaad68/betteroffice/blob/a47dbde7498c781ab81b141e834da1950dcf4175/crates/pptx-render/src/layout.rs#L526) for the parsed path (a third caller,
+[`crates/pptx-render/src/layout.rs:183`](https://github.com/dsaad68/betteroffice/blob/a47dbde7498c781ab81b141e834da1950dcf4175/crates/pptx-render/src/layout.rs#L183), resolves the slide background the same way). The shape's
 outline is
 `<a:ln><a:noFill/>`, which `parse_outline` turns into `None`
 ([`crates/pptx-parse/src/drawing.rs:626-628`](https://github.com/openooxml/betteroffice/blob/187cebc9ef5d414e4e65ccd96fe68b8f46c7f528/crates/pptx-parse/src/drawing.rs#L626-L628)), so no stroke rescues it either. In the raster,
-`paint_shape` ([`crates/pptx-raster/src/lib.rs:364-387`](https://github.com/dsaad68/betteroffice/blob/df1a57dae7a091ea9ca8176ca013274cced71fdd/crates/pptx-raster/src/lib.rs#L364-L387)) builds the path and then skips both the fill
+`paint_shape` ([`crates/pptx-raster/src/lib.rs:364-387`](https://github.com/dsaad68/betteroffice/blob/a47dbde7498c781ab81b141e834da1950dcf4175/crates/pptx-raster/src/lib.rs#L364-L387)) builds the path and then skips both the fill
 and the stroke block. Zero pixels, no error, no `skipped_images` increment — matching
 `bo-log.json`'s clean log for all three slides.
 
@@ -117,7 +117,7 @@ The contract below layout has no way to express this even once parsing is fixed:
 - `Primitive::Shape` ([`crates/pptx-render/src/display_list.rs:79-99`](https://github.com/openooxml/betteroffice/blob/187cebc9ef5d414e4e65ccd96fe68b8f46c7f528/crates/pptx-render/src/display_list.rs#L79-L99)) carries no `asset_id`;
   only `Primitive::Image` ([`crates/pptx-render/src/display_list.rs:99-114`](https://github.com/openooxml/betteroffice/blob/187cebc9ef5d414e4e65ccd96fe68b8f46c7f528/crates/pptx-render/src/display_list.rs#L99-L114)) does, and that
   primitive always paints an axis-aligned rectangle
-  ([`crates/pptx-raster/src/lib.rs:391-431`](https://github.com/dsaad68/betteroffice/blob/df1a57dae7a091ea9ca8176ca013274cced71fdd/crates/pptx-raster/src/lib.rs#L391-L431), [`packages/pptx/src/render/canvas.ts:201-214`](https://github.com/openooxml/betteroffice/blob/187cebc9ef5d414e4e65ccd96fe68b8f46c7f528/packages/pptx/src/render/canvas.ts#L201-L214)).
+  ([`crates/pptx-raster/src/lib.rs:391-431`](https://github.com/dsaad68/betteroffice/blob/a47dbde7498c781ab81b141e834da1950dcf4175/crates/pptx-raster/src/lib.rs#L391-L431), [`packages/pptx/src/render/canvas.ts:201-214`](https://github.com/openooxml/betteroffice/blob/187cebc9ef5d414e4e65ccd96fe68b8f46c7f528/packages/pptx/src/render/canvas.ts#L201-L214)).
 - [`packages/pptx/src/types.ts:205-212`](https://github.com/openooxml/betteroffice/blob/187cebc9ef5d414e4e65ccd96fe68b8f46c7f528/packages/pptx/src/types.ts#L205-L212) mirrors the two-variant union.
 
 The snapshot path is the one exception that is already half-built: `ShapeSnapshot.media_part_path`
@@ -134,7 +134,7 @@ the geometry cluster needs, and the two changes should ship in one schema revisi
 
 Everything in `geometry-custom-collapses-to-bbox` applies verbatim: `parse_geometry`
 ([`crates/pptx-parse/src/drawing.rs:335`](https://github.com/openooxml/betteroffice/blob/187cebc9ef5d414e4e65ccd96fe68b8f46c7f528/crates/pptx-parse/src/drawing.rs#L335)) returns the string `"custom"` and never reads `a:pathLst`,
-and `geometry_path` ([`crates/pptx-render/src/layout.rs:1946-1957`](https://github.com/dsaad68/betteroffice/blob/df1a57dae7a091ea9ca8176ca013274cced71fdd/crates/pptx-render/src/layout.rs#L1946-L1957)) falls back to the `"rect"`
+and `geometry_path` ([`crates/pptx-render/src/layout.rs:1946-1957`](https://github.com/dsaad68/betteroffice/blob/a47dbde7498c781ab81b141e834da1950dcf4175/crates/pptx-render/src/layout.rs#L1946-L1957)) falls back to the `"rect"`
 preset. The four-command rectangle in the dump above is that fallback. See that issue for the port
 plan; this report does not restate it.
 
@@ -148,7 +148,7 @@ What this shape adds to that cluster's measurements:
   zero `arcTo`, zero `quadBezTo`. Within the `moveTo`/`lnTo`/`cubicBezTo`/`close` subset that
   cluster already scopes.
 - The counters must be reverse-wound relative to their glyph outlines for `FillRule::Winding`
-  ([`crates/pptx-raster/src/lib.rs:382`](https://github.com/dsaad68/betteroffice/blob/df1a57dae7a091ea9ca8176ca013274cced71fdd/crates/pptx-raster/src/lib.rs#L382)) to punch them out. `evidence-4.png` is the reference for
+  ([`crates/pptx-raster/src/lib.rs:382`](https://github.com/dsaad68/betteroffice/blob/a47dbde7498c781ab81b141e834da1950dcf4175/crates/pptx-raster/src/lib.rs#L382)) to punch them out. `evidence-4.png` is the reference for
   that check; if the winding is wrong the letters fill solid and the deck looks worse, not better.
 
 ### What will still be missing after the fix
@@ -172,8 +172,8 @@ carries a correct radial paint:
 
 Note the stops are in **document order, descending** — `pos="100000"` before `pos="0"` — because
 `parse_gradient_fill` ([`crates/pptx-parse/src/drawing.rs:585-621`](https://github.com/openooxml/betteroffice/blob/187cebc9ef5d414e4e65ccd96fe68b8f46c7f528/crates/pptx-parse/src/drawing.rs#L585-L621)) preserves XML order and `paint`
-([`crates/pptx-render/src/layout.rs:1902-1921`](https://github.com/dsaad68/betteroffice/blob/df1a57dae7a091ea9ca8176ca013274cced71fdd/crates/pptx-render/src/layout.rs#L1902-L1921)) does not sort. `gradient_paint`
-([`crates/pptx-raster/src/lib.rs:627-692`](https://github.com/dsaad68/betteroffice/blob/df1a57dae7a091ea9ca8176ca013274cced71fdd/crates/pptx-raster/src/lib.rs#L627-L692)) hands that straight to `tiny_skia::RadialGradient`.
+([`crates/pptx-render/src/layout.rs:1902-1921`](https://github.com/dsaad68/betteroffice/blob/a47dbde7498c781ab81b141e834da1950dcf4175/crates/pptx-render/src/layout.rs#L1902-L1921)) does not sort. `gradient_paint`
+([`crates/pptx-raster/src/lib.rs:627-692`](https://github.com/dsaad68/betteroffice/blob/a47dbde7498c781ab81b141e834da1950dcf4175/crates/pptx-raster/src/lib.rs#L627-L692)) hands that straight to `tiny_skia::RadialGradient`.
 Unsorted stops collapsing to the first color is a plausible explanation for the flat outer-stop
 fill the reports sampled, but I did not verify tiny_skia's behaviour. **Hypothesis, for that
 cluster's owner.**
@@ -189,7 +189,7 @@ Two changes must land together; either alone leaves `typography-trick` wrong.
 Nothing to add here except one constraint that cluster's corpus scan did not surface: this shape is
 a *single* `a:path` holding 15 subpaths, so the walker must keep emitting after a `close` rather
 than stopping at the first contour, and must not reorder or reverse contours — the counters of C, R
-and A are punched out by `FillRule::Winding` ([`crates/pptx-raster/src/lib.rs:382`](https://github.com/dsaad68/betteroffice/blob/df1a57dae7a091ea9ca8176ca013274cced71fdd/crates/pptx-raster/src/lib.rs#L382)) and by canvas's
+and A are punched out by `FillRule::Winding` ([`crates/pptx-raster/src/lib.rs:382`](https://github.com/dsaad68/betteroffice/blob/a47dbde7498c781ab81b141e834da1950dcf4175/crates/pptx-raster/src/lib.rs#L382)) and by canvas's
 default nonzero rule ([`packages/pptx/src/render/canvas.ts:126-152`](https://github.com/openooxml/betteroffice/blob/187cebc9ef5d414e4e65ccd96fe68b8f46c7f528/packages/pptx/src/render/canvas.ts#L126-L152)).
 
 **B. A picture fill on a `p:sp`** — new capability, six crates plus the web package. Follow the
@@ -229,21 +229,21 @@ docx implementation, which already does all of this end to end:
 
 4. **`crates/pptx-render`** — add a picture arm to `Paint`
    ([`crates/pptx-render/src/display_list.rs:24-34`](https://github.com/openooxml/betteroffice/blob/187cebc9ef5d414e4e65ccd96fe68b8f46c7f528/crates/pptx-render/src/display_list.rs#L24-L34)) carrying the asset id and the placement rects,
-   and emit it from `paint` ([`crates/pptx-render/src/layout.rs:1897`](https://github.com/dsaad68/betteroffice/blob/df1a57dae7a091ea9ca8176ca013274cced71fdd/crates/pptx-render/src/layout.rs#L1897)). `paint` currently takes only
+   and emit it from `paint` ([`crates/pptx-render/src/layout.rs:1897`](https://github.com/dsaad68/betteroffice/blob/a47dbde7498c781ab81b141e834da1950dcf4175/crates/pptx-render/src/layout.rs#L1897)). `paint` currently takes only
    `(&ShapeFill, &Theme)`; it needs the snapshot's / node's media path too, so give it a third
-   argument at all three call sites ([`crates/pptx-render/src/layout.rs:388`](https://github.com/dsaad68/betteroffice/blob/df1a57dae7a091ea9ca8176ca013274cced71fdd/crates/pptx-render/src/layout.rs#L388), `:526` and, for a
+   argument at all three call sites ([`crates/pptx-render/src/layout.rs:388`](https://github.com/dsaad68/betteroffice/blob/a47dbde7498c781ab81b141e834da1950dcf4175/crates/pptx-render/src/layout.rs#L388), `:526` and, for a
    picture slide background, `:183`). The
    composed path ([`crates/pptx-render/src/lib.rs:161-190`](https://github.com/openooxml/betteroffice/blob/187cebc9ef5d414e4e65ccd96fe68b8f46c7f528/crates/pptx-render/src/lib.rs#L161-L190)) deserialises `fill: Option<Paint>`
    straight from JSON and needs no code change.
 
-5. **`crates/pptx-raster`** — in `paint_shape` ([`crates/pptx-raster/src/lib.rs:364`](https://github.com/dsaad68/betteroffice/blob/df1a57dae7a091ea9ca8176ca013274cced71fdd/crates/pptx-raster/src/lib.rs#L364)), branch before
+5. **`crates/pptx-raster`** — in `paint_shape` ([`crates/pptx-raster/src/lib.rs:364`](https://github.com/dsaad68/betteroffice/blob/a47dbde7498c781ab81b141e834da1950dcf4175/crates/pptx-raster/src/lib.rs#L364)), branch before
    `shader_paint`: for a picture paint, build a `Mask` from the already-built `Path` the way
-   `clipped` does ([`crates/pptx-raster/src/lib.rs:346-359`](https://github.com/dsaad68/betteroffice/blob/df1a57dae7a091ea9ca8176ca013274cced71fdd/crates/pptx-raster/src/lib.rs#L346-L359)), intersect it with the incoming `clip`,
+   `clipped` does ([`crates/pptx-raster/src/lib.rs:346-359`](https://github.com/dsaad68/betteroffice/blob/a47dbde7498c781ab81b141e834da1950dcf4175/crates/pptx-raster/src/lib.rs#L346-L359)), intersect it with the incoming `clip`,
    then reuse the decode-and-fit block from `paint_image`
-   ([`crates/pptx-raster/src/lib.rs:401-425`](https://github.com/dsaad68/betteroffice/blob/df1a57dae7a091ea9ca8176ca013274cced71fdd/crates/pptx-raster/src/lib.rs#L401-L425)) with the frame widened by the stretch rect. A
+   ([`crates/pptx-raster/src/lib.rs:401-425`](https://github.com/dsaad68/betteroffice/blob/a47dbde7498c781ab81b141e834da1950dcf4175/crates/pptx-raster/src/lib.rs#L401-L425)) with the frame widened by the stretch rect. A
    `tiny_skia::Pattern` shader inside `shader_paint` is the tidier alternative but fights the
    `Paint<'static>` return type, since the pattern borrows the decoded pixmap. Count an
-   undecodable blip in `skipped_images` ([`crates/pptx-raster/src/lib.rs:426`](https://github.com/dsaad68/betteroffice/blob/df1a57dae7a091ea9ca8176ca013274cced71fdd/crates/pptx-raster/src/lib.rs#L426)) rather than dropping
+   undecodable blip in `skipped_images` ([`crates/pptx-raster/src/lib.rs:426`](https://github.com/dsaad68/betteroffice/blob/a47dbde7498c781ab81b141e834da1950dcf4175/crates/pptx-raster/src/lib.rs#L426)) rather than dropping
    the shape silently — that is the bug being fixed.
 
 6. **`packages/pptx`** — extend the `Paint` union ([`packages/pptx/src/types.ts:205-212`](https://github.com/openooxml/betteroffice/blob/187cebc9ef5d414e4e65ccd96fe68b8f46c7f528/packages/pptx/src/types.ts#L205-L212)) and teach
@@ -364,10 +364,10 @@ Coverage to extend:
 - `crates/pptx-parse/src/drawing.rs` has no `blipFill`-on-`p:sp` test; the only `blipFill` reads are
   [`crates/pptx-parse/src/drawing.rs:167`](https://github.com/openooxml/betteroffice/blob/187cebc9ef5d414e4e65ccd96fe68b8f46c7f528/crates/pptx-parse/src/drawing.rs#L167) (`p:pic`) and `:579` (this branch). A parse test asserting
   the resolved media part path for a `p:sp` is new ground.
-- [`crates/pptx-raster/tests/golden.rs:283`](https://github.com/dsaad68/betteroffice/blob/df1a57dae7a091ea9ca8176ca013274cced71fdd/crates/pptx-raster/tests/golden.rs#L283) (`golden_image`) already exercises the decoder and the
-  `AssetMap` fixture at [`crates/pptx-raster/tests/golden.rs:76-78`](https://github.com/dsaad68/betteroffice/blob/df1a57dae7a091ea9ca8176ca013274cced71fdd/crates/pptx-raster/tests/golden.rs#L76-L78). A `golden_picture_filled_shape`
+- [`crates/pptx-raster/tests/golden.rs:283`](https://github.com/dsaad68/betteroffice/blob/a47dbde7498c781ab81b141e834da1950dcf4175/crates/pptx-raster/tests/golden.rs#L283) (`golden_image`) already exercises the decoder and the
+  `AssetMap` fixture at [`crates/pptx-raster/tests/golden.rs:76-78`](https://github.com/dsaad68/betteroffice/blob/a47dbde7498c781ab81b141e834da1950dcf4175/crates/pptx-raster/tests/golden.rs#L76-L78). A `golden_picture_filled_shape`
   beside it, using a non-convex two-contour path, pins both the picture fill and the winding rule.
-- [`crates/pptx-render/src/layout.rs:2403-2410`](https://github.com/dsaad68/betteroffice/blob/df1a57dae7a091ea9ca8176ca013274cced71fdd/crates/pptx-render/src/layout.rs#L2403-L2410) asserts on `geometry == "custom"` primitives and
+- [`crates/pptx-render/src/layout.rs:2403-2410`](https://github.com/dsaad68/betteroffice/blob/a47dbde7498c781ab81b141e834da1950dcf4175/crates/pptx-render/src/layout.rs#L2403-L2410) asserts on `geometry == "custom"` primitives and
   their `Paint::Solid` fill; a picture-fill variant must not disturb that chart-side assertion, nor
   [`crates/pptx-render/src/chart.rs:485`](https://github.com/openooxml/betteroffice/blob/187cebc9ef5d414e4e65ccd96fe68b8f46c7f528/crates/pptx-render/src/chart.rs#L485) / `:594`.
 - [`crates/pptx-render/src/lib.rs:405`](https://github.com/openooxml/betteroffice/blob/187cebc9ef5d414e4e65ccd96fe68b8f46c7f528/crates/pptx-render/src/lib.rs#L405) asserts the composed contract version. Adding a `Paint`
@@ -382,4 +382,17 @@ Related issues found in the same run: `fill-nonsolid-fill-types-not-resolved`, `
 
 Files most likely involved: `crates/pptx-parse/src/drawing.rs`, `crates/pptx-parse/src/model.rs`, `crates/ooxml-drawingml/src/shape.rs`, `crates/pptx-edit/src/deck.rs`, `crates/pptx-render/src/display_list.rs`, `crates/pptx-render/src/layout.rs`, `crates/pptx-render/src/lib.rs`, `crates/pptx-raster/src/lib.rs`, `packages/pptx/src/types.ts`, `packages/pptx/src/render/canvas.ts`
 
-Found with a comparison harness that renders decks with both engines, pixel-diffs them, and traces each difference back to the OOXML and the code path. Full report with all findings: https://github.com/dsaad68/betteroffice/blob/harness/pptx-render-improvement/render-improvement-harness/issues/unsupported-custgeom-picturefill-wordmark-not-drawn/report.md. Methodology: https://gist.github.com/dsaad68/038b63c2977aeca16fc873c2df1152d0. Line numbers link to the exact commit they were checked against.
+**How this was found**
+
+A comparison harness renders each deck twice, once with LibreOffice and once with BetterOffice,
+pixel-diffs the two images slide by slide, and traces every visible difference back to the OOXML
+and to the code path responsible. Reference renders come from LibreOffice through
+[pptx-pdf](https://github.com/dsaad68/pptx-pdf), a single binary with LibreOffice embedded, at 96 dpi. Both engines
+are given the same Liberation, Carlito and Caladea faces under the family names the decks ask for,
+so a difference in text metrics is a real difference and not font substitution.
+
+- Harness, with the per-slide reports and all 35 issues this run produced: https://github.com/dsaad68/betteroffice/tree/harness/pptx-render-improvement/render-improvement-harness
+- Full report behind this issue, with every finding, the evidence table and the proposed fix: https://github.com/dsaad68/betteroffice/blob/harness/pptx-render-improvement/render-improvement-harness/issues/unsupported-custgeom-picturefill-wordmark-not-drawn/report.md
+- How the harness works and why it is built this way: https://gist.github.com/dsaad68/038b63c2977aeca16fc873c2df1152d0
+
+Line numbers link to the exact commit they were checked against.

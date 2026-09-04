@@ -69,13 +69,13 @@ from the parsed model - never see it.
    ([`crates/pptx-edit/src/model.rs:99-121`](https://github.com/openooxml/betteroffice/blob/187cebc9ef5d414e4e65ccd96fe68b8f46c7f528/crates/pptx-edit/src/model.rs#L99-L121)) carries `flip_h`/`flip_v`/`placeholder` but no
    `hidden`, and the reader `snapshot_shape` ([`crates/pptx-edit/src/deck.rs:804`](https://github.com/openooxml/betteroffice/blob/187cebc9ef5d414e4e65ccd96fe68b8f46c7f528/crates/pptx-edit/src/deck.rs#L804)) cannot read one.
 4. The renderer therefore cannot check it. `render_snapshot_shape`
-   ([`crates/pptx-render/src/layout.rs:340`](https://github.com/dsaad68/betteroffice/blob/df1a57dae7a091ea9ca8176ca013274cced71fdd/crates/pptx-render/src/layout.rs#L340)) - the function that renders every slide shape, called
-   from the `for shape in &deck_slide.shapes` loop at [`crates/pptx-render/src/layout.rs:230`](https://github.com/dsaad68/betteroffice/blob/df1a57dae7a091ea9ca8176ca013274cced71fdd/crates/pptx-render/src/layout.rs#L230) - has
-   no visibility guard; its group branch ([`crates/pptx-render/src/layout.rs:361-373`](https://github.com/dsaad68/betteroffice/blob/df1a57dae7a091ea9ca8176ca013274cced71fdd/crates/pptx-render/src/layout.rs#L361-L373)) recurses into
+   ([`crates/pptx-render/src/layout.rs:340`](https://github.com/dsaad68/betteroffice/blob/a47dbde7498c781ab81b141e834da1950dcf4175/crates/pptx-render/src/layout.rs#L340)) - the function that renders every slide shape, called
+   from the `for shape in &deck_slide.shapes` loop at [`crates/pptx-render/src/layout.rs:230`](https://github.com/dsaad68/betteroffice/blob/a47dbde7498c781ab81b141e834da1950dcf4175/crates/pptx-render/src/layout.rs#L230) - has
+   no visibility guard; its group branch ([`crates/pptx-render/src/layout.rs:361-373`](https://github.com/dsaad68/betteroffice/blob/a47dbde7498c781ab81b141e834da1950dcf4175/crates/pptx-render/src/layout.rs#L361-L373)) recurses into
    children unconditionally, which is why the hidden `Group 5` still emits both of its freeforms.
 
 The contrast is the master/layout path: `render_parsed_shape` renders from `ShapeNode` and does
-guard, [`crates/pptx-render/src/layout.rs:487`](https://github.com/dsaad68/betteroffice/blob/df1a57dae7a091ea9ca8176ca013274cced71fdd/crates/pptx-render/src/layout.rs#L487):
+guard, [`crates/pptx-render/src/layout.rs:487`](https://github.com/dsaad68/betteroffice/blob/a47dbde7498c781ab81b141e834da1950dcf4175/crates/pptx-render/src/layout.rs#L487):
 
 ```rust
 if node_base(shape).hidden {
@@ -99,7 +99,7 @@ Confirmed against the XML and against the running renderer at HEAD (36a9235):
 
 No test anywhere in the tree exercises `hidden` on the shape path - the only two mentions in
 `crates/pptx-render/src/layout.rs` are the guard itself and a `hidden: false` literal in a fixture
-([`crates/pptx-render/src/layout.rs:2547`](https://github.com/dsaad68/betteroffice/blob/df1a57dae7a091ea9ca8176ca013274cced71fdd/crates/pptx-render/src/layout.rs#L2547)).
+([`crates/pptx-render/src/layout.rs:2547`](https://github.com/dsaad68/betteroffice/blob/a47dbde7498c781ab81b141e834da1950dcf4175/crates/pptx-render/src/layout.rs#L2547)).
 
 Adjacent, not part of this cluster: slide-level `show="0"` (hidden *slides*) is not parsed either -
 [`crates/pptx-parse/src/package.rs:65`](https://github.com/openooxml/betteroffice/blob/187cebc9ef5d414e4e65ccd96fe68b8f46c7f528/crates/pptx-parse/src/package.rs#L65) reads `showMasterSp` but no `show` attribute, and `Slide`
@@ -119,15 +119,15 @@ Carry `ShapeBase::hidden` through the CRDT document to `ShapeSnapshot`, then gua
    `unwrap_or_default()` keeps documents seeded before this change loading unchanged (they simply
    read `false`, i.e. today's behaviour), so no `SCHEMA_VERSION` bump is needed - `migrate_doc`
    ([`crates/pptx-edit/src/deck.rs:669`](https://github.com/openooxml/betteroffice/blob/187cebc9ef5d414e4e65ccd96fe68b8f46c7f528/crates/pptx-edit/src/deck.rs#L669)) only restamps `packageJson`, it does not reseed shapes.
-4. [`crates/pptx-render/src/layout.rs:345`](https://github.com/dsaad68/betteroffice/blob/df1a57dae7a091ea9ca8176ca013274cced71fdd/crates/pptx-render/src/layout.rs#L345) - guard at the top of `render_snapshot_shape`, before the
+4. [`crates/pptx-render/src/layout.rs:345`](https://github.com/dsaad68/betteroffice/blob/a47dbde7498c781ab81b141e834da1950dcf4175/crates/pptx-render/src/layout.rs#L345) - guard at the top of `render_snapshot_shape`, before the
    group branch at `:361` so a hidden group takes its whole subtree with it.
 
 Mirror the new field in the two consumers that spell the snapshot out by hand:
 [`packages/pptx/src/types.ts:66`](https://github.com/openooxml/betteroffice/blob/187cebc9ef5d414e4e65ccd96fe68b8f46c7f528/packages/pptx/src/types.ts#L66) (`hidden: boolean;`) and, if the flag should be visible to callers,
-[`bindings/python-pptx/src/lib.rs:488`](https://github.com/dsaad68/betteroffice/blob/df1a57dae7a091ea9ca8176ca013274cced71fdd/bindings/python-pptx/src/lib.rs#L488) next to `flip_v`.
+[`bindings/python-pptx/src/lib.rs:488`](https://github.com/dsaad68/betteroffice/blob/a47dbde7498c781ab81b141e834da1950dcf4175/bindings/python-pptx/src/lib.rs#L488) next to `flip_v`.
 
 An alternative that touches only the renderer - resolving `original` (already computed at
-[`crates/pptx-render/src/layout.rs:346`](https://github.com/dsaad68/betteroffice/blob/df1a57dae7a091ea9ca8176ca013274cced71fdd/crates/pptx-render/src/layout.rs#L346)) and testing `node_base(original).hidden` - is *not*
+[`crates/pptx-render/src/layout.rs:346`](https://github.com/dsaad68/betteroffice/blob/a47dbde7498c781ab81b141e834da1950dcf4175/crates/pptx-render/src/layout.rs#L346)) and testing `node_base(original).hidden` - is *not*
 recommended: it fails for shapes with `source_id == 0` (added after open), it re-reads the parsed
 model that the snapshot is supposed to be the authority for, and it leaves the flag invisible to
 `packages/pptx` and the Python binding.
@@ -151,7 +151,7 @@ fn render_snapshot_shape(&mut self, shape: &ShapeSnapshot, space: Space) -> Resu
 ```
 
 Note the guard sits *after* `charge_shape()` so the budget still counts the shape, matching
-`render_parsed_shape` ([`crates/pptx-render/src/layout.rs:485-489`](https://github.com/dsaad68/betteroffice/blob/df1a57dae7a091ea9ca8176ca013274cced71fdd/crates/pptx-render/src/layout.rs#L485-L489)) exactly.
+`render_parsed_shape` ([`crates/pptx-render/src/layout.rs:485-489`](https://github.com/dsaad68/betteroffice/blob/a47dbde7498c781ab81b141e834da1950dcf4175/crates/pptx-render/src/layout.rs#L485-L489)) exactly.
 
 Risks and tests to add:
 
@@ -181,7 +181,7 @@ Re-render `project17` slides 04-13 and `cisco-cloud-security` slide 07 with
 - `project17/04-13` should lose the gold `Unit of measure` band under the title and the top-left
   accent square; the diff bands around y in [0.083, 0.125] should clear.
 - The quickest unit-level check: assert that a slide shape with `hidden="1"` emits no primitive,
-  mirroring the existing master/layout behaviour at [`crates/pptx-render/src/layout.rs:487`](https://github.com/dsaad68/betteroffice/blob/df1a57dae7a091ea9ca8176ca013274cced71fdd/crates/pptx-render/src/layout.rs#L487). There
+  mirroring the existing master/layout behaviour at [`crates/pptx-render/src/layout.rs:487`](https://github.com/dsaad68/betteroffice/blob/a47dbde7498c781ab81b141e834da1950dcf4175/crates/pptx-render/src/layout.rs#L487). There
   is no such test today, so one has to be added rather than extended.
 - Also confirm the round trip: `pptx-edit`'s save path must not resurrect or drop the attribute on
   decks that were opened and written back.
@@ -194,4 +194,17 @@ Related issues found in the same run: none.
 
 Files most likely involved: `crates/pptx-edit/src/model.rs`, `crates/pptx-edit/src/deck.rs`, `crates/pptx-render/src/layout.rs`, `packages/pptx/src/types.ts`
 
-Found with a comparison harness that renders decks with both engines, pixel-diffs them, and traces each difference back to the OOXML and the code path. Full report with all findings: https://github.com/dsaad68/betteroffice/blob/harness/pptx-render-improvement/render-improvement-harness/issues/hidden-shape-drawn-anyway/report.md. Methodology: https://gist.github.com/dsaad68/038b63c2977aeca16fc873c2df1152d0. Line numbers link to the exact commit they were checked against.
+**How this was found**
+
+A comparison harness renders each deck twice, once with LibreOffice and once with BetterOffice,
+pixel-diffs the two images slide by slide, and traces every visible difference back to the OOXML
+and to the code path responsible. Reference renders come from LibreOffice through
+[pptx-pdf](https://github.com/dsaad68/pptx-pdf), a single binary with LibreOffice embedded, at 96 dpi. Both engines
+are given the same Liberation, Carlito and Caladea faces under the family names the decks ask for,
+so a difference in text metrics is a real difference and not font substitution.
+
+- Harness, with the per-slide reports and all 35 issues this run produced: https://github.com/dsaad68/betteroffice/tree/harness/pptx-render-improvement/render-improvement-harness
+- Full report behind this issue, with every finding, the evidence table and the proposed fix: https://github.com/dsaad68/betteroffice/blob/harness/pptx-render-improvement/render-improvement-harness/issues/hidden-shape-drawn-anyway/report.md
+- How the harness works and why it is built this way: https://gist.github.com/dsaad68/038b63c2977aeca16fc873c2df1152d0
+
+Line numbers link to the exact commit they were checked against.

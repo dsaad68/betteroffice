@@ -15,6 +15,7 @@ from common import DECKS, HARNESS, ISSUES, ROOT, load_meta
 
 UPSTREAM = "openooxml/betteroffice"
 GIST = "https://gist.github.com/dsaad68/038b63c2977aeca16fc873c2df1152d0"
+PPTX_PDF = "https://github.com/dsaad68/pptx-pdf"
 MAPPING = ISSUES / "github-issues.json"
 PATH_REF = re.compile(r"`?((?:crates|packages|bindings)/[\w./-]+\.(?:rs|ts|tsx|toml|md)):(\d+)(?:-(\d+))?`?")
 
@@ -72,6 +73,9 @@ class Linker:
 
     def raw(self, issue_id: str, name: str) -> str:
         return f"https://raw.githubusercontent.com/{self.fork}/{self.branch}/render-improvement-harness/issues/{issue_id}/{name}"
+
+    def harness(self) -> str:
+        return f"https://github.com/{self.fork}/tree/{self.branch}/render-improvement-harness"
 
     def report(self, issue_id: str) -> str:
         return f"https://github.com/{self.fork}/blob/{self.branch}/render-improvement-harness/issues/{issue_id}/report.md"
@@ -173,6 +177,9 @@ def render(issue_id: str, only: set[int] | None = None) -> tuple[str, str]:
         "files": ", ".join(f"`{f}`" for f in head.get("files", [])),
         "report_link": lk.report(issue_id),
         "gist_link": GIST,
+        "harness_link": lk.harness(),
+        "pptx_pdf_link": PPTX_PDF,
+        "cluster_count": len(clusters),
     }
     template = (HARNESS / "templates" / "github-issue.md").read_text()
     out = re.sub(r"\{\{(\w+)\}\}", lambda m: str(fields[m.group(1)]), template)

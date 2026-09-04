@@ -56,16 +56,16 @@ Match the reference render. PowerPoint and LibreOffice agree on this behaviour; 
 
 ### What the code does
 
-`Space::for_group` ([`crates/pptx-render/src/layout.rs:1622`](https://github.com/dsaad68/betteroffice/blob/df1a57dae7a091ea9ca8176ca013274cced71fdd/crates/pptx-render/src/layout.rs#L1622)) builds an axis-aligned
+`Space::for_group` ([`crates/pptx-render/src/layout.rs:1622`](https://github.com/dsaad68/betteroffice/blob/a47dbde7498c781ab81b141e834da1950dcf4175/crates/pptx-render/src/layout.rs#L1622)) builds an axis-aligned
 scale-plus-translate from the group's `a:xfrm`: `scale_x = rect.w / chExt.cx`,
-`scale_y = rect.h / chExt.cy` ([`crates/pptx-render/src/layout.rs:1628-1629`](https://github.com/dsaad68/betteroffice/blob/df1a57dae7a091ea9ca8176ca013274cced71fdd/crates/pptx-render/src/layout.rs#L1628-L1629)), origin shifted by
-`chOff` ([`crates/pptx-render/src/layout.rs:1633-1634`](https://github.com/dsaad68/betteroffice/blob/df1a57dae7a091ea9ca8176ca013274cced71fdd/crates/pptx-render/src/layout.rs#L1633-L1634)). `Space::map_transform`
-([`crates/pptx-render/src/layout.rs:1613`](https://github.com/dsaad68/betteroffice/blob/df1a57dae7a091ea9ca8176ca013274cced71fdd/crates/pptx-render/src/layout.rs#L1613)) maps a child's **unrotated** `a:off`/`a:ext` through it.
+`scale_y = rect.h / chExt.cy` ([`crates/pptx-render/src/layout.rs:1628-1629`](https://github.com/dsaad68/betteroffice/blob/a47dbde7498c781ab81b141e834da1950dcf4175/crates/pptx-render/src/layout.rs#L1628-L1629)), origin shifted by
+`chOff` ([`crates/pptx-render/src/layout.rs:1633-1634`](https://github.com/dsaad68/betteroffice/blob/a47dbde7498c781ab81b141e834da1950dcf4175/crates/pptx-render/src/layout.rs#L1633-L1634)). `Space::map_transform`
+([`crates/pptx-render/src/layout.rs:1613`](https://github.com/dsaad68/betteroffice/blob/a47dbde7498c781ab81b141e834da1950dcf4175/crates/pptx-render/src/layout.rs#L1613)) maps a child's **unrotated** `a:off`/`a:ext` through it.
 The child's own `rot` never touches that box: it is carried separately onto the primitive as
-`Transform { rotation_deg, .. }` ([`crates/pptx-render/src/layout.rs:392-396`](https://github.com/dsaad68/betteroffice/blob/df1a57dae7a091ea9ca8176ca013274cced71fdd/crates/pptx-render/src/layout.rs#L392-L396) on the snapshot path,
-[`crates/pptx-render/src/layout.rs:500-504`](https://github.com/dsaad68/betteroffice/blob/df1a57dae7a091ea9ca8176ca013274cced71fdd/crates/pptx-render/src/layout.rs#L500-L504) on the parsed path) and applied by the raster backend as
-a rotation about the primitive box's centre ([`crates/pptx-raster/src/lib.rs:556-565`](https://github.com/dsaad68/betteroffice/blob/df1a57dae7a091ea9ca8176ca013274cced71fdd/crates/pptx-raster/src/lib.rs#L556-L565), composed at
-[`crates/pptx-raster/src/lib.rs:241`](https://github.com/dsaad68/betteroffice/blob/df1a57dae7a091ea9ca8176ca013274cced71fdd/crates/pptx-raster/src/lib.rs#L241)).
+`Transform { rotation_deg, .. }` ([`crates/pptx-render/src/layout.rs:392-396`](https://github.com/dsaad68/betteroffice/blob/a47dbde7498c781ab81b141e834da1950dcf4175/crates/pptx-render/src/layout.rs#L392-L396) on the snapshot path,
+[`crates/pptx-render/src/layout.rs:500-504`](https://github.com/dsaad68/betteroffice/blob/a47dbde7498c781ab81b141e834da1950dcf4175/crates/pptx-render/src/layout.rs#L500-L504) on the parsed path) and applied by the raster backend as
+a rotation about the primitive box's centre ([`crates/pptx-raster/src/lib.rs:556-565`](https://github.com/dsaad68/betteroffice/blob/a47dbde7498c781ab81b141e834da1950dcf4175/crates/pptx-raster/src/lib.rs#L556-L565), composed at
+[`crates/pptx-raster/src/lib.rs:241`](https://github.com/dsaad68/betteroffice/blob/a47dbde7498c781ab81b141e834da1950dcf4175/crates/pptx-raster/src/lib.rs#L241)).
 
 That is exactly PowerPoint's model — scale the unrotated box by the group factors, then rotate the
 result about its own centre; the anisotropic scale never shears the rotated shape.
@@ -98,9 +98,9 @@ candidate draws its bounding rectangle.
 Same chain as `geometry-custom-collapses-to-bbox`: `parse_geometry`
 ([`crates/pptx-parse/src/drawing.rs:335`](https://github.com/openooxml/betteroffice/blob/187cebc9ef5d414e4e65ccd96fe68b8f46c7f528/crates/pptx-parse/src/drawing.rs#L335)) reduces `<a:custGeom>` to the string `"custom"`
 ([`crates/pptx-parse/src/drawing.rs:340-343`](https://github.com/openooxml/betteroffice/blob/187cebc9ef5d414e4e65ccd96fe68b8f46c7f528/crates/pptx-parse/src/drawing.rs#L340-L343)) and never reads `a:pathLst`; `geometry_path`
-([`crates/pptx-render/src/layout.rs:1946`](https://github.com/dsaad68/betteroffice/blob/df1a57dae7a091ea9ca8176ca013274cced71fdd/crates/pptx-render/src/layout.rs#L1946)) asks `preset_geometry_to_path` for `"custom"`, gets `None`
+([`crates/pptx-render/src/layout.rs:1946`](https://github.com/dsaad68/betteroffice/blob/a47dbde7498c781ab81b141e834da1950dcf4175/crates/pptx-render/src/layout.rs#L1946)) asks `preset_geometry_to_path` for `"custom"`, gets `None`
 ([`crates/ooxml-drawingml/src/geometry.rs:227`](https://github.com/openooxml/betteroffice/blob/187cebc9ef5d414e4e65ccd96fe68b8f46c7f528/crates/ooxml-drawingml/src/geometry.rs#L227)), and falls back to `"rect"`
-([`crates/pptx-render/src/layout.rs:1955-1956`](https://github.com/dsaad68/betteroffice/blob/df1a57dae7a091ea9ca8176ca013274cced71fdd/crates/pptx-render/src/layout.rs#L1955-L1956)).
+([`crates/pptx-render/src/layout.rs:1955-1956`](https://github.com/dsaad68/betteroffice/blob/a47dbde7498c781ab81b141e834da1950dcf4175/crates/pptx-render/src/layout.rs#L1955-L1956)).
 
 The path here is a circle-segment cap — flat chord from `(314725,0)` to `(3072440,0)`, then two
 `cubicBezTo` arcs down to `(1693583,2336802)` — occupying only ~40% of its 3387166x2336802 box. Fill
@@ -118,9 +118,9 @@ in the path and the diamond becomes the crescent.
 
 ### Latent gap found while checking, *not* this finding's cause
 
-`Space` ([`crates/pptx-render/src/layout.rs:1596-1601`](https://github.com/dsaad68/betteroffice/blob/df1a57dae7a091ea9ca8176ca013274cced71fdd/crates/pptx-render/src/layout.rs#L1596-L1601)) carries only origin and scale, so a group's
+`Space` ([`crates/pptx-render/src/layout.rs:1596-1601`](https://github.com/dsaad68/betteroffice/blob/a47dbde7498c781ab81b141e834da1950dcf4175/crates/pptx-render/src/layout.rs#L1596-L1601)) carries only origin and scale, so a group's
 own `rot`/`flipH`/`flipV` on `<p:grpSpPr><a:xfrm>` is dropped for its children at both group sites
-([`crates/pptx-render/src/layout.rs:367-368`](https://github.com/dsaad68/betteroffice/blob/df1a57dae7a091ea9ca8176ca013274cced71fdd/crates/pptx-render/src/layout.rs#L367-L368), [`crates/pptx-render/src/layout.rs:492`](https://github.com/dsaad68/betteroffice/blob/df1a57dae7a091ea9ca8176ca013274cced71fdd/crates/pptx-render/src/layout.rs#L492)). All four
+([`crates/pptx-render/src/layout.rs:367-368`](https://github.com/dsaad68/betteroffice/blob/a47dbde7498c781ab81b141e834da1950dcf4175/crates/pptx-render/src/layout.rs#L367-L368), [`crates/pptx-render/src/layout.rs:492`](https://github.com/dsaad68/betteroffice/blob/a47dbde7498c781ab81b141e834da1950dcf4175/crates/pptx-render/src/layout.rs#L492)). All four
 groups on this slide have no `rot`, so it does not affect this cluster. Across the whole corpus only
 2 of 929 group transforms carry `rot` (`cisco-cloud-security/07` `rot="20679101"`,
 `cisco-cloud-security/09` `rot="476079"`) and neither produced a filed finding — **not confirmed as
@@ -185,9 +185,9 @@ deleting this issue rather than marking it `duplicate`, the measurement that ref
 
 If the fix author does decide to touch group transforms, the one thing that must not change is that
 the group's `chOff`/`chExt` scale is applied to the child's **unrotated** `a:off`/`a:ext`
-([`crates/pptx-render/src/layout.rs:1613`](https://github.com/dsaad68/betteroffice/blob/df1a57dae7a091ea9ca8176ca013274cced71fdd/crates/pptx-render/src/layout.rs#L1613), [`crates/pptx-render/src/layout.rs:1622`](https://github.com/dsaad68/betteroffice/blob/df1a57dae7a091ea9ca8176ca013274cced71fdd/crates/pptx-render/src/layout.rs#L1622)) while the child's
-`rot` stays on the primitive ([`crates/pptx-render/src/layout.rs:392-396`](https://github.com/dsaad68/betteroffice/blob/df1a57dae7a091ea9ca8176ca013274cced71fdd/crates/pptx-render/src/layout.rs#L392-L396),
-[`crates/pptx-render/src/layout.rs:500-504`](https://github.com/dsaad68/betteroffice/blob/df1a57dae7a091ea9ca8176ca013274cced71fdd/crates/pptx-render/src/layout.rs#L500-L504)). Moving the rotation into `Space` would introduce the
+([`crates/pptx-render/src/layout.rs:1613`](https://github.com/dsaad68/betteroffice/blob/a47dbde7498c781ab81b141e834da1950dcf4175/crates/pptx-render/src/layout.rs#L1613), [`crates/pptx-render/src/layout.rs:1622`](https://github.com/dsaad68/betteroffice/blob/a47dbde7498c781ab81b141e834da1950dcf4175/crates/pptx-render/src/layout.rs#L1622)) while the child's
+`rot` stays on the primitive ([`crates/pptx-render/src/layout.rs:392-396`](https://github.com/dsaad68/betteroffice/blob/a47dbde7498c781ab81b141e834da1950dcf4175/crates/pptx-render/src/layout.rs#L392-L396),
+[`crates/pptx-render/src/layout.rs:500-504`](https://github.com/dsaad68/betteroffice/blob/a47dbde7498c781ab81b141e834da1950dcf4175/crates/pptx-render/src/layout.rs#L500-L504)). Moving the rotation into `Space` would introduce the
 shear that PowerPoint does not apply, and this slide would then regress in the opposite direction.
 
 The separate, unconfirmed group-`rot`/`flipH`/`flipV` gap noted in `report.md` should be filed on its
@@ -208,8 +208,8 @@ is what proves the rotation survived the fix.
 
 Worth pinning as a test: no test under `crates/pptx-render` covers a rotated child inside an
 anisotropically scaled group. `Space::for_group` has no direct unit test — the nearest coverage is
-the emitted-primitive assertions around [`crates/pptx-render/src/layout.rs:2152-2154`](https://github.com/dsaad68/betteroffice/blob/df1a57dae7a091ea9ca8176ca013274cced71fdd/crates/pptx-render/src/layout.rs#L2152-L2154), and the raster
-side's box-to-pixel contract at [`crates/pptx-raster/src/lib.rs:953`](https://github.com/dsaad68/betteroffice/blob/df1a57dae7a091ea9ca8176ca013274cced71fdd/crates/pptx-raster/src/lib.rs#L953)
+the emitted-primitive assertions around [`crates/pptx-render/src/layout.rs:2152-2154`](https://github.com/dsaad68/betteroffice/blob/a47dbde7498c781ab81b141e834da1950dcf4175/crates/pptx-render/src/layout.rs#L2152-L2154), and the raster
+side's box-to-pixel contract at [`crates/pptx-raster/src/lib.rs:953`](https://github.com/dsaad68/betteroffice/blob/a47dbde7498c781ab81b141e834da1950dcf4175/crates/pptx-raster/src/lib.rs#L953)
 (`geometry_commands_scale_by_the_primitive_box`). A layout test asserting the four rotated corners
 of this exact shape would lock in the no-shear compose order.
 
@@ -221,4 +221,17 @@ Related issues found in the same run: `geometry-custom-collapses-to-bbox`
 
 Files most likely involved: `crates/pptx-parse/src/drawing.rs`, `crates/pptx-render/src/layout.rs`
 
-Found with a comparison harness that renders decks with both engines, pixel-diffs them, and traces each difference back to the OOXML and the code path. Full report with all findings: https://github.com/dsaad68/betteroffice/blob/harness/pptx-render-improvement/render-improvement-harness/issues/transform-group-child-rotation-scale-wrong/report.md. Methodology: https://gist.github.com/dsaad68/038b63c2977aeca16fc873c2df1152d0. Line numbers link to the exact commit they were checked against.
+**How this was found**
+
+A comparison harness renders each deck twice, once with LibreOffice and once with BetterOffice,
+pixel-diffs the two images slide by slide, and traces every visible difference back to the OOXML
+and to the code path responsible. Reference renders come from LibreOffice through
+[pptx-pdf](https://github.com/dsaad68/pptx-pdf), a single binary with LibreOffice embedded, at 96 dpi. Both engines
+are given the same Liberation, Carlito and Caladea faces under the family names the decks ask for,
+so a difference in text metrics is a real difference and not font substitution.
+
+- Harness, with the per-slide reports and all 35 issues this run produced: https://github.com/dsaad68/betteroffice/tree/harness/pptx-render-improvement/render-improvement-harness
+- Full report behind this issue, with every finding, the evidence table and the proposed fix: https://github.com/dsaad68/betteroffice/blob/harness/pptx-render-improvement/render-improvement-harness/issues/transform-group-child-rotation-scale-wrong/report.md
+- How the harness works and why it is built this way: https://gist.github.com/dsaad68/038b63c2977aeca16fc873c2df1152d0
+
+Line numbers link to the exact commit they were checked against.

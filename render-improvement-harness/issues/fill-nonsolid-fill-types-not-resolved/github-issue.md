@@ -67,7 +67,7 @@ Match the reference render. PowerPoint and LibreOffice agree on this behaviour; 
 
 `parse_gradient_fill` collects `a:gs` children in document order
 ([`crates/pptx-parse/src/drawing.rs:594`](https://github.com/openooxml/betteroffice/blob/187cebc9ef5d414e4e65ccd96fe68b8f46c7f528/crates/pptx-parse/src/drawing.rs#L594)) and `paint` maps them straight into the display
-list without sorting ([`crates/pptx-render/src/layout.rs:1908`](https://github.com/dsaad68/betteroffice/blob/df1a57dae7a091ea9ca8176ca013274cced71fdd/crates/pptx-render/src/layout.rs#L1908)). All three
+list without sorting ([`crates/pptx-render/src/layout.rs:1908`](https://github.com/dsaad68/betteroffice/blob/a47dbde7498c781ab81b141e834da1950dcf4175/crates/pptx-render/src/layout.rs#L1908)). All three
 `typography-trick` backgrounds list the `pos="100000"` stop *first*:
 
 ```xml
@@ -86,7 +86,7 @@ keeps that order and resolves both colours correctly:
  "stops":[{"position":1.0,"color":"#262626"},{"position":0.0,"color":"#404040"}]}
 ```
 
-`gradient_paint` ([`crates/pptx-raster/src/lib.rs:627`](https://github.com/dsaad68/betteroffice/blob/df1a57dae7a091ea9ca8176ca013274cced71fdd/crates/pptx-raster/src/lib.rs#L627)) hands those stops to tiny-skia
+`gradient_paint` ([`crates/pptx-raster/src/lib.rs:627`](https://github.com/dsaad68/betteroffice/blob/a47dbde7498c781ab81b141e834da1950dcf4175/crates/pptx-raster/src/lib.rs#L627)) hands those stops to tiny-skia
 unchanged. `tiny_skia::Gradient::new` brackets the list with dummy stops and then *pins
 positions monotonically*
 (`~/.cargo/registry/src/index.crates.io-*/tiny-skia-0.12.0/src/shaders/gradient.rs:78-93`,
@@ -110,7 +110,7 @@ ones. Fixing the ordering fixes those too.
 `solidFill`, `gradFill` and `blipFill`. There is no `pattFill` branch anywhere in the pptx
 crates — the only occurrences of the string are `docx-parse` and the writer's
 `FILL_ELEMENTS` round-trip list at [`crates/pptx-parse/src/write.rs:1000`](https://github.com/openooxml/betteroffice/blob/187cebc9ef5d414e4e65ccd96fe68b8f46c7f528/crates/pptx-parse/src/write.rs#L1000). A pattern-filled
-shape therefore parses to `fill: None` and, at [`crates/pptx-render/src/layout.rs:384-388`](https://github.com/dsaad68/betteroffice/blob/df1a57dae7a091ea9ca8176ca013274cced71fdd/crates/pptx-render/src/layout.rs#L384-L388),
+shape therefore parses to `fill: None` and, at [`crates/pptx-render/src/layout.rs:384-388`](https://github.com/dsaad68/betteroffice/blob/a47dbde7498c781ab81b141e834da1950dcf4175/crates/pptx-render/src/layout.rs#L384-L388),
 is drawn unfilled. There is no `Paint` variant to carry a pattern either
 ([`crates/pptx-render/src/display_list.rs:24-34`](https://github.com/openooxml/betteroffice/blob/187cebc9ef5d414e4e65ccd96fe68b8f46c7f528/crates/pptx-render/src/display_list.rs#L24-L34): `Solid` and `Gradient` only).
 
@@ -135,7 +135,7 @@ make evidence-4 correct.
 *1. Sort gradient stops (easy, fixes typography-trick 01/02/03)*
 
 Sort by position at the display-list boundary, in `paint`
-([`crates/pptx-render/src/layout.rs:1908-1918`](https://github.com/dsaad68/betteroffice/blob/df1a57dae7a091ea9ca8176ca013274cced71fdd/crates/pptx-render/src/layout.rs#L1908-L1918)), rather than in the parser. The display
+([`crates/pptx-render/src/layout.rs:1908-1918`](https://github.com/dsaad68/betteroffice/blob/a47dbde7498c781ab81b141e834da1950dcf4175/crates/pptx-render/src/layout.rs#L1908-L1918)), rather than in the parser. The display
 list is the contract both backends read, tiny-skia is order-sensitive while canvas
 `addColorStop` silently sorts, so normalising here is what makes the two agree; it also
 leaves `pptx-parse`'s model faithful to the document, so `set_fill`
@@ -151,7 +151,7 @@ let mut stops = gradient
 stops.sort_by(|a, b| a.position.total_cmp(&b.position));
 ```
 
-Belt and braces: `gradient_paint` ([`crates/pptx-raster/src/lib.rs:627`](https://github.com/dsaad68/betteroffice/blob/df1a57dae7a091ea9ca8176ca013274cced71fdd/crates/pptx-raster/src/lib.rs#L627)) may also sort its
+Belt and braces: `gradient_paint` ([`crates/pptx-raster/src/lib.rs:627`](https://github.com/dsaad68/betteroffice/blob/a47dbde7498c781ab81b141e834da1950dcf4175/crates/pptx-raster/src/lib.rs#L627)) may also sort its
 local `colors` vec, so a hand-written or third-party display list cannot reproduce the
 tiny-skia pinning bug. That is cheap and independent of the layout change.
 
@@ -169,7 +169,7 @@ tiny-skia pinning bug. That is cheap and independent of the layout change.
 - Raster: build the preset's tile into a small `Pixmap` (the ECMA-376 presets are all
   expressible on an 8x8 or 24x24 grid) and use `tiny_skia::Pattern` with
   `SpreadMode::Repeat`, returned from `shader_paint`
-  ([`crates/pptx-raster/src/lib.rs:603-622`](https://github.com/dsaad68/betteroffice/blob/df1a57dae7a091ea9ca8176ca013274cced71fdd/crates/pptx-raster/src/lib.rs#L603-L622)). Canvas: draw the same tile to an offscreen
+  ([`crates/pptx-raster/src/lib.rs:603-622`](https://github.com/dsaad68/betteroffice/blob/a47dbde7498c781ab81b141e834da1950dcf4175/crates/pptx-raster/src/lib.rs#L603-L622)). Canvas: draw the same tile to an offscreen
   canvas and `ctx.createPattern(tile, 'repeat')` in `resolvePaint`
   ([`packages/pptx/src/render/canvas.ts:177-197`](https://github.com/openooxml/betteroffice/blob/187cebc9ef5d414e4e65ccd96fe68b8f46c7f528/packages/pptx/src/render/canvas.ts#L177-L197)).
 
@@ -218,7 +218,7 @@ Risks and tests to add:
   sort in the parser as well.
 - **Chart z-order.** A chart-space background emitted after the series would erase the
   plot; it has to be the first op, and the plot-op budget
-  (`MAX_CHART_PRIMITIVES`, [`crates/pptx-render/src/layout.rs:37`](https://github.com/dsaad68/betteroffice/blob/df1a57dae7a091ea9ca8176ca013274cced71fdd/crates/pptx-render/src/layout.rs#L37)) must not be able to starve it.
+  (`MAX_CHART_PRIMITIVES`, [`crates/pptx-render/src/layout.rs:37`](https://github.com/dsaad68/betteroffice/blob/a47dbde7498c781ab81b141e834da1950dcf4175/crates/pptx-render/src/layout.rs#L37)) must not be able to starve it.
 - **Pattern tiles and scale.** The raster runs at `options.scale`; a nearest-neighbour
   tile shader at scale != 1 will alias. Pick the filter quality deliberately and add a
   golden at scale 2.
@@ -254,7 +254,7 @@ rather than yielding `None`; a chart test that `c:chartSpace/c:spPr` reaches the
   so the "gradient" is a flat opaque wash. The sibling resolver
   `resolve_color_value_to_rgba_hex` ([`crates/ooxml-drawingml/src/color.rs:91`](https://github.com/openooxml/betteroffice/blob/187cebc9ef5d414e4e65ccd96fe68b8f46c7f528/crates/ooxml-drawingml/src/color.rs#L91)) already
   exists and `pptx-raster`'s `parse_hex_color` already accepts 8-digit hex
-  ([`crates/pptx-raster/src/lib.rs:780-796`](https://github.com/dsaad68/betteroffice/blob/df1a57dae7a091ea9ca8176ca013274cced71fdd/crates/pptx-raster/src/lib.rs#L780-L796)). It shares its root cause with
+  ([`crates/pptx-raster/src/lib.rs:780-796`](https://github.com/dsaad68/betteroffice/blob/a47dbde7498c781ab81b141e834da1950dcf4175/crates/pptx-raster/src/lib.rs#L780-L796)). It shares its root cause with
   `fill-alpha-modifier-ignored`, whose fix resolves it; nothing in this issue will.
 - The missing "CREATIVE VENUS" wordmark on every `typography-trick` slide is
   `unsupported-custgeom-picturefill-wordmark-not-drawn`, not this issue; it is visible in
@@ -264,7 +264,7 @@ rather than yielding `None`; a chart test that `c:chartSpace/c:spPr` reaches the
 
 - `a:fillToRect` / `a:tileRect` are parsed nowhere; `gradient_paint` always centres a
   path gradient on the shape and uses half the diagonal as the radius
-  ([`crates/pptx-raster/src/lib.rs:674-685`](https://github.com/dsaad68/betteroffice/blob/df1a57dae7a091ea9ca8176ca013274cced71fdd/crates/pptx-raster/src/lib.rs#L674-L685)). Every gradient in this cluster uses
+  ([`crates/pptx-raster/src/lib.rs:674-685`](https://github.com/dsaad68/betteroffice/blob/a47dbde7498c781ab81b141e834da1950dcf4175/crates/pptx-raster/src/lib.rs#L674-L685)). Every gradient in this cluster uses
   `l/t/r/b="50000"` (dead centre), so this cannot be observed here and is left as a
   separate, unmeasured gap.
 - `a:lin/@scaled` and `rotWithShape` are likewise unparsed; no finding in this cluster
@@ -274,4 +274,17 @@ Related issues found in the same run: `fill-alpha-modifier-ignored`, `unsupporte
 
 Files most likely involved: `crates/pptx-render/src/layout.rs`, `crates/pptx-parse/src/drawing.rs`, `crates/pptx-render/src/display_list.rs`, `crates/pptx-raster/src/lib.rs`, `crates/ooxml-drawingml/src/chart/parse.rs`, `crates/ooxml-drawingml/src/chart/model.rs`, `crates/pptx-render/src/chart.rs`, `packages/pptx/src/render/canvas.ts`
 
-Found with a comparison harness that renders decks with both engines, pixel-diffs them, and traces each difference back to the OOXML and the code path. Full report with all findings: https://github.com/dsaad68/betteroffice/blob/harness/pptx-render-improvement/render-improvement-harness/issues/fill-nonsolid-fill-types-not-resolved/report.md. Methodology: https://gist.github.com/dsaad68/038b63c2977aeca16fc873c2df1152d0. Line numbers link to the exact commit they were checked against.
+**How this was found**
+
+A comparison harness renders each deck twice, once with LibreOffice and once with BetterOffice,
+pixel-diffs the two images slide by slide, and traces every visible difference back to the OOXML
+and to the code path responsible. Reference renders come from LibreOffice through
+[pptx-pdf](https://github.com/dsaad68/pptx-pdf), a single binary with LibreOffice embedded, at 96 dpi. Both engines
+are given the same Liberation, Carlito and Caladea faces under the family names the decks ask for,
+so a difference in text metrics is a real difference and not font substitution.
+
+- Harness, with the per-slide reports and all 35 issues this run produced: https://github.com/dsaad68/betteroffice/tree/harness/pptx-render-improvement/render-improvement-harness
+- Full report behind this issue, with every finding, the evidence table and the proposed fix: https://github.com/dsaad68/betteroffice/blob/harness/pptx-render-improvement/render-improvement-harness/issues/fill-nonsolid-fill-types-not-resolved/report.md
+- How the harness works and why it is built this way: https://gist.github.com/dsaad68/038b63c2977aeca16fc873c2df1152d0
+
+Line numbers link to the exact commit they were checked against.

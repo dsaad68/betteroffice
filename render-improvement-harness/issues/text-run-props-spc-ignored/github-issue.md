@@ -75,15 +75,15 @@ The value would have to survive four more hops to reach the shaper, and none of 
 for it either:
 
 - `RunProperties` to `TextStyle` in `style_from_properties`
-  ([`crates/pptx-render/src/layout.rs:1849`](https://github.com/dsaad68/betteroffice/blob/df1a57dae7a091ea9ca8176ca013274cced71fdd/crates/pptx-render/src/layout.rs#L1849)) and `style_from_run_properties`
+  ([`crates/pptx-render/src/layout.rs:1849`](https://github.com/dsaad68/betteroffice/blob/a47dbde7498c781ab81b141e834da1950dcf4175/crates/pptx-render/src/layout.rs#L1849)) and `style_from_run_properties`
   ([`crates/pptx-edit/src/story.rs:643`](https://github.com/openooxml/betteroffice/blob/187cebc9ef5d414e4e65ccd96fe68b8f46c7f528/crates/pptx-edit/src/story.rs#L643)). `TextStyle` ([`crates/pptx-edit/src/model.rs:36`](https://github.com/openooxml/betteroffice/blob/187cebc9ef5d414e4e65ccd96fe68b8f46c7f528/crates/pptx-edit/src/model.rs#L36)) carries
   six fields, none of them spacing. Both render entry points funnel through it: the snapshot path
-  via `content_from_story` ([`crates/pptx-render/src/layout.rs:862`](https://github.com/dsaad68/betteroffice/blob/df1a57dae7a091ea9ca8176ca013274cced71fdd/crates/pptx-render/src/layout.rs#L862)) and the inherited
-  layout/master path via `content_from_body` ([`crates/pptx-render/src/layout.rs:884`](https://github.com/dsaad68/betteroffice/blob/df1a57dae7a091ea9ca8176ca013274cced71fdd/crates/pptx-render/src/layout.rs#L884)).
+  via `content_from_story` ([`crates/pptx-render/src/layout.rs:862`](https://github.com/dsaad68/betteroffice/blob/a47dbde7498c781ab81b141e834da1950dcf4175/crates/pptx-render/src/layout.rs#L862)) and the inherited
+  layout/master path via `content_from_body` ([`crates/pptx-render/src/layout.rs:884`](https://github.com/dsaad68/betteroffice/blob/a47dbde7498c781ab81b141e834da1950dcf4175/crates/pptx-render/src/layout.rs#L884)).
 - placeholder and `lstStyle` inheritance merges through `merge_run_properties`
-  ([`crates/pptx-render/src/layout.rs:1825`](https://github.com/dsaad68/betteroffice/blob/df1a57dae7a091ea9ca8176ca013274cced71fdd/crates/pptx-render/src/layout.rs#L1825)), which copies field by field.
-- `resolve_style` ([`crates/pptx-render/src/layout.rs:1010`](https://github.com/dsaad68/betteroffice/blob/df1a57dae7a091ea9ca8176ca013274cced71fdd/crates/pptx-render/src/layout.rs#L1010)) produces `ResolvedStyle`
-  ([`crates/pptx-render/src/layout.rs:924`](https://github.com/dsaad68/betteroffice/blob/df1a57dae7a091ea9ca8176ca013274cced71fdd/crates/pptx-render/src/layout.rs#L924)) — family, size, bold, italic, underline, colour.
+  ([`crates/pptx-render/src/layout.rs:1825`](https://github.com/dsaad68/betteroffice/blob/a47dbde7498c781ab81b141e834da1950dcf4175/crates/pptx-render/src/layout.rs#L1825)), which copies field by field.
+- `resolve_style` ([`crates/pptx-render/src/layout.rs:1010`](https://github.com/dsaad68/betteroffice/blob/a47dbde7498c781ab81b141e834da1950dcf4175/crates/pptx-render/src/layout.rs#L1010)) produces `ResolvedStyle`
+  ([`crates/pptx-render/src/layout.rs:924`](https://github.com/dsaad68/betteroffice/blob/a47dbde7498c781ab81b141e834da1950dcf4175/crates/pptx-render/src/layout.rs#L924)) — family, size, bold, italic, underline, colour.
 
 Shaping then asks the font for advances and adds nothing:
 
@@ -95,16 +95,16 @@ let shaped = shape(fonts, run.style.face.id, text, size_px, &[]);  // layout.rs:
     width: glyph_x.max(0.0),                                       // layout.rs:1423
 ```
 
-`ShapedCluster::width` ([`crates/pptx-render/src/layout.rs:1266`](https://github.com/dsaad68/betteroffice/blob/df1a57dae7a091ea9ca8176ca013274cced71fdd/crates/pptx-render/src/layout.rs#L1266)) is the single quantity every
+`ShapedCluster::width` ([`crates/pptx-render/src/layout.rs:1266`](https://github.com/dsaad68/betteroffice/blob/a47dbde7498c781ab81b141e834da1950dcf4175/crates/pptx-render/src/layout.rs#L1266)) is the single quantity every
 downstream decision reads, which is why the bug is both a glyph-gap bug and a wrap bug:
 
 - wrapping — `wrap_clusters` compares `line_width + cluster.width` against the box
-  ([`crates/pptx-render/src/layout.rs:1444`](https://github.com/dsaad68/betteroffice/blob/df1a57dae7a091ea9ca8176ca013274cced71fdd/crates/pptx-render/src/layout.rs#L1444));
-- line width and alignment — summed at [`crates/pptx-render/src/layout.rs:1224`](https://github.com/dsaad68/betteroffice/blob/df1a57dae7a091ea9ca8176ca013274cced71fdd/crates/pptx-render/src/layout.rs#L1224);
-- caret stops — [`crates/pptx-render/src/layout.rs:1237`](https://github.com/dsaad68/betteroffice/blob/df1a57dae7a091ea9ca8176ca013274cced71fdd/crates/pptx-render/src/layout.rs#L1237);
-- glyph placement — [`crates/pptx-render/src/layout.rs:1519-1520`](https://github.com/dsaad68/betteroffice/blob/df1a57dae7a091ea9ca8176ca013274cced71fdd/crates/pptx-render/src/layout.rs#L1519-L1520).
+  ([`crates/pptx-render/src/layout.rs:1444`](https://github.com/dsaad68/betteroffice/blob/a47dbde7498c781ab81b141e834da1950dcf4175/crates/pptx-render/src/layout.rs#L1444));
+- line width and alignment — summed at [`crates/pptx-render/src/layout.rs:1224`](https://github.com/dsaad68/betteroffice/blob/a47dbde7498c781ab81b141e834da1950dcf4175/crates/pptx-render/src/layout.rs#L1224);
+- caret stops — [`crates/pptx-render/src/layout.rs:1237`](https://github.com/dsaad68/betteroffice/blob/a47dbde7498c781ab81b141e834da1950dcf4175/crates/pptx-render/src/layout.rs#L1237);
+- glyph placement — [`crates/pptx-render/src/layout.rs:1519-1520`](https://github.com/dsaad68/betteroffice/blob/a47dbde7498c781ab81b141e834da1950dcf4175/crates/pptx-render/src/layout.rs#L1519-L1520).
 
-The raster side needs no change: [`crates/pptx-raster/src/font.rs:45`](https://github.com/dsaad68/betteroffice/blob/df1a57dae7a091ea9ca8176ca013274cced71fdd/crates/pptx-raster/src/font.rs#L45) paints the positions layout
+The raster side needs no change: [`crates/pptx-raster/src/font.rs:45`](https://github.com/dsaad68/betteroffice/blob/a47dbde7498c781ab81b141e834da1950dcf4175/crates/pptx-raster/src/font.rs#L45) paints the positions layout
 already computed ("Nothing is shaped here"), so correcting the cluster advance moves the pixels.
 
 Measured, one deck: in green-solutions/01 the tracked reference title and the untracked candidate
@@ -119,7 +119,7 @@ low-level `shape` directly and so has to apply tracking itself.
 Two things the fix will run into, both confirmed by reading:
 
 - **Chart text (stacked-bar/04/6) is a different path.** `chart_text_primitive`
-  ([`crates/pptx-render/src/layout.rs:1077`](https://github.com/dsaad68/betteroffice/blob/df1a57dae7a091ea9ca8176ca013274cced71fdd/crates/pptx-render/src/layout.rs#L1077)) shapes from `ChartText`
+  ([`crates/pptx-render/src/layout.rs:1077`](https://github.com/dsaad68/betteroffice/blob/a47dbde7498c781ab81b141e834da1950dcf4175/crates/pptx-render/src/layout.rs#L1077)) shapes from `ChartText`
   ([`crates/pptx-render/src/chart.rs:21`](https://github.com/openooxml/betteroffice/blob/187cebc9ef5d414e4e65ccd96fe68b8f46c7f528/crates/pptx-render/src/chart.rs#L21)), whose only styling is `PlotFont`
   ([`crates/ooxml-drawingml/src/chart/geometry.rs:65`](https://github.com/openooxml/betteroffice/blob/187cebc9ef5d414e4e65ccd96fe68b8f46c7f528/crates/ooxml-drawingml/src/chart/geometry.rs#L65): weight, size, family, italic). No run
   property of any kind reaches chart titles, axis labels or legends. Threading `spc` into the
@@ -165,17 +165,17 @@ reads that one number, so nothing else in layout has to learn about tracking.
    `style_from_run_properties` ([`crates/pptx-edit/src/story.rs:643`](https://github.com/openooxml/betteroffice/blob/187cebc9ef5d414e4e65ccd96fe68b8f46c7f528/crates/pptx-edit/src/story.rs#L643)), `style_from_attrs`
    ([`crates/pptx-edit/src/story.rs:654`](https://github.com/openooxml/betteroffice/blob/187cebc9ef5d414e4e65ccd96fe68b8f46c7f528/crates/pptx-edit/src/story.rs#L654), a Yjs `Any::Number` attr) and `run_write`
    ([`crates/pptx-edit/src/save.rs:384`](https://github.com/openooxml/betteroffice/blob/187cebc9ef5d414e4e65ccd96fe68b8f46c7f528/crates/pptx-edit/src/save.rs#L384)), and in `style_from_properties`
-   ([`crates/pptx-render/src/layout.rs:1849`](https://github.com/dsaad68/betteroffice/blob/df1a57dae7a091ea9ca8176ca013274cced71fdd/crates/pptx-render/src/layout.rs#L1849)). Add the merge arm in `merge_run_properties`
-   ([`crates/pptx-render/src/layout.rs:1825`](https://github.com/dsaad68/betteroffice/blob/df1a57dae7a091ea9ca8176ca013274cced71fdd/crates/pptx-render/src/layout.rs#L1825)).
+   ([`crates/pptx-render/src/layout.rs:1849`](https://github.com/dsaad68/betteroffice/blob/a47dbde7498c781ab81b141e834da1950dcf4175/crates/pptx-render/src/layout.rs#L1849)). Add the merge arm in `merge_run_properties`
+   ([`crates/pptx-render/src/layout.rs:1825`](https://github.com/dsaad68/betteroffice/blob/a47dbde7498c781ab81b141e834da1950dcf4175/crates/pptx-render/src/layout.rs#L1825)).
 4. **Resolve and apply.** Add `tracking_px` to `ResolvedStyle`
-   ([`crates/pptx-render/src/layout.rs:924`](https://github.com/dsaad68/betteroffice/blob/df1a57dae7a091ea9ca8176ca013274cced71fdd/crates/pptx-render/src/layout.rs#L924)), resolved direct-then-fallback in `resolve_style`
-   ([`crates/pptx-render/src/layout.rs:1010`](https://github.com/dsaad68/betteroffice/blob/df1a57dae7a091ea9ca8176ca013274cced71fdd/crates/pptx-render/src/layout.rs#L1010)) and converted with the same `scale` the font size
-   gets. In `add_shaped_segment` ([`crates/pptx-render/src/layout.rs:1365`](https://github.com/dsaad68/betteroffice/blob/df1a57dae7a091ea9ca8176ca013274cced71fdd/crates/pptx-render/src/layout.rs#L1365)) add it to each
+   ([`crates/pptx-render/src/layout.rs:924`](https://github.com/dsaad68/betteroffice/blob/a47dbde7498c781ab81b141e834da1950dcf4175/crates/pptx-render/src/layout.rs#L924)), resolved direct-then-fallback in `resolve_style`
+   ([`crates/pptx-render/src/layout.rs:1010`](https://github.com/dsaad68/betteroffice/blob/a47dbde7498c781ab81b141e834da1950dcf4175/crates/pptx-render/src/layout.rs#L1010)) and converted with the same `scale` the font size
+   gets. In `add_shaped_segment` ([`crates/pptx-render/src/layout.rs:1365`](https://github.com/dsaad68/betteroffice/blob/a47dbde7498c781ab81b141e834da1950dcf4175/crates/pptx-render/src/layout.rs#L1365)) add it to each
    cluster's width, and keep it on the cluster so the trailing gap can be removed when a line's
-   width is summed ([`crates/pptx-render/src/layout.rs:1224`](https://github.com/dsaad68/betteroffice/blob/df1a57dae7a091ea9ca8176ca013274cced71fdd/crates/pptx-render/src/layout.rs#L1224)) — the green-solutions measurement in
+   width is summed ([`crates/pptx-render/src/layout.rs:1224`](https://github.com/dsaad68/betteroffice/blob/a47dbde7498c781ab81b141e834da1950dcf4175/crates/pptx-render/src/layout.rs#L1224)) — the green-solutions measurement in
    the report says the reference counts `n-1` gaps, not `n`.
 5. **Do not paint the gap.** `positioned_runs` advances the pen by `cluster.width`
-   ([`crates/pptx-render/src/layout.rs:1520`](https://github.com/dsaad68/betteroffice/blob/df1a57dae7a091ea9ca8176ca013274cced71fdd/crates/pptx-render/src/layout.rs#L1520)) while glyph offsets inside a cluster stay relative,
+   ([`crates/pptx-render/src/layout.rs:1520`](https://github.com/dsaad68/betteroffice/blob/a47dbde7498c781ab81b141e834da1950dcf4175/crates/pptx-render/src/layout.rs#L1520)) while glyph offsets inside a cluster stay relative,
    so the extra space lands after the cluster, which is what tracking means. No raster change:
    `crates/pptx-raster/src/font.rs` paints supplied positions.
 
@@ -183,7 +183,7 @@ Two follow-ups that this change does not cover and should be scoped separately:
 
 - stacked-bar/04/6 needs `PlotFont` ([`crates/ooxml-drawingml/src/chart/geometry.rs:65`](https://github.com/openooxml/betteroffice/blob/187cebc9ef5d414e4e65ccd96fe68b8f46c7f528/crates/ooxml-drawingml/src/chart/geometry.rs#L65)) or
   `ChartText` ([`crates/pptx-render/src/chart.rs:21`](https://github.com/openooxml/betteroffice/blob/187cebc9ef5d414e4e65ccd96fe68b8f46c7f528/crates/pptx-render/src/chart.rs#L21)) to carry run properties before
-  `chart_text_primitive` ([`crates/pptx-render/src/layout.rs:1077`](https://github.com/dsaad68/betteroffice/blob/df1a57dae7a091ea9ca8176ca013274cced71fdd/crates/pptx-render/src/layout.rs#L1077)) can track chart titles.
+  `chart_text_primitive` ([`crates/pptx-render/src/layout.rs:1077`](https://github.com/dsaad68/betteroffice/blob/a47dbde7498c781ab81b141e834da1950dcf4175/crates/pptx-render/src/layout.rs#L1077)) can track chart titles.
 - the browser backend paints a run as one `fillText` call
   ([`packages/pptx/src/render/canvas.ts:237`](https://github.com/openooxml/betteroffice/blob/187cebc9ef5d414e4e65ccd96fe68b8f46c7f528/packages/pptx/src/render/canvas.ts#L237)), so it will keep drawing untracked text unless
   `PositionedTextRun` ([`crates/pptx-render/src/display_list.rs:230`](https://github.com/openooxml/betteroffice/blob/187cebc9ef5d414e4e65ccd96fe68b8f46c7f528/crates/pptx-render/src/display_list.rs#L230)) gains a `letterSpacingPx`
@@ -237,7 +237,7 @@ Risks and tests to add:
   have no `spc` and must not move.
 - Tests to add: `spc` parse and round-trip in `crates/pptx-parse` (extend the rPr fixture at
   [`crates/pptx-parse/src/drawing.rs:961`](https://github.com/openooxml/betteroffice/blob/187cebc9ef5d414e4e65ccd96fe68b8f46c7f528/crates/pptx-parse/src/drawing.rs#L961)); cluster width, wrap-point and centred-line assertions
-  in the [`crates/pptx-render/src/layout.rs:2008`](https://github.com/dsaad68/betteroffice/blob/df1a57dae7a091ea9ca8176ca013274cced71fdd/crates/pptx-render/src/layout.rs#L2008) test module.
+  in the [`crates/pptx-render/src/layout.rs:2008`](https://github.com/dsaad68/betteroffice/blob/a47dbde7498c781ab81b141e834da1950dcf4175/crates/pptx-render/src/layout.rs#L2008) test module.
 
 **How to verify**
 
@@ -256,7 +256,7 @@ to change; the check there is the measurement in evidence-2.png — the candidat
 from 505px to roughly the reference's 685px and stay centred at 639.5. project20/11 (4.50) should
 improve slightly. stacked-bar/04 (14.46) will not move unless the chart text path is done too.
 
-No existing test covers this. [`crates/pptx-render/src/layout.rs:2008`](https://github.com/dsaad68/betteroffice/blob/df1a57dae7a091ea9ca8176ca013274cced71fdd/crates/pptx-render/src/layout.rs#L2008) is the place for unit
+No existing test covers this. [`crates/pptx-render/src/layout.rs:2008`](https://github.com/dsaad68/betteroffice/blob/a47dbde7498c781ab81b141e834da1950dcf4175/crates/pptx-render/src/layout.rs#L2008) is the place for unit
 assertions — that a cluster's width grows by the tracking, that a line that fits untracked wraps
 when tracked, and that a centred tracked line keeps the untracked line's centre. The raster
 goldens (`crates/pptx-raster/tests/golden/text.png`) would lock the painted result down.
@@ -267,8 +267,21 @@ and the write path needs an edit-and-save test asserting `spc` survives (see the
 
 none.
 
-Related issues found in the same run: `text-run-props-bold-ignored`
+Related issues found in the same run: #266
 
 Files most likely involved: `crates/pptx-parse/src/drawing.rs`, `crates/pptx-parse/src/model.rs`, `crates/pptx-parse/src/write.rs`, `crates/pptx-edit/src/model.rs`, `crates/pptx-edit/src/story.rs`, `crates/pptx-edit/src/save.rs`, `crates/pptx-render/src/layout.rs`
 
-Found with a comparison harness that renders decks with both engines, pixel-diffs them, and traces each difference back to the OOXML and the code path. Full report with all findings: https://github.com/dsaad68/betteroffice/blob/harness/pptx-render-improvement/render-improvement-harness/issues/text-run-props-spc-ignored/report.md. Methodology: https://gist.github.com/dsaad68/038b63c2977aeca16fc873c2df1152d0. Line numbers link to the exact commit they were checked against.
+**How this was found**
+
+A comparison harness renders each deck twice, once with LibreOffice and once with BetterOffice,
+pixel-diffs the two images slide by slide, and traces every visible difference back to the OOXML
+and to the code path responsible. Reference renders come from LibreOffice through
+[pptx-pdf](https://github.com/dsaad68/pptx-pdf), a single binary with LibreOffice embedded, at 96 dpi. Both engines
+are given the same Liberation, Carlito and Caladea faces under the family names the decks ask for,
+so a difference in text metrics is a real difference and not font substitution.
+
+- Harness, with the per-slide reports and all 35 issues this run produced: https://github.com/dsaad68/betteroffice/tree/harness/pptx-render-improvement/render-improvement-harness
+- Full report behind this issue, with every finding, the evidence table and the proposed fix: https://github.com/dsaad68/betteroffice/blob/harness/pptx-render-improvement/render-improvement-harness/issues/text-run-props-spc-ignored/report.md
+- How the harness works and why it is built this way: https://gist.github.com/dsaad68/038b63c2977aeca16fc873c2df1152d0
+
+Line numbers link to the exact commit they were checked against.

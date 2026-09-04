@@ -70,7 +70,7 @@ no `format_scheme`, and `parse_theme` ([`crates/pptx-parse/src/theme.rs:5-12`](h
 
 `parse_outline` ([`crates/pptx-parse/src/drawing.rs:624-643`](https://github.com/openooxml/betteroffice/blob/187cebc9ef5d414e4e65ccd96fe68b8f46c7f528/crates/pptx-parse/src/drawing.rs#L624-L643)) therefore returns
 `ShapeOutline { color: None, .. }` for these shapes, and `stroke`
-([`crates/pptx-render/src/layout.rs:1930-1944`](https://github.com/dsaad68/betteroffice/blob/df1a57dae7a091ea9ca8176ca013274cced71fdd/crates/pptx-render/src/layout.rs#L1930-L1944)) drops them on its first line:
+([`crates/pptx-render/src/layout.rs:1930-1944`](https://github.com/dsaad68/betteroffice/blob/a47dbde7498c781ab81b141e834da1950dcf4175/crates/pptx-render/src/layout.rs#L1930-L1944)) drops them on its first line:
 
 ```rust
 fn stroke(outline: &ShapeOutline, theme: &Theme) -> Option<Stroke> {
@@ -78,7 +78,7 @@ fn stroke(outline: &ShapeOutline, theme: &Theme) -> Option<Stroke> {
 ```
 
 `None` colour, `None` stroke, nothing drawn - at all three call sites
-([`crates/pptx-render/src/layout.rs:389-393`](https://github.com/dsaad68/betteroffice/blob/df1a57dae7a091ea9ca8176ca013274cced71fdd/crates/pptx-render/src/layout.rs#L389-L393), `:528-531`, `:545-548`).
+([`crates/pptx-render/src/layout.rs:389-393`](https://github.com/dsaad68/betteroffice/blob/a47dbde7498c781ab81b141e834da1950dcf4175/crates/pptx-render/src/layout.rs#L389-L393), `:528-531`, `:545-548`).
 
 Confirmed on `cisco-cloud-security` slide 4: 92 of the 93 `p:cxnSp` have no `<a:ln>` in `spPr` at
 all, and the 93rd has `<a:ln><a:tailEnd type="arrow" w="med" len="sm"/></a:ln>` with no fill child,
@@ -117,7 +117,7 @@ else, and there is nowhere to put a gradient anyway: `ShapeOutline`
 unlike `ShapeFill` (`:9-14`), which does. The same narrowing repeats twice more downstream - `Stroke`
 in the display list ([`crates/pptx-render/src/display_list.rs:54-59`](https://github.com/openooxml/betteroffice/blob/187cebc9ef5d414e4e65ccd96fe68b8f46c7f528/crates/pptx-render/src/display_list.rs#L54-L59)) is `{ color: String, width: f32,
 dashed: bool }` while `Paint` (`:24-34`) has a `Gradient` variant, and `stroke_paint` in the
-rasterizer ([`crates/pptx-raster/src/lib.rs:697-717`](https://github.com/dsaad68/betteroffice/blob/df1a57dae7a091ea9ca8176ca013274cced71fdd/crates/pptx-raster/src/lib.rs#L697-L717)) only ever calls `paint.set_color(...)`. The web
+rasterizer ([`crates/pptx-raster/src/lib.rs:697-717`](https://github.com/dsaad68/betteroffice/blob/a47dbde7498c781ab81b141e834da1950dcf4175/crates/pptx-raster/src/lib.rs#L697-L717)) only ever calls `paint.set_color(...)`. The web
 contract narrows identically ([`packages/pptx/src/types.ts:214-218`](https://github.com/openooxml/betteroffice/blob/187cebc9ef5d414e4e65ccd96fe68b8f46c7f528/packages/pptx/src/types.ts#L214-L218)).
 
 The seven radar spokes on slide 9 are exactly this shape:
@@ -148,7 +148,7 @@ rename-to-`p:sp` run above shows the split cleanly: of slide 9's 11 connectors, 
 Per ECMA-376 an explicit `a:ln` overrides only the properties it states; `w`, `cap`, `cmpd` and
 `prstDash` still come from `lnStyleLst[idx-1]`, here `<a:ln w="25400" cap="flat" cmpd="sng"
 algn="ctr">` = 2pt = 2.67px at 96 dpi. Because nothing parses the matrix, `parse_outline` leaves
-`width: None` and `stroke` ([`crates/pptx-render/src/layout.rs:1934-1938`](https://github.com/dsaad68/betteroffice/blob/df1a57dae7a091ea9ca8176ca013274cced71fdd/crates/pptx-render/src/layout.rs#L1934-L1938)) falls back to
+`width: None` and `stroke` ([`crates/pptx-render/src/layout.rs:1934-1938`](https://github.com/dsaad68/betteroffice/blob/a47dbde7498c781ab81b141e834da1950dcf4175/crates/pptx-render/src/layout.rs#L1934-L1938)) falls back to
 `unwrap_or(1.0)`.
 
 Measured at HEAD, a vertical pixel scan through the badge's top edge at x = 473:
@@ -234,7 +234,7 @@ ordinary autoshapes.
    would materialize an explicit `<a:ln>` into a file that never had one the first time anything
    touches that shape's stroke.
 
-4. [`crates/pptx-render/src/layout.rs:1930`](https://github.com/dsaad68/betteroffice/blob/df1a57dae7a091ea9ca8176ca013274cced71fdd/crates/pptx-render/src/layout.rs#L1930) - resolve at render time. `stroke` grows the shape's
+4. [`crates/pptx-render/src/layout.rs:1930`](https://github.com/dsaad68/betteroffice/blob/a47dbde7498c781ab81b141e834da1950dcf4175/crates/pptx-render/src/layout.rs#L1930) - resolve at render time. `stroke` grows the shape's
    style and merges: start from `lnStyleLst[idx - 1]` (`idx = 0` means "no line", return `None`),
    substitute the `lnRef`'s own colour for every `phClr` in it, then overlay whatever the explicit
    `a:ln` states. That is what makes 16/6 (colour from `a:ln`, width from the matrix) and 04/2
@@ -262,7 +262,7 @@ ordinary autoshapes.
    `CONTRACT_VERSION` stays 1 and any consumer that only reads `color` still draws a plausible line.
    Mirror the field in [`packages/pptx/src/types.ts:214`](https://github.com/openooxml/betteroffice/blob/187cebc9ef5d414e4e65ccd96fe68b8f46c7f528/packages/pptx/src/types.ts#L214).
 
-8. [`crates/pptx-raster/src/lib.rs:697`](https://github.com/dsaad68/betteroffice/blob/df1a57dae7a091ea9ca8176ca013274cced71fdd/crates/pptx-raster/src/lib.rs#L697) - `stroke_paint` takes the shape box and calls the existing
+8. [`crates/pptx-raster/src/lib.rs:697`](https://github.com/dsaad68/betteroffice/blob/a47dbde7498c781ab81b141e834da1950dcf4175/crates/pptx-raster/src/lib.rs#L697) - `stroke_paint` takes the shape box and calls the existing
    `gradient_paint` (`:627`) when `stroke.paint` is a gradient. `paint_shape` (`:364`) and
    `paint_image` (`:390`) already have `x, y, w, h` in scope; only `stroke_path` (`:482`) needs them
    threaded through.
@@ -324,7 +324,7 @@ Risks and tests to add:
   ([`crates/pptx-edit/src/deck.rs:489`](https://github.com/openooxml/betteroffice/blob/187cebc9ef5d414e4e65ccd96fe68b8f46c7f528/crates/pptx-edit/src/deck.rs#L489)) starts from `outlineJson`, which will still be `None` there.
 - **Gradient direction on a degenerate box.** The radar spokes are `ext cx="0" cy="830086"`, a
   zero-width box, with `<a:lin ang="5400000"/>`. `gradient_paint`
-  ([`crates/pptx-raster/src/lib.rs:627`](https://github.com/dsaad68/betteroffice/blob/df1a57dae7a091ea9ca8176ca013274cced71fdd/crates/pptx-raster/src/lib.rs#L627)) sizes its shader off `w.hypot(h)`, which survives a zero
+  ([`crates/pptx-raster/src/lib.rs:627`](https://github.com/dsaad68/betteroffice/blob/a47dbde7498c781ab81b141e834da1950dcf4175/crates/pptx-raster/src/lib.rs#L627)) sizes its shader off `w.hypot(h)`, which survives a zero
   side, but the stroke is drawn *outside* that box by half the line width - check the ends do not
   land on `SpreadMode::Pad` fringe.
 - **The canvas backend must match.** `packages/pptx` renders the same display list; a `Stroke.paint`
@@ -355,8 +355,8 @@ Re-render `cisco-cloud-security` with
 
 No test in the tree covers any of the three mechanisms. `parse_outline` has no unit test in
 `crates/pptx-parse/src/drawing.rs`; the `pptx-render` test module
-([`crates/pptx-render/src/layout.rs:2008-2500`](https://github.com/dsaad68/betteroffice/blob/df1a57dae7a091ea9ca8176ca013274cced71fdd/crates/pptx-render/src/layout.rs#L2008-L2500)) asserts on geometry, glyphs, autofit and charts and
-never on a `Stroke`; the raster golden ([`crates/pptx-raster/tests/golden.rs:80-86`](https://github.com/dsaad68/betteroffice/blob/df1a57dae7a091ea9ca8176ca013274cced71fdd/crates/pptx-raster/tests/golden.rs#L80-L86)) builds a
+([`crates/pptx-render/src/layout.rs:2008-2500`](https://github.com/dsaad68/betteroffice/blob/a47dbde7498c781ab81b141e834da1950dcf4175/crates/pptx-render/src/layout.rs#L2008-L2500)) asserts on geometry, glyphs, autofit and charts and
+never on a `Stroke`; the raster golden ([`crates/pptx-raster/tests/golden.rs:80-86`](https://github.com/dsaad68/betteroffice/blob/a47dbde7498c781ab81b141e834da1950dcf4175/crates/pptx-raster/tests/golden.rs#L80-L86)) builds a
 `SurfaceDisplayList` by hand and has no stroked gradient. All three need new tests.
 
 **Additional context**
@@ -367,4 +367,17 @@ Related issues found in the same run: `geometry-custom-collapses-to-bbox`, `line
 
 Files most likely involved: `crates/pptx-parse/src/drawing.rs`, `crates/pptx-parse/src/model.rs`, `crates/pptx-parse/src/theme.rs`, `crates/ooxml-drawingml/src/theme.rs`, `crates/ooxml-drawingml/src/shape.rs`, `crates/ooxml-drawingml/src/color.rs`, `crates/pptx-render/src/layout.rs`, `crates/pptx-render/src/display_list.rs`, `crates/pptx-raster/src/lib.rs`, `packages/pptx/src/types.ts`
 
-Found with a comparison harness that renders decks with both engines, pixel-diffs them, and traces each difference back to the OOXML and the code path. Full report with all findings: https://github.com/dsaad68/betteroffice/blob/harness/pptx-render-improvement/render-improvement-harness/issues/line-stroke-color-resolution-broken/report.md. Methodology: https://gist.github.com/dsaad68/038b63c2977aeca16fc873c2df1152d0. Line numbers link to the exact commit they were checked against.
+**How this was found**
+
+A comparison harness renders each deck twice, once with LibreOffice and once with BetterOffice,
+pixel-diffs the two images slide by slide, and traces every visible difference back to the OOXML
+and to the code path responsible. Reference renders come from LibreOffice through
+[pptx-pdf](https://github.com/dsaad68/pptx-pdf), a single binary with LibreOffice embedded, at 96 dpi. Both engines
+are given the same Liberation, Carlito and Caladea faces under the family names the decks ask for,
+so a difference in text metrics is a real difference and not font substitution.
+
+- Harness, with the per-slide reports and all 35 issues this run produced: https://github.com/dsaad68/betteroffice/tree/harness/pptx-render-improvement/render-improvement-harness
+- Full report behind this issue, with every finding, the evidence table and the proposed fix: https://github.com/dsaad68/betteroffice/blob/harness/pptx-render-improvement/render-improvement-harness/issues/line-stroke-color-resolution-broken/report.md
+- How the harness works and why it is built this way: https://gist.github.com/dsaad68/038b63c2977aeca16fc873c2df1152d0
+
+Line numbers link to the exact commit they were checked against.

@@ -116,7 +116,7 @@ The collision is exact, not approximate: the value tick labels at
 The `Categ` truncation is a paint-order effect, not a clip. `push_text` truncates only at 120
 chars ([`crates/ooxml-drawingml/src/chart/geometry.rs:1349`](https://github.com/openooxml/betteroffice/blob/187cebc9ef5d414e4e65ccd96fe68b8f46c7f528/crates/ooxml-drawingml/src/chart/geometry.rs#L1349)) and `chart_text_primitive` widens the
 box to the measured run rather than clipping it
-([`crates/pptx-render/src/layout.rs:1134`](https://github.com/dsaad68/betteroffice/blob/df1a57dae7a091ea9ca8176ca013274cced71fdd/crates/pptx-render/src/layout.rs#L1134): `w: safe_geometry(text.width as f32).max(width)`). The
+([`crates/pptx-render/src/layout.rs:1134`](https://github.com/dsaad68/betteroffice/blob/a47dbde7498c781ab81b141e834da1950dcf4175/crates/pptx-render/src/layout.rs#L1134): `w: safe_geometry(text.width as f32).max(width)`). The
 label is emitted first and the bar rect for the same category immediately after
 ([`crates/ooxml-drawingml/src/chart/geometry.rs:2012`](https://github.com/openooxml/betteroffice/blob/187cebc9ef5d414e4e65ccd96fe68b8f46c7f528/crates/ooxml-drawingml/src/chart/geometry.rs#L2012) then
 [`crates/ooxml-drawingml/src/chart/geometry.rs:2046`](https://github.com/openooxml/betteroffice/blob/187cebc9ef5d414e4e65ccd96fe68b8f46c7f528/crates/ooxml-drawingml/src/chart/geometry.rs#L2046)), so the opaque bar covers everything past
@@ -362,7 +362,7 @@ Existing tests that cover this area and must keep passing:
   `wedge_families_draw_closed_paths_and_flat_families_draw_rectangles`
   ([`crates/pptx-render/src/chart.rs:438`](https://github.com/openooxml/betteroffice/blob/187cebc9ef5d414e4e65ccd96fe68b8f46c7f528/crates/pptx-render/src/chart.rs#L438), [`crates/pptx-render/src/chart.rs:470`](https://github.com/openooxml/betteroffice/blob/187cebc9ef5d414e4e65ccd96fe68b8f46c7f528/crates/pptx-render/src/chart.rs#L470)), plus the
   `chart` raster golden (`crates/pptx-raster/tests/golden/chart.png`, driven by
-  [`crates/pptx-raster/tests/golden.rs:346`](https://github.com/dsaad68/betteroffice/blob/df1a57dae7a091ea9ca8176ca013274cced71fdd/crates/pptx-raster/tests/golden.rs#L346)).
+  [`crates/pptx-raster/tests/golden.rs:346`](https://github.com/dsaad68/betteroffice/blob/a47dbde7498c781ab81b141e834da1950dcf4175/crates/pptx-raster/tests/golden.rs#L346)).
 
 No test asserts where a bar chart's value ticks are drawn; that assertion is the new one.
 
@@ -374,4 +374,17 @@ Related issues found in the same run: `chart-axis-autoscale-not-rounded`, `chart
 
 Files most likely involved: `crates/ooxml-drawingml/src/chart/geometry.rs`, `crates/pptx-render/src/chart.rs`, `crates/xlsx-render/src/chart.rs`, `crates/docx-layout/src/display_list.rs`
 
-Found with a comparison harness that renders decks with both engines, pixel-diffs them, and traces each difference back to the OOXML and the code path. Full report with all findings: https://github.com/dsaad68/betteroffice/blob/harness/pptx-render-improvement/render-improvement-harness/issues/chart-axis-position-swapped/report.md. Methodology: https://gist.github.com/dsaad68/038b63c2977aeca16fc873c2df1152d0. Line numbers link to the exact commit they were checked against.
+**How this was found**
+
+A comparison harness renders each deck twice, once with LibreOffice and once with BetterOffice,
+pixel-diffs the two images slide by slide, and traces every visible difference back to the OOXML
+and to the code path responsible. Reference renders come from LibreOffice through
+[pptx-pdf](https://github.com/dsaad68/pptx-pdf), a single binary with LibreOffice embedded, at 96 dpi. Both engines
+are given the same Liberation, Carlito and Caladea faces under the family names the decks ask for,
+so a difference in text metrics is a real difference and not font substitution.
+
+- Harness, with the per-slide reports and all 35 issues this run produced: https://github.com/dsaad68/betteroffice/tree/harness/pptx-render-improvement/render-improvement-harness
+- Full report behind this issue, with every finding, the evidence table and the proposed fix: https://github.com/dsaad68/betteroffice/blob/harness/pptx-render-improvement/render-improvement-harness/issues/chart-axis-position-swapped/report.md
+- How the harness works and why it is built this way: https://gist.github.com/dsaad68/038b63c2977aeca16fc873c2df1152d0
+
+Line numbers link to the exact commit they were checked against.

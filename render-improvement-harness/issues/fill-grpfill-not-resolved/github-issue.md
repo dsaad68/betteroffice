@@ -69,12 +69,12 @@ there is nothing to inherit and nothing to inherit from.
 - `parse_group` reads only `nvGrpSpPr` and `grpSpPr/xfrm`; the `grpSpPr` fill is dropped --
   [`crates/pptx-parse/src/drawing.rs:252`](https://github.com/openooxml/betteroffice/blob/187cebc9ef5d414e4e65ccd96fe68b8f46c7f528/crates/pptx-parse/src/drawing.rs#L252)-`266`. `GroupShape` correspondingly has no `fill`
   field ([`crates/pptx-parse/src/model.rs:261`](https://github.com/openooxml/betteroffice/blob/187cebc9ef5d414e4e65ccd96fe68b8f46c7f528/crates/pptx-parse/src/model.rs#L261)), and `node_fill` returns `None` for every
-  group ([`crates/pptx-render/src/layout.rs:1760`](https://github.com/dsaad68/betteroffice/blob/df1a57dae7a091ea9ca8176ca013274cced71fdd/crates/pptx-render/src/layout.rs#L1760)).
+  group ([`crates/pptx-render/src/layout.rs:1760`](https://github.com/dsaad68/betteroffice/blob/a47dbde7498c781ab81b141e834da1950dcf4175/crates/pptx-render/src/layout.rs#L1760)).
 - Both render paths therefore have nothing to fall back on. `render_parsed_shape` recurses
-  through a group carrying only the transform ([`crates/pptx-render/src/layout.rs:490`](https://github.com/dsaad68/betteroffice/blob/df1a57dae7a091ea9ca8176ca013274cced71fdd/crates/pptx-render/src/layout.rs#L490)) and
-  paints the child from `value.fill` alone ([`crates/pptx-render/src/layout.rs:526`](https://github.com/dsaad68/betteroffice/blob/df1a57dae7a091ea9ca8176ca013274cced71fdd/crates/pptx-render/src/layout.rs#L526)); the
-  snapshot path does the same at [`crates/pptx-render/src/layout.rs:362`](https://github.com/dsaad68/betteroffice/blob/df1a57dae7a091ea9ca8176ca013274cced71fdd/crates/pptx-render/src/layout.rs#L362) and `:384`.
-- `pptx-raster` fills only when a paint is present -- [`crates/pptx-raster/src/lib.rs:379`](https://github.com/dsaad68/betteroffice/blob/df1a57dae7a091ea9ca8176ca013274cced71fdd/crates/pptx-raster/src/lib.rs#L379) --
+  through a group carrying only the transform ([`crates/pptx-render/src/layout.rs:490`](https://github.com/dsaad68/betteroffice/blob/a47dbde7498c781ab81b141e834da1950dcf4175/crates/pptx-render/src/layout.rs#L490)) and
+  paints the child from `value.fill` alone ([`crates/pptx-render/src/layout.rs:526`](https://github.com/dsaad68/betteroffice/blob/a47dbde7498c781ab81b141e834da1950dcf4175/crates/pptx-render/src/layout.rs#L526)); the
+  snapshot path does the same at [`crates/pptx-render/src/layout.rs:362`](https://github.com/dsaad68/betteroffice/blob/a47dbde7498c781ab81b141e834da1950dcf4175/crates/pptx-render/src/layout.rs#L362) and `:384`.
+- `pptx-raster` fills only when a paint is present -- [`crates/pptx-raster/src/lib.rs:379`](https://github.com/dsaad68/betteroffice/blob/a47dbde7498c781ab81b141e834da1950dcf4175/crates/pptx-raster/src/lib.rs#L379) --
   so `fill: None` plus the usual `<a:ln><a:noFill/></a:ln>` produces literally no pixels.
 - The edit layer has the same hole: `seed_shape` stores `fillJson` for shapes and pictures
   ([`crates/pptx-edit/src/deck.rs:131`](https://github.com/openooxml/betteroffice/blob/187cebc9ef5d414e4e65ccd96fe68b8f46c7f528/crates/pptx-edit/src/deck.rs#L131), `:142`) but the group arm stores nothing
@@ -130,7 +130,7 @@ two-level and 2 three-level cases measured in the decks.
 3. In `common_slide_data` ([`crates/pptx-parse/src/drawing.rs:55`](https://github.com/openooxml/betteroffice/blob/187cebc9ef5d414e4e65ccd96fe68b8f46c7f528/crates/pptx-parse/src/drawing.rs#L55)-`59`), resolve one last time
    against the `spTree`'s own `grpSpPr` fill, then clear any sentinel that is still
    unresolved back to `None`, so the sentinel never escapes the crate. Without that sweep a
-   `"group"` fill type could reach `paint` ([`crates/pptx-render/src/layout.rs:1897`](https://github.com/dsaad68/betteroffice/blob/df1a57dae7a091ea9ca8176ca013274cced71fdd/crates/pptx-render/src/layout.rs#L1897), harmless
+   `"group"` fill type could reach `paint` ([`crates/pptx-render/src/layout.rs:1897`](https://github.com/dsaad68/betteroffice/blob/a47dbde7498c781ab81b141e834da1950dcf4175/crates/pptx-render/src/layout.rs#L1897), harmless
    -- it resolves to `None`) and `fill_element` ([`crates/pptx-parse/src/write.rs:1042`](https://github.com/openooxml/betteroffice/blob/187cebc9ef5d414e4e65ccd96fe68b8f46c7f528/crates/pptx-parse/src/write.rs#L1042), which
    would raise `unsupported fill type`).
 
@@ -140,7 +140,7 @@ so an untouched `grpFill` shape produces no patch and its `<a:grpFill/>` stays i
 
 The alternative -- add `fill: Option<ShapeFill>` to `GroupShape`, seed it in
 [`crates/pptx-edit/src/deck.rs:162`](https://github.com/openooxml/betteroffice/blob/187cebc9ef5d414e4e65ccd96fe68b8f46c7f528/crates/pptx-edit/src/deck.rs#L162), and thread an inherited fill down both group recursions
-([`crates/pptx-render/src/layout.rs:490`](https://github.com/dsaad68/betteroffice/blob/df1a57dae7a091ea9ca8176ca013274cced71fdd/crates/pptx-render/src/layout.rs#L490) and `:362`) -- keeps the model faithful to the XML
+([`crates/pptx-render/src/layout.rs:490`](https://github.com/dsaad68/betteroffice/blob/a47dbde7498c781ab81b141e834da1950dcf4175/crates/pptx-render/src/layout.rs#L490) and `:362`) -- keeps the model faithful to the XML
 but touches four crates and the snapshot schema for the same pixels. Prefer it only if the
 editor later needs to show or edit a group's fill.
 
@@ -190,7 +190,7 @@ Risks and tests to add:
 
 - **Custom geometry interaction.** Six of the sixteen findings are `custGeom` icons that are
   invisible today only because they have no fill. `geometry_path` falls back to the `rect`
-  preset for `"custom"` ([`crates/pptx-render/src/layout.rs:1955`](https://github.com/dsaad68/betteroffice/blob/df1a57dae7a091ea9ca8176ca013274cced71fdd/crates/pptx-render/src/layout.rs#L1955)-`1956`), so resolving their
+  preset for `"custom"` ([`crates/pptx-render/src/layout.rs:1955`](https://github.com/dsaad68/betteroffice/blob/a47dbde7498c781ab81b141e834da1950dcf4175/crates/pptx-render/src/layout.rs#L1955)-`1956`), so resolving their
   fill turns each icon into a solid coloured rectangle -- visually a regression on
   `cisco-cloud-security/05` and `project20/02, 06, 07, 08, 09` until
   `geometry-custom-collapses-to-bbox` lands. Land the two together, or land this one and
@@ -213,7 +213,7 @@ Tests to add: a `parse_fill`/`parse_group` unit test in
 group `solidFill`, inner group `grpFill`, leaf `grpFill` -- asserting the leaf resolves to
 the outer colour; and a `pptx-render` layout test asserting the emitted `Primitive::Shape`
 carries the group's `Paint::Solid`, alongside the existing fill assertions near
-[`crates/pptx-render/src/layout.rs:2334`](https://github.com/dsaad68/betteroffice/blob/df1a57dae7a091ea9ca8176ca013274cced71fdd/crates/pptx-render/src/layout.rs#L2334).
+[`crates/pptx-render/src/layout.rs:2334`](https://github.com/dsaad68/betteroffice/blob/a47dbde7498c781ab81b141e834da1950dcf4175/crates/pptx-render/src/layout.rs#L2334).
 
 **How to verify**
 
@@ -224,7 +224,7 @@ the hot cells covering the callout column should collapse. Slides whose `grpFill
 `custGeom` icons (`cisco-cloud-security/05`, `project20/02`, `06`, `07`, `08`, `09`) will get
 *worse-looking* before they get better -- see the risk note in `possible-solution.md` --
 because custom geometry currently falls back to the `rect` preset
-([`crates/pptx-render/src/layout.rs:1955`](https://github.com/dsaad68/betteroffice/blob/df1a57dae7a091ea9ca8176ca013274cced71fdd/crates/pptx-render/src/layout.rs#L1955)-`1956`), so a newly-resolved fill paints a solid
+([`crates/pptx-render/src/layout.rs:1955`](https://github.com/dsaad68/betteroffice/blob/a47dbde7498c781ab81b141e834da1950dcf4175/crates/pptx-render/src/layout.rs#L1955)-`1956`), so a newly-resolved fill paints a solid
 rectangle where an invisible shape used to be. Judge those slides only after
 `geometry-custom-collapses-to-bbox` is fixed, or gate the check on the bar slides.
 
@@ -242,4 +242,17 @@ Related issues found in the same run: `geometry-custom-collapses-to-bbox`, `them
 
 Files most likely involved: `crates/pptx-parse/src/drawing.rs`, `crates/pptx-render/src/layout.rs`, `crates/pptx-parse/src/write.rs`
 
-Found with a comparison harness that renders decks with both engines, pixel-diffs them, and traces each difference back to the OOXML and the code path. Full report with all findings: https://github.com/dsaad68/betteroffice/blob/harness/pptx-render-improvement/render-improvement-harness/issues/fill-grpfill-not-resolved/report.md. Methodology: https://gist.github.com/dsaad68/038b63c2977aeca16fc873c2df1152d0. Line numbers link to the exact commit they were checked against.
+**How this was found**
+
+A comparison harness renders each deck twice, once with LibreOffice and once with BetterOffice,
+pixel-diffs the two images slide by slide, and traces every visible difference back to the OOXML
+and to the code path responsible. Reference renders come from LibreOffice through
+[pptx-pdf](https://github.com/dsaad68/pptx-pdf), a single binary with LibreOffice embedded, at 96 dpi. Both engines
+are given the same Liberation, Carlito and Caladea faces under the family names the decks ask for,
+so a difference in text metrics is a real difference and not font substitution.
+
+- Harness, with the per-slide reports and all 35 issues this run produced: https://github.com/dsaad68/betteroffice/tree/harness/pptx-render-improvement/render-improvement-harness
+- Full report behind this issue, with every finding, the evidence table and the proposed fix: https://github.com/dsaad68/betteroffice/blob/harness/pptx-render-improvement/render-improvement-harness/issues/fill-grpfill-not-resolved/report.md
+- How the harness works and why it is built this way: https://gist.github.com/dsaad68/038b63c2977aeca16fc873c2df1152d0
+
+Line numbers link to the exact commit they were checked against.

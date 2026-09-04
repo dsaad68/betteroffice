@@ -67,15 +67,15 @@ Match the reference render. PowerPoint and LibreOffice agree on this behaviour; 
 `scheme` to `arabicPeriod` and `start_at` to `1`, and stored on `ParagraphProperties::bullet`
 ([`crates/pptx-parse/src/drawing.rs:876`](https://github.com/openooxml/betteroffice/blob/187cebc9ef5d414e4e65ccd96fe68b8f46c7f528/crates/pptx-parse/src/drawing.rs#L876), [`crates/pptx-parse/src/model.rs:305-312`](https://github.com/openooxml/betteroffice/blob/187cebc9ef5d414e4e65ccd96fe68b8f46c7f528/crates/pptx-parse/src/model.rs#L305-L312)). It survives
 the render cascade: `BodyCascade::paragraph_properties`
-([`crates/pptx-render/src/layout.rs:807-827`](https://github.com/dsaad68/betteroffice/blob/df1a57dae7a091ea9ca8176ca013274cced71fdd/crates/pptx-render/src/layout.rs#L807-L827)) merges master → layout → primary and
+([`crates/pptx-render/src/layout.rs:807-827`](https://github.com/dsaad68/betteroffice/blob/a47dbde7498c781ab81b141e834da1950dcf4175/crates/pptx-render/src/layout.rs#L807-L827)) merges master → layout → primary and
 `merge_paragraph_properties` copies `bullet` field-wise
-([`crates/pptx-render/src/layout.rs:1814-1816`](https://github.com/dsaad68/betteroffice/blob/df1a57dae7a091ea9ca8176ca013274cced71fdd/crates/pptx-render/src/layout.rs#L1814-L1816)).
+([`crates/pptx-render/src/layout.rs:1814-1816`](https://github.com/dsaad68/betteroffice/blob/a47dbde7498c781ab81b141e834da1950dcf4175/crates/pptx-render/src/layout.rs#L1814-L1816)).
 
-It dies at [`crates/pptx-render/src/layout.rs:994-1004`](https://github.com/dsaad68/betteroffice/blob/df1a57dae7a091ea9ca8176ca013274cced71fdd/crates/pptx-render/src/layout.rs#L994-L1004). `ResolvedParagraph`
-([`crates/pptx-render/src/layout.rs:910-915`](https://github.com/dsaad68/betteroffice/blob/df1a57dae7a091ea9ca8176ca013274cced71fdd/crates/pptx-render/src/layout.rs#L910-L915)) has `align`, `level`, `margin_left_px` and `runs` —
+It dies at [`crates/pptx-render/src/layout.rs:994-1004`](https://github.com/dsaad68/betteroffice/blob/a47dbde7498c781ab81b141e834da1950dcf4175/crates/pptx-render/src/layout.rs#L994-L1004). `ResolvedParagraph`
+([`crates/pptx-render/src/layout.rs:910-915`](https://github.com/dsaad68/betteroffice/blob/a47dbde7498c781ab81b141e834da1950dcf4175/crates/pptx-render/src/layout.rs#L910-L915)) has `align`, `level`, `margin_left_px` and `runs` —
 no bullet, no indent. `layout_content` therefore only shifts the paragraph box right by `marL`
-([`crates/pptx-render/src/layout.rs:1177-1178`](https://github.com/dsaad68/betteroffice/blob/df1a57dae7a091ea9ca8176ca013274cced71fdd/crates/pptx-render/src/layout.rs#L1177-L1178)) and `layout_paragraph`
-([`crates/pptx-render/src/layout.rs:1192`](https://github.com/dsaad68/betteroffice/blob/df1a57dae7a091ea9ca8176ca013274cced71fdd/crates/pptx-render/src/layout.rs#L1192)) shapes nothing but the run text. Grepping `buAutoNum`
+([`crates/pptx-render/src/layout.rs:1177-1178`](https://github.com/dsaad68/betteroffice/blob/a47dbde7498c781ab81b141e834da1950dcf4175/crates/pptx-render/src/layout.rs#L1177-L1178)) and `layout_paragraph`
+([`crates/pptx-render/src/layout.rs:1192`](https://github.com/dsaad68/betteroffice/blob/a47dbde7498c781ab81b141e834da1950dcf4175/crates/pptx-render/src/layout.rs#L1192)) shapes nothing but the run text. Grepping `buAutoNum`
 and `AutoNumber` across the workspace returns only the parse site, the write-back site
 ([`crates/pptx-parse/src/write.rs:1638-1645`](https://github.com/openooxml/betteroffice/blob/187cebc9ef5d414e4e65ccd96fe68b8f46c7f528/crates/pptx-parse/src/write.rs#L1638-L1645)) and the model — nothing in `pptx-render`,
 `pptx-raster`, `ooxml-drawingml` or `ooxml-text` consumes it.
@@ -84,9 +84,9 @@ and `AutoNumber` across the workspace returns only the parse site, the write-bac
 
 1. *A counter.* The marker text depends on how many earlier paragraphs at the same level in the
    same text body were auto-numbered. `resolve_content` is called once per text body
-   ([`crates/pptx-render/src/layout.rs:666`](https://github.com/dsaad68/betteroffice/blob/df1a57dae7a091ea9ca8176ca013274cced71fdd/crates/pptx-render/src/layout.rs#L666)) and walks paragraphs in order, so it is the natural
+   ([`crates/pptx-render/src/layout.rs:666`](https://github.com/dsaad68/betteroffice/blob/a47dbde7498c781ab81b141e834da1950dcf4175/crates/pptx-render/src/layout.rs#L666)) and walks paragraphs in order, so it is the natural
    home for a `[u32; 9]` counter — and it sits outside the autofit re-layout loop
-   ([`crates/pptx-render/src/layout.rs:686-698`](https://github.com/dsaad68/betteroffice/blob/df1a57dae7a091ea9ca8176ca013274cced71fdd/crates/pptx-render/src/layout.rs#L686-L698)), so the numbering is computed once no matter how
+   ([`crates/pptx-render/src/layout.rs:686-698`](https://github.com/dsaad68/betteroffice/blob/a47dbde7498c781ab81b141e834da1950dcf4175/crates/pptx-render/src/layout.rs#L686-L698)), so the numbering is computed once no matter how
    many times `layout_content` re-runs.
 2. *A scheme formatter.* `ST_TextAutonumberScheme` has ~23 members (`arabicPeriod`,
    `arabicParenR`, `alphaLcParenR`, `romanUcPeriod`, …), each a numeral style plus a suffix. The
@@ -129,15 +129,15 @@ Lands on top of `text-bullets-char-indent-dropped`, which carries the bullet int
 the prerequisite; three additions make `buAutoNum` work.
 
 **Number the paragraphs in `resolve_content`.** `resolve_content`
-([`crates/pptx-render/src/layout.rs:934`](https://github.com/dsaad68/betteroffice/blob/df1a57dae7a091ea9ca8176ca013274cced71fdd/crates/pptx-render/src/layout.rs#L934)) is called once per text body
-([`crates/pptx-render/src/layout.rs:666`](https://github.com/dsaad68/betteroffice/blob/df1a57dae7a091ea9ca8176ca013274cced71fdd/crates/pptx-render/src/layout.rs#L666)) and iterates paragraphs in document order, so it holds a
+([`crates/pptx-render/src/layout.rs:934`](https://github.com/dsaad68/betteroffice/blob/a47dbde7498c781ab81b141e834da1950dcf4175/crates/pptx-render/src/layout.rs#L934)) is called once per text body
+([`crates/pptx-render/src/layout.rs:666`](https://github.com/dsaad68/betteroffice/blob/a47dbde7498c781ab81b141e834da1950dcf4175/crates/pptx-render/src/layout.rs#L666)) and iterates paragraphs in document order, so it holds a
 local `[u32; 9]` counter. For each paragraph whose resolved `properties.bullet` is
 `Bullet::AutoNumber { scheme, start_at }`, take the paragraph's level, apply `start_at` the first
 time that level is numbered, increment, reset every deeper level, and store the formatted string
 on `ResolvedParagraph`. Store the resolved marker as a `String`, not the `Bullet` — layout then
 treats `buChar` and `buAutoNum` identically and needs no counter state of its own. It must live
 here rather than in `layout_content`, which the autofit loop re-runs
-([`crates/pptx-render/src/layout.rs:686-698`](https://github.com/dsaad68/betteroffice/blob/df1a57dae7a091ea9ca8176ca013274cced71fdd/crates/pptx-render/src/layout.rs#L686-L698)) and would re-increment on each pass.
+([`crates/pptx-render/src/layout.rs:686-698`](https://github.com/dsaad68/betteroffice/blob/a47dbde7498c781ab81b141e834da1950dcf4175/crates/pptx-render/src/layout.rs#L686-L698)) and would re-increment on each pass.
 
 **Format the scheme.** A `fn format_autonum(value: u32, scheme: &str) -> String` splitting
 `ST_TextAutonumberScheme` into a numeral style (`arabic`, `alphaLc`, `alphaUc`, `romanLc`,
@@ -152,10 +152,10 @@ obvious home, since neither is DrawingML-specific).
 `write.rs` ([`crates/pptx-parse/src/write.rs:1631-1646`](https://github.com/openooxml/betteroffice/blob/187cebc9ef5d414e4e65ccd96fe68b8f46c7f528/crates/pptx-parse/src/write.rs#L1631-L1646)) so round-trips stay lossless, and in the
 marker's `ResolvedStyle` override `family` with it. Theme refs need no new code —
 `resolve_style` already routes a leading `+` through `resolve_theme_font_ref`
-([`crates/pptx-render/src/layout.rs:1031-1039`](https://github.com/dsaad68/betteroffice/blob/df1a57dae7a091ea9ca8176ca013274cced71fdd/crates/pptx-render/src/layout.rs#L1031-L1039)), which is exactly what `+mj-lt` needs. This is
+([`crates/pptx-render/src/layout.rs:1031-1039`](https://github.com/dsaad68/betteroffice/blob/a47dbde7498c781ab81b141e834da1950dcf4175/crates/pptx-render/src/layout.rs#L1031-L1039)), which is exactly what `+mj-lt` needs. This is
 cosmetic; it can be a follow-up if the marker-emission change is landing on its own.
 
-Optional, and separate: `content_from_story` ([`crates/pptx-render/src/layout.rs:862`](https://github.com/dsaad68/betteroffice/blob/df1a57dae7a091ea9ca8176ca013274cced71fdd/crates/pptx-render/src/layout.rs#L862)) drops the
+Optional, and separate: `content_from_story` ([`crates/pptx-render/src/layout.rs:862`](https://github.com/dsaad68/betteroffice/blob/a47dbde7498c781ab81b141e834da1950dcf4175/crates/pptx-render/src/layout.rs#L862)) drops the
 paragraph's bullet on the floor, even though `ParagraphSnapshot::bullet_json`
 ([`crates/pptx-edit/src/model.rs:69`](https://github.com/openooxml/betteroffice/blob/187cebc9ef5d414e4e65ccd96fe68b8f46c7f528/crates/pptx-edit/src/model.rs#L69)) carries a serialized `Bullet`. The cascade recovers it by
 paragraph index today, so the render path works; an edit that inserts or removes a paragraph
@@ -201,7 +201,7 @@ fn format_autonum(value: u32, scheme: &str) -> String {
 The marker itself is placed exactly as in `text-bullets-char-indent-dropped`: shaped with the
 first run's style (family overridden by `buFont`), prepended to the first line's `runs` at
 `x = rect.x + marL + indent` clamped to `>= rect.x`, with `start == end` so `caret_stops` and
-hit testing ([`crates/pptx-render/src/layout.rs:293-300`](https://github.com/dsaad68/betteroffice/blob/df1a57dae7a091ea9ca8176ca013274cced71fdd/crates/pptx-render/src/layout.rs#L293-L300)) are untouched.
+hit testing ([`crates/pptx-render/src/layout.rs:293-300`](https://github.com/dsaad68/betteroffice/blob/a47dbde7498c781ab81b141e834da1950dcf4175/crates/pptx-render/src/layout.rs#L293-L300)) are untouched.
 
 Risks and tests to add:
 
@@ -210,7 +210,7 @@ Risks and tests to add:
   keeping `10.` and `11.` left-aligned at the same x as `1.` and leaving the text alone.
 - The counter is per text body. Grouped shapes each get their own body, which is correct, but
   confirm that a shape rendered through both `content_from_story` and `content_from_body`
-  ([`crates/pptx-render/src/layout.rs:862`](https://github.com/dsaad68/betteroffice/blob/df1a57dae7a091ea9ca8176ca013274cced71fdd/crates/pptx-render/src/layout.rs#L862), `:884`) does not number the same body twice.
+  ([`crates/pptx-render/src/layout.rs:862`](https://github.com/dsaad68/betteroffice/blob/a47dbde7498c781ab81b141e834da1950dcf4175/crates/pptx-render/src/layout.rs#L862), `:884`) does not number the same body twice.
 - Adding a field to `Bullet` changes its serde shape; `bullet_json` round-trips through
   [`crates/pptx-edit/src/save.rs:361-368`](https://github.com/openooxml/betteroffice/blob/187cebc9ef5d414e4e65ccd96fe68b8f46c7f528/crates/pptx-edit/src/save.rs#L361-L368) and [`crates/pptx-edit/src/story.rs:110-123`](https://github.com/openooxml/betteroffice/blob/187cebc9ef5d414e4e65ccd96fe68b8f46c7f528/crates/pptx-edit/src/story.rs#L110-L123), so an
   `Option` field with `#[serde(default)]` keeps stored stories readable.
@@ -231,7 +231,7 @@ is a separate line-height defect (`project20/13/4`, `project20/16/4`) and unappl
 (`project20/11/2`, `project20/12/2`, `project20/14/1`), which will keep the residual high.
 
 No existing test covers bullets or auto-numbering: the `layout.rs` test module
-([`crates/pptx-render/src/layout.rs:2008`](https://github.com/dsaad68/betteroffice/blob/df1a57dae7a091ea9ca8176ca013274cced71fdd/crates/pptx-render/src/layout.rs#L2008) onward) has no `marL`, bullet or `buAutoNum` case. Add
+([`crates/pptx-render/src/layout.rs:2008`](https://github.com/dsaad68/betteroffice/blob/a47dbde7498c781ab81b141e834da1950dcf4175/crates/pptx-render/src/layout.rs#L2008) onward) has no `marL`, bullet or `buAutoNum` case. Add
 unit tests there for the counter across consecutive paragraphs, for a counter that resumes after
 an intervening paragraph at another level (the slide-16 shape), and for `arabicPeriod` marker
 text and placement at `rect.x + marL + indent`.
@@ -244,4 +244,17 @@ Related issues found in the same run: `text-bullets-char-indent-dropped`
 
 Files most likely involved: `crates/pptx-render/src/layout.rs`, `crates/pptx-parse/src/model.rs`, `crates/pptx-parse/src/drawing.rs`
 
-Found with a comparison harness that renders decks with both engines, pixel-diffs them, and traces each difference back to the OOXML and the code path. Full report with all findings: https://github.com/dsaad68/betteroffice/blob/harness/pptx-render-improvement/render-improvement-harness/issues/text-bullets-autonum-not-drawn/report.md. Methodology: https://gist.github.com/dsaad68/038b63c2977aeca16fc873c2df1152d0. Line numbers link to the exact commit they were checked against.
+**How this was found**
+
+A comparison harness renders each deck twice, once with LibreOffice and once with BetterOffice,
+pixel-diffs the two images slide by slide, and traces every visible difference back to the OOXML
+and to the code path responsible. Reference renders come from LibreOffice through
+[pptx-pdf](https://github.com/dsaad68/pptx-pdf), a single binary with LibreOffice embedded, at 96 dpi. Both engines
+are given the same Liberation, Carlito and Caladea faces under the family names the decks ask for,
+so a difference in text metrics is a real difference and not font substitution.
+
+- Harness, with the per-slide reports and all 35 issues this run produced: https://github.com/dsaad68/betteroffice/tree/harness/pptx-render-improvement/render-improvement-harness
+- Full report behind this issue, with every finding, the evidence table and the proposed fix: https://github.com/dsaad68/betteroffice/blob/harness/pptx-render-improvement/render-improvement-harness/issues/text-bullets-autonum-not-drawn/report.md
+- How the harness works and why it is built this way: https://gist.github.com/dsaad68/038b63c2977aeca16fc873c2df1152d0
+
+Line numbers link to the exact commit they were checked against.

@@ -80,8 +80,8 @@ of them has a slot to receive a fix either:
 - `Primitive::Image` ([`crates/pptx-render/src/display_list.rs:99`](https://github.com/openooxml/betteroffice/blob/187cebc9ef5d414e4e65ccd96fe68b8f46c7f528/crates/pptx-render/src/display_list.rs#L99)) is
   `{object_id, shape_id, name, x, y, w, h, asset_id, stroke, transform}`.
 - Both layout arms build that struct from `media_part_path` and the outline only:
-  `ShapeKind::Picture` at [`crates/pptx-render/src/layout.rs:425`](https://github.com/dsaad68/betteroffice/blob/df1a57dae7a091ea9ca8176ca013274cced71fdd/crates/pptx-render/src/layout.rs#L425) (slide shapes, via the
-  edit snapshot) and `ShapeNode::Picture` at [`crates/pptx-render/src/layout.rs:534`](https://github.com/dsaad68/betteroffice/blob/df1a57dae7a091ea9ca8176ca013274cced71fdd/crates/pptx-render/src/layout.rs#L534)
+  `ShapeKind::Picture` at [`crates/pptx-render/src/layout.rs:425`](https://github.com/dsaad68/betteroffice/blob/a47dbde7498c781ab81b141e834da1950dcf4175/crates/pptx-render/src/layout.rs#L425) (slide shapes, via the
+  edit snapshot) and `ShapeNode::Picture` at [`crates/pptx-render/src/layout.rs:534`](https://github.com/dsaad68/betteroffice/blob/a47dbde7498c781ab81b141e834da1950dcf4175/crates/pptx-render/src/layout.rs#L534)
   (master/layout shapes). The host-composed path repeats it at
   [`crates/pptx-render/src/lib.rs:200`](https://github.com/openooxml/betteroffice/blob/187cebc9ef5d414e4e65ccd96fe68b8f46c7f528/crates/pptx-render/src/lib.rs#L200).
 - The edit snapshot drops it a step earlier still: the picture arm at
@@ -89,15 +89,15 @@ of them has a slot to receive a fix either:
   `outlineJson` and `mediaPartPath`, and `ShapeSnapshot`
   ([`crates/pptx-edit/src/model.rs:99`](https://github.com/openooxml/betteroffice/blob/187cebc9ef5d414e4e65ccd96fe68b8f46c7f528/crates/pptx-edit/src/model.rs#L99)) is read back at [`crates/pptx-edit/src/deck.rs:823`](https://github.com/openooxml/betteroffice/blob/187cebc9ef5d414e4e65ccd96fe68b8f46c7f528/crates/pptx-edit/src/deck.rs#L823)
   with no effects field.
-- `paint_image` ([`crates/pptx-raster/src/lib.rs:391`](https://github.com/dsaad68/betteroffice/blob/df1a57dae7a091ea9ca8176ca013274cced71fdd/crates/pptx-raster/src/lib.rs#L391)) decodes at
-  [`crates/pptx-raster/src/lib.rs:404`](https://github.com/dsaad68/betteroffice/blob/df1a57dae7a091ea9ca8176ca013274cced71fdd/crates/pptx-raster/src/lib.rs#L404) and blits the pixmap unmodified at
-  [`crates/pptx-raster/src/lib.rs:414`](https://github.com/dsaad68/betteroffice/blob/df1a57dae7a091ea9ca8176ca013274cced71fdd/crates/pptx-raster/src/lib.rs#L414). The canvas backend does the same with a bare
+- `paint_image` ([`crates/pptx-raster/src/lib.rs:391`](https://github.com/dsaad68/betteroffice/blob/a47dbde7498c781ab81b141e834da1950dcf4175/crates/pptx-raster/src/lib.rs#L391)) decodes at
+  [`crates/pptx-raster/src/lib.rs:404`](https://github.com/dsaad68/betteroffice/blob/a47dbde7498c781ab81b141e834da1950dcf4175/crates/pptx-raster/src/lib.rs#L404) and blits the pixmap unmodified at
+  [`crates/pptx-raster/src/lib.rs:414`](https://github.com/dsaad68/betteroffice/blob/a47dbde7498c781ab81b141e834da1950dcf4175/crates/pptx-raster/src/lib.rs#L414). The canvas backend does the same with a bare
   `ctx.drawImage` at [`packages/pptx/src/render/canvas.ts:208`](https://github.com/openooxml/betteroffice/blob/187cebc9ef5d414e4e65ccd96fe68b8f46c7f528/packages/pptx/src/render/canvas.ts#L208), and `ImagePrimitive`
   ([`packages/pptx/src/types.ts:246`](https://github.com/openooxml/betteroffice/blob/187cebc9ef5d414e4e65ccd96fe68b8f46c7f528/packages/pptx/src/types.ts#L246)) has no effects field either.
 
 **Confirmed: the disappearances are contrast collapse, not a skipped draw.** `paint_image`
 has exactly one path that skips an image — `None => self.skipped_images += 1` when
-`decode` ([`crates/pptx-raster/src/lib.rs:498`](https://github.com/dsaad68/betteroffice/blob/df1a57dae7a091ea9ca8176ca013274cced71fdd/crates/pptx-raster/src/lib.rs#L498)) fails — and that path is unreachable for
+`decode` ([`crates/pptx-raster/src/lib.rs:498`](https://github.com/dsaad68/betteroffice/blob/a47dbde7498c781ab81b141e834da1950dcf4175/crates/pptx-raster/src/lib.rs#L498)) fails — and that path is unreachable for
 these three, because the sources decode fine and are small:
 
 | picture | source | size / mode | mean opaque RGB |
@@ -149,14 +149,14 @@ apply it in `pptx-raster`.
    `srgbClr`/`schemeClr`/`sysClr`/`prstClr` with `shade`/`tint`/`satMod` — but it returns
    the *first* colour child, so `duotone`'s two children need iterating, not one call.
    Resolution to hex needs the theme, which the parser does not have; either store two
-   `ColorValue`s and resolve in layout the way [`crates/pptx-render/src/layout.rs:1926`](https://github.com/dsaad68/betteroffice/blob/df1a57dae7a091ea9ca8176ca013274cced71fdd/crates/pptx-render/src/layout.rs#L1926)
+   `ColorValue`s and resolve in layout the way [`crates/pptx-render/src/layout.rs:1926`](https://github.com/dsaad68/betteroffice/blob/a47dbde7498c781ab81b141e834da1950dcf4175/crates/pptx-render/src/layout.rs#L1926)
    does, or pass the theme down. Storing `ColorValue` is the smaller change.
 
 2. **Snapshot.** Add `effectsJson` beside `fillJson` in the picture arm at
    [`crates/pptx-edit/src/deck.rs:139`](https://github.com/openooxml/betteroffice/blob/187cebc9ef5d414e4e65ccd96fe68b8f46c7f528/crates/pptx-edit/src/deck.rs#L139), a field on `ShapeSnapshot`
    ([`crates/pptx-edit/src/model.rs:99`](https://github.com/openooxml/betteroffice/blob/187cebc9ef5d414e4e65ccd96fe68b8f46c7f528/crates/pptx-edit/src/model.rs#L99)), and the read-back at
    [`crates/pptx-edit/src/deck.rs:823`](https://github.com/openooxml/betteroffice/blob/187cebc9ef5d414e4e65ccd96fe68b8f46c7f528/crates/pptx-edit/src/deck.rs#L823). Without this the slide path
-   ([`crates/pptx-render/src/layout.rs:425`](https://github.com/dsaad68/betteroffice/blob/df1a57dae7a091ea9ca8176ca013274cced71fdd/crates/pptx-render/src/layout.rs#L425)) still sees nothing — master and layout
+   ([`crates/pptx-render/src/layout.rs:425`](https://github.com/dsaad68/betteroffice/blob/a47dbde7498c781ab81b141e834da1950dcf4175/crates/pptx-render/src/layout.rs#L425)) still sees nothing — master and layout
    pictures reach the other arm, so skipping this fixes only half the deck.
 
 3. **Contract.** Add an optional `effects` to `Primitive::Image`
@@ -164,14 +164,14 @@ apply it in `pptx-raster`.
    today's JSON and `CONTRACT_VERSION` can stay at 1; mirror it on `ImagePrimitive`
    ([`packages/pptx/src/types.ts:246`](https://github.com/openooxml/betteroffice/blob/187cebc9ef5d414e4e65ccd96fe68b8f46c7f528/packages/pptx/src/types.ts#L246)), reusing the `ImageEffect` shape already declared at
    [`packages/docx/src/types/content/image.ts:108`](https://github.com/openooxml/betteroffice/blob/187cebc9ef5d414e4e65ccd96fe68b8f46c7f528/packages/docx/src/types/content/image.ts#L108). Populate it in all three producers:
-   [`crates/pptx-render/src/layout.rs:425`](https://github.com/dsaad68/betteroffice/blob/df1a57dae7a091ea9ca8176ca013274cced71fdd/crates/pptx-render/src/layout.rs#L425), [`crates/pptx-render/src/layout.rs:534`](https://github.com/dsaad68/betteroffice/blob/df1a57dae7a091ea9ca8176ca013274cced71fdd/crates/pptx-render/src/layout.rs#L534) and
+   [`crates/pptx-render/src/layout.rs:425`](https://github.com/dsaad68/betteroffice/blob/a47dbde7498c781ab81b141e834da1950dcf4175/crates/pptx-render/src/layout.rs#L425), [`crates/pptx-render/src/layout.rs:534`](https://github.com/dsaad68/betteroffice/blob/a47dbde7498c781ab81b141e834da1950dcf4175/crates/pptx-render/src/layout.rs#L534) and
    [`crates/pptx-render/src/lib.rs:200`](https://github.com/openooxml/betteroffice/blob/187cebc9ef5d414e4e65ccd96fe68b8f46c7f528/crates/pptx-render/src/lib.rs#L200).
 
-4. **Raster.** `ImageCache` ([`crates/pptx-raster/src/lib.rs:723`](https://github.com/dsaad68/betteroffice/blob/df1a57dae7a091ea9ca8176ca013274cced71fdd/crates/pptx-raster/src/lib.rs#L723)) is a budget counter, not
+4. **Raster.** `ImageCache` ([`crates/pptx-raster/src/lib.rs:723`](https://github.com/dsaad68/betteroffice/blob/a47dbde7498c781ab81b141e834da1950dcf4175/crates/pptx-raster/src/lib.rs#L723)) is a budget counter, not
    a map — `decode` re-decodes on every call — so the transform can mutate the returned
-   `Pixmap` in place in `paint_image` ([`crates/pptx-raster/src/lib.rs:391`](https://github.com/dsaad68/betteroffice/blob/df1a57dae7a091ea9ca8176ca013274cced71fdd/crates/pptx-raster/src/lib.rs#L391)) with no cache
+   `Pixmap` in place in `paint_image` ([`crates/pptx-raster/src/lib.rs:391`](https://github.com/dsaad68/betteroffice/blob/a47dbde7498c781ab81b141e834da1950dcf4175/crates/pptx-raster/src/lib.rs#L391)) with no cache
    key to worry about. The one trap is that `decode` premultiplies before returning
-   ([`crates/pptx-raster/src/lib.rs:758`](https://github.com/dsaad68/betteroffice/blob/df1a57dae7a091ea9ca8176ca013274cced71fdd/crates/pptx-raster/src/lib.rs#L758)), so a colour transform must unpremultiply, apply,
+   ([`crates/pptx-raster/src/lib.rs:758`](https://github.com/dsaad68/betteroffice/blob/a47dbde7498c781ab81b141e834da1950dcf4175/crates/pptx-raster/src/lib.rs#L758)), so a colour transform must unpremultiply, apply,
    and premultiply again, or be applied inside `decode` before that loop. Applying it
    before the premultiply loop is cleaner and one pass cheaper.
 
@@ -245,9 +245,9 @@ Risks and tests to add:
   transform will not match pixel for pixel; the golden tests only cover raster, so the gap
   will not be caught automatically.
 - Tests to add: a `pptx-parse` unit test for a `<a:blip>` carrying `biLevel`, `duotone`
-  and `clrChange` in order; a layout assertion at [`crates/pptx-render/src/layout.rs:2008`](https://github.com/dsaad68/betteroffice/blob/df1a57dae7a091ea9ca8176ca013274cced71fdd/crates/pptx-render/src/layout.rs#L2008)
+  and `clrChange` in order; a layout assertion at [`crates/pptx-render/src/layout.rs:2008`](https://github.com/dsaad68/betteroffice/blob/a47dbde7498c781ab81b141e834da1950dcf4175/crates/pptx-render/src/layout.rs#L2008)
   that both picture arms emit the effects; `biLevel` and `duotone` goldens beside
-  `golden_image` ([`crates/pptx-raster/tests/golden.rs:283`](https://github.com/dsaad68/betteroffice/blob/df1a57dae7a091ea9ca8176ca013274cced71fdd/crates/pptx-raster/tests/golden.rs#L283)); a premultiply round-trip
+  `golden_image` ([`crates/pptx-raster/tests/golden.rs:283`](https://github.com/dsaad68/betteroffice/blob/a47dbde7498c781ab81b141e834da1950dcf4175/crates/pptx-raster/tests/golden.rs#L283)); a premultiply round-trip
   assertion on a semi-transparent source.
 
 **How to verify**
@@ -263,12 +263,12 @@ that `evidence-4.png` will only look fully correct once `picture-srcrect-crop-ig
 also lands, since the same picture is mis-cropped.
 
 There is no existing coverage to lean on. `crates/pptx-parse` has no test naming any blip
-child, and `golden_image` ([`crates/pptx-raster/tests/golden.rs:283`](https://github.com/dsaad68/betteroffice/blob/df1a57dae7a091ea9ca8176ca013274cced71fdd/crates/pptx-raster/tests/golden.rs#L283)) is the only picture
+child, and `golden_image` ([`crates/pptx-raster/tests/golden.rs:283`](https://github.com/dsaad68/betteroffice/blob/a47dbde7498c781ab81b141e834da1950dcf4175/crates/pptx-raster/tests/golden.rs#L283)) is the only picture
 golden — it paints an unmodified checker. New tests belong in three places: a `pptx-parse`
 unit test that a `<a:blip>` with `duotone`/`biLevel` populates the new model field, a
-layout assertion in [`crates/pptx-render/src/layout.rs:2008`](https://github.com/dsaad68/betteroffice/blob/df1a57dae7a091ea9ca8176ca013274cced71fdd/crates/pptx-render/src/layout.rs#L2008) that `Primitive::Image` carries
+layout assertion in [`crates/pptx-render/src/layout.rs:2008`](https://github.com/dsaad68/betteroffice/blob/a47dbde7498c781ab81b141e834da1950dcf4175/crates/pptx-render/src/layout.rs#L2008) that `Primitive::Image` carries
 it on both arms, and a `biLevel` and a `duotone` golden beside `golden_image`.
-[`crates/pptx-raster/README.md:49`](https://github.com/dsaad68/betteroffice/blob/df1a57dae7a091ea9ca8176ca013274cced71fdd/crates/pptx-raster/README.md#L49) lists the picture-crop gap and should gain a line for
+[`crates/pptx-raster/README.md:49`](https://github.com/dsaad68/betteroffice/blob/a47dbde7498c781ab81b141e834da1950dcf4175/crates/pptx-raster/README.md#L49) lists the picture-crop gap and should gain a line for
 effects.
 
 **Additional context**
@@ -279,4 +279,17 @@ Related issues found in the same run: `picture-srcrect-crop-ignored`
 
 Files most likely involved: `crates/pptx-parse/src/drawing.rs`, `crates/pptx-parse/src/model.rs`, `crates/ooxml-drawingml/src/picture.rs`, `crates/pptx-edit/src/deck.rs`, `crates/pptx-edit/src/model.rs`, `crates/pptx-render/src/display_list.rs`, `crates/pptx-render/src/layout.rs`, `crates/pptx-render/src/lib.rs`, `crates/pptx-raster/src/lib.rs`, `crates/pptx-raster/README.md`, `packages/pptx/src/types.ts`, `packages/pptx/src/render/canvas.ts`
 
-Found with a comparison harness that renders decks with both engines, pixel-diffs them, and traces each difference back to the OOXML and the code path. Full report with all findings: https://github.com/dsaad68/betteroffice/blob/harness/pptx-render-improvement/render-improvement-harness/issues/picture-blip-duotone-bilevel-not-applied/report.md. Methodology: https://gist.github.com/dsaad68/038b63c2977aeca16fc873c2df1152d0. Line numbers link to the exact commit they were checked against.
+**How this was found**
+
+A comparison harness renders each deck twice, once with LibreOffice and once with BetterOffice,
+pixel-diffs the two images slide by slide, and traces every visible difference back to the OOXML
+and to the code path responsible. Reference renders come from LibreOffice through
+[pptx-pdf](https://github.com/dsaad68/pptx-pdf), a single binary with LibreOffice embedded, at 96 dpi. Both engines
+are given the same Liberation, Carlito and Caladea faces under the family names the decks ask for,
+so a difference in text metrics is a real difference and not font substitution.
+
+- Harness, with the per-slide reports and all 35 issues this run produced: https://github.com/dsaad68/betteroffice/tree/harness/pptx-render-improvement/render-improvement-harness
+- Full report behind this issue, with every finding, the evidence table and the proposed fix: https://github.com/dsaad68/betteroffice/blob/harness/pptx-render-improvement/render-improvement-harness/issues/picture-blip-duotone-bilevel-not-applied/report.md
+- How the harness works and why it is built this way: https://gist.github.com/dsaad68/038b63c2977aeca16fc873c2df1152d0
+
+Line numbers link to the exact commit they were checked against.

@@ -71,7 +71,7 @@ project17's theme is unusual: it puts the regular face in `majorFont` and the li
 
 The theme is parsed correctly - `majorFont` lands in `font_scheme.major_font`
 ([`crates/pptx-parse/src/theme.rs:60`](https://github.com/openooxml/betteroffice/blob/187cebc9ef5d414e4e65ccd96fe68b8f46c7f528/crates/pptx-parse/src/theme.rs#L60)). The defect is in the resolver.
-[`crates/pptx-render/src/layout.rs:1034`](https://github.com/dsaad68/betteroffice/blob/df1a57dae7a091ea9ca8176ca013274cced71fdd/crates/pptx-render/src/layout.rs#L1034) routes any family starting with `+` through
+[`crates/pptx-render/src/layout.rs:1034`](https://github.com/dsaad68/betteroffice/blob/a47dbde7498c781ab81b141e834da1950dcf4175/crates/pptx-render/src/layout.rs#L1034) routes any family starting with `+` through
 `resolve_theme_font_ref` ([`crates/ooxml-drawingml/src/theme.rs:191`](https://github.com/openooxml/betteroffice/blob/187cebc9ef5d414e4e65ccd96fe68b8f46c7f528/crates/ooxml-drawingml/src/theme.rs#L191)), whose major/minor decision is
 
 ```rust
@@ -91,9 +91,9 @@ does not contain the substring `major`, so **every** `+mj-*` reference in a pptx
 For project17 that turns `+mj-lt` into `Calibri Light`. The harness registers Carlito under the
 names `Calibri` and `Carlito` only (`render-improvement-harness/scripts/render_bo.py:15`), so
 `Calibri Light` misses both lookups in `resolve_face`
-([`crates/pptx-render/src/layout.rs:245-257`](https://github.com/dsaad68/betteroffice/blob/df1a57dae7a091ea9ca8176ca013274cced71fdd/crates/pptx-render/src/layout.rs#L245-L257)) - `normalize_family` is a lowercase-and-trim with no
-aliasing ([`crates/pptx-render/src/layout.rs:1978`](https://github.com/dsaad68/betteroffice/blob/df1a57dae7a091ea9ca8176ca013274cced71fdd/crates/pptx-render/src/layout.rs#L1978)) - and the run lands on `self.fallback`, the
-first face ever registered ([`crates/pptx-render/src/layout.rs:111`](https://github.com/dsaad68/betteroffice/blob/df1a57dae7a091ea9ca8176ca013274cced71fdd/crates/pptx-render/src/layout.rs#L111)), which for this harness is
+([`crates/pptx-render/src/layout.rs:245-257`](https://github.com/dsaad68/betteroffice/blob/a47dbde7498c781ab81b141e834da1950dcf4175/crates/pptx-render/src/layout.rs#L245-L257)) - `normalize_family` is a lowercase-and-trim with no
+aliasing ([`crates/pptx-render/src/layout.rs:1978`](https://github.com/dsaad68/betteroffice/blob/a47dbde7498c781ab81b141e834da1950dcf4175/crates/pptx-render/src/layout.rs#L1978)) - and the run lands on `self.fallback`, the
+first face ever registered ([`crates/pptx-render/src/layout.rs:111`](https://github.com/dsaad68/betteroffice/blob/a47dbde7498c781ab81b141e834da1950dcf4175/crates/pptx-render/src/layout.rs#L111)), which for this harness is
 Liberation Sans Regular.
 
 That is exactly the observed width delta. Measured with the shipped faces at 100px:
@@ -138,7 +138,7 @@ The slide-02 bullet run is
 
 so the renderer shapes U+F0E8 with the *latin* face, gets glyph 0, and paints the `.notdef` box.
 There is also no glyph-level fallback on the pptx path: `shape` takes a single `FontId`
-([`crates/ooxml-text/src/shape.rs:52`](https://github.com/openooxml/betteroffice/blob/187cebc9ef5d414e4e65ccd96fe68b8f46c7f528/crates/ooxml-text/src/shape.rs#L52)) and [`crates/pptx-render/src/layout.rs:1041`](https://github.com/dsaad68/betteroffice/blob/df1a57dae7a091ea9ca8176ca013274cced71fdd/crates/pptx-render/src/layout.rs#L1041) hands it one
+([`crates/ooxml-text/src/shape.rs:52`](https://github.com/openooxml/betteroffice/blob/187cebc9ef5d414e4e65ccd96fe68b8f46c7f528/crates/ooxml-text/src/shape.rs#L52)) and [`crates/pptx-render/src/layout.rs:1041`](https://github.com/dsaad68/betteroffice/blob/a47dbde7498c781ab81b141e834da1950dcf4175/crates/pptx-render/src/layout.rs#L1041) hands it one
 resolved face, so the chain resolver that already exists
 ([`crates/ooxml-text/src/font_store.rs:398`](https://github.com/openooxml/betteroffice/blob/187cebc9ef5d414e4e65ccd96fe68b8f46c7f528/crates/ooxml-text/src/font_store.rs#L398)) is never used here. docx has per-run fallback chains
 ([`crates/docx-layout/src/display_list.rs:1154`](https://github.com/openooxml/betteroffice/blob/187cebc9ef5d414e4e65ccd96fe68b8f46c7f528/crates/docx-layout/src/display_list.rs#L1154)); pptx does not.
@@ -191,7 +191,7 @@ theme in the corpus has `<a:ea typeface=""/>`, so without this the script fix tu
 references into an empty family.
 
 **2. Give `resolve_face` a substitution step before the blind fallback.**
-[`crates/pptx-render/src/layout.rs:245-257`](https://github.com/dsaad68/betteroffice/blob/df1a57dae7a091ea9ca8176ca013274cced71fdd/crates/pptx-render/src/layout.rs#L245-L257) goes straight from "family not registered" to
+[`crates/pptx-render/src/layout.rs:245-257`](https://github.com/dsaad68/betteroffice/blob/a47dbde7498c781ab81b141e834da1950dcf4175/crates/pptx-render/src/layout.rs#L245-L257) goes straight from "family not registered" to
 `self.fallback`, the first face ever registered. Insert one generic step between them: retry the
 family with a trailing weight/width qualifier removed (`Light`, `Semilight`, `Semibold`, `Medium`,
 `Black`, `Display`, `Heavy`, `Thin`), mapping a stripped `Light`/`Thin`/`Semilight` to the regular
@@ -208,7 +208,7 @@ fallback rather than one face), so the two issues compose instead of fighting.
 Add `symbol_font: Option<String>` next to `font_family` in
 [`crates/pptx-parse/src/drawing.rs:913-916`](https://github.com/openooxml/betteroffice/blob/187cebc9ef5d414e4e65ccd96fe68b8f46c7f528/crates/pptx-parse/src/drawing.rs#L913-L916) / `crates/pptx-parse/src/model.rs`, carry it through
 `crates/pptx-edit/src/story.rs` into the resolved style, and in
-[`crates/pptx-render/src/layout.rs:1041`](https://github.com/dsaad68/betteroffice/blob/df1a57dae7a091ea9ca8176ca013274cced71fdd/crates/pptx-render/src/layout.rs#L1041) build a small chain `[latin_face, sym_face]` instead of a
+[`crates/pptx-render/src/layout.rs:1041`](https://github.com/dsaad68/betteroffice/blob/a47dbde7498c781ab81b141e834da1950dcf4175/crates/pptx-render/src/layout.rs#L1041) build a small chain `[latin_face, sym_face]` instead of a
 single face. [`crates/ooxml-text/src/font_store.rs:398`](https://github.com/openooxml/betteroffice/blob/187cebc9ef5d414e4e65ccd96fe68b8f46c7f528/crates/ooxml-text/src/font_store.rs#L398) (`FontStore::resolve`) already picks the
 first covering font for a char; splitting a run into maximal same-font subranges is what
 [`crates/docx-layout/src/display_list.rs:1154`](https://github.com/openooxml/betteroffice/blob/187cebc9ef5d414e4e65ccd96fe68b8f46c7f528/crates/docx-layout/src/display_list.rs#L1154) does on the docx side and is the model to copy.
@@ -316,14 +316,27 @@ Existing coverage: none. [`crates/ooxml-drawingml/src/theme.rs:247`](https://git
 defaults through `get_major_font`/`get_minor_font` directly, never through
 `resolve_theme_font_ref`; the only `resolve_theme_font_ref` tests are the DOCX-form ones at
 [`crates/docx-parse/src/theme.rs:244-247`](https://github.com/openooxml/betteroffice/blob/187cebc9ef5d414e4e65ccd96fe68b8f46c7f528/crates/docx-parse/src/theme.rs#L244-L247). `crates/pptx-render` never mentions `+mj-lt` outside
-[`crates/pptx-render/src/layout.rs:1040`](https://github.com/dsaad68/betteroffice/blob/df1a57dae7a091ea9ca8176ca013274cced71fdd/crates/pptx-render/src/layout.rs#L1040), which passes `+mn-lt`.
+[`crates/pptx-render/src/layout.rs:1040`](https://github.com/dsaad68/betteroffice/blob/a47dbde7498c781ab81b141e834da1950dcf4175/crates/pptx-render/src/layout.rs#L1040), which passes `+mn-lt`.
 
 **Additional context**
 
 none.
 
-Related issues found in the same run: `text-layout-master-lnspc-ignored`, `text-overflow-autofit-not-handled`, `text-run-props-bold-ignored`
+Related issues found in the same run: `text-layout-master-lnspc-ignored`, `text-overflow-autofit-not-handled`, #266
 
 Files most likely involved: `crates/ooxml-drawingml/src/theme.rs`, `crates/pptx-render/src/layout.rs`, `crates/pptx-parse/src/drawing.rs`
 
-Found with a comparison harness that renders decks with both engines, pixel-diffs them, and traces each difference back to the OOXML and the code path. Full report with all findings: https://github.com/dsaad68/betteroffice/blob/harness/pptx-render-improvement/render-improvement-harness/issues/text-font-substitution-issues/report.md. Methodology: https://gist.github.com/dsaad68/038b63c2977aeca16fc873c2df1152d0. Line numbers link to the exact commit they were checked against.
+**How this was found**
+
+A comparison harness renders each deck twice, once with LibreOffice and once with BetterOffice,
+pixel-diffs the two images slide by slide, and traces every visible difference back to the OOXML
+and to the code path responsible. Reference renders come from LibreOffice through
+[pptx-pdf](https://github.com/dsaad68/pptx-pdf), a single binary with LibreOffice embedded, at 96 dpi. Both engines
+are given the same Liberation, Carlito and Caladea faces under the family names the decks ask for,
+so a difference in text metrics is a real difference and not font substitution.
+
+- Harness, with the per-slide reports and all 35 issues this run produced: https://github.com/dsaad68/betteroffice/tree/harness/pptx-render-improvement/render-improvement-harness
+- Full report behind this issue, with every finding, the evidence table and the proposed fix: https://github.com/dsaad68/betteroffice/blob/harness/pptx-render-improvement/render-improvement-harness/issues/text-font-substitution-issues/report.md
+- How the harness works and why it is built this way: https://gist.github.com/dsaad68/038b63c2977aeca16fc873c2df1152d0
+
+Line numbers link to the exact commit they were checked against.

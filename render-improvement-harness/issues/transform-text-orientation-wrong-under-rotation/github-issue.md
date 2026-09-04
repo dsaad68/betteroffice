@@ -64,17 +64,17 @@ Match the reference render. PowerPoint and LibreOffice agree on this behaviour; 
 Confirmed. The text box primitive is given the *same* `Transform` as the shape, and the raster
 and canvas backends both apply that transform — flips included — to the glyphs.
 
-[`crates/pptx-render/src/layout.rs:394`](https://github.com/dsaad68/betteroffice/blob/df1a57dae7a091ea9ca8176ca013274cced71fdd/crates/pptx-render/src/layout.rs#L394) (snapshot path) and [`crates/pptx-render/src/layout.rs:500`](https://github.com/dsaad68/betteroffice/blob/df1a57dae7a091ea9ca8176ca013274cced71fdd/crates/pptx-render/src/layout.rs#L500)
+[`crates/pptx-render/src/layout.rs:394`](https://github.com/dsaad68/betteroffice/blob/a47dbde7498c781ab81b141e834da1950dcf4175/crates/pptx-render/src/layout.rs#L394) (snapshot path) and [`crates/pptx-render/src/layout.rs:500`](https://github.com/dsaad68/betteroffice/blob/a47dbde7498c781ab81b141e834da1950dcf4175/crates/pptx-render/src/layout.rs#L500)
 (parsed path) build one `Transform { rotation_deg, flip_h, flip_v }` from the shape's `a:xfrm`,
-and hand that exact value to `render_text_box` at [`crates/pptx-render/src/layout.rs:460`](https://github.com/dsaad68/betteroffice/blob/df1a57dae7a091ea9ca8176ca013274cced71fdd/crates/pptx-render/src/layout.rs#L460) and
-[`crates/pptx-render/src/layout.rs:565`](https://github.com/dsaad68/betteroffice/blob/df1a57dae7a091ea9ca8176ca013274cced71fdd/crates/pptx-render/src/layout.rs#L565). `render_text_box` stores it unchanged on the
-`Primitive::TextBox` it emits ([`crates/pptx-render/src/layout.rs:742`](https://github.com/dsaad68/betteroffice/blob/df1a57dae7a091ea9ca8176ca013274cced71fdd/crates/pptx-render/src/layout.rs#L742), field at
-[`crates/pptx-render/src/layout.rs:754`](https://github.com/dsaad68/betteroffice/blob/df1a57dae7a091ea9ca8176ca013274cced71fdd/crates/pptx-render/src/layout.rs#L754)).
+and hand that exact value to `render_text_box` at [`crates/pptx-render/src/layout.rs:460`](https://github.com/dsaad68/betteroffice/blob/a47dbde7498c781ab81b141e834da1950dcf4175/crates/pptx-render/src/layout.rs#L460) and
+[`crates/pptx-render/src/layout.rs:565`](https://github.com/dsaad68/betteroffice/blob/a47dbde7498c781ab81b141e834da1950dcf4175/crates/pptx-render/src/layout.rs#L565). `render_text_box` stores it unchanged on the
+`Primitive::TextBox` it emits ([`crates/pptx-render/src/layout.rs:742`](https://github.com/dsaad68/betteroffice/blob/a47dbde7498c781ab81b141e834da1950dcf4175/crates/pptx-render/src/layout.rs#L742), field at
+[`crates/pptx-render/src/layout.rs:754`](https://github.com/dsaad68/betteroffice/blob/a47dbde7498c781ab81b141e834da1950dcf4175/crates/pptx-render/src/layout.rs#L754)).
 
 Both backends then turn `flip_h`/`flip_v` into a `-1` scale about the primitive's centre and
-paint the text under it: [`crates/pptx-raster/src/lib.rs:242`](https://github.com/dsaad68/betteroffice/blob/df1a57dae7a091ea9ca8176ca013274cced71fdd/crates/pptx-raster/src/lib.rs#L242) composes the transform for every
-primitive, the `Primitive::TextBox` arm at [`crates/pptx-raster/src/lib.rs:282`](https://github.com/dsaad68/betteroffice/blob/df1a57dae7a091ea9ca8176ca013274cced71fdd/crates/pptx-raster/src/lib.rs#L282) passes it into
-`font::paint_lines`, and [`crates/pptx-raster/src/lib.rs:557`](https://github.com/dsaad68/betteroffice/blob/df1a57dae7a091ea9ca8176ca013274cced71fdd/crates/pptx-raster/src/lib.rs#L557) is where the flip becomes
+paint the text under it: [`crates/pptx-raster/src/lib.rs:242`](https://github.com/dsaad68/betteroffice/blob/a47dbde7498c781ab81b141e834da1950dcf4175/crates/pptx-raster/src/lib.rs#L242) composes the transform for every
+primitive, the `Primitive::TextBox` arm at [`crates/pptx-raster/src/lib.rs:282`](https://github.com/dsaad68/betteroffice/blob/a47dbde7498c781ab81b141e834da1950dcf4175/crates/pptx-raster/src/lib.rs#L282) passes it into
+`font::paint_lines`, and [`crates/pptx-raster/src/lib.rs:557`](https://github.com/dsaad68/betteroffice/blob/a47dbde7498c781ab81b141e834da1950dcf4175/crates/pptx-raster/src/lib.rs#L557) is where the flip becomes
 `Transform::from_scale(-1.0, …)`. The canvas backend does the identical thing at
 [`packages/pptx/src/render/canvas.ts:69`](https://github.com/openooxml/betteroffice/blob/187cebc9ef5d414e4e65ccd96fe68b8f46c7f528/packages/pptx/src/render/canvas.ts#L69) and [`packages/pptx/src/render/canvas.ts:113`](https://github.com/openooxml/betteroffice/blob/187cebc9ef5d414e4e65ccd96fe68b8f46c7f528/packages/pptx/src/render/canvas.ts#L113). A
 reflection in the glyph transform is exactly the observed mirroring.
@@ -93,9 +93,9 @@ pure rotation of `rot + 180°·flip_v` with no flips at all:
 
 For the second half, `a:bodyPr/@vert` *is* parsed — [`crates/pptx-parse/src/drawing.rs:779`](https://github.com/openooxml/betteroffice/blob/187cebc9ef5d414e4e65ccd96fe68b8f46c7f528/crates/pptx-parse/src/drawing.rs#L779) stores
 it as `TextBody::vertical` ([`crates/pptx-parse/src/model.rs:271`](https://github.com/openooxml/betteroffice/blob/187cebc9ef5d414e4e65ccd96fe68b8f46c7f528/crates/pptx-parse/src/model.rs#L271)) — but nothing in `pptx-render`
-ever reads it. `BodyCascade` ([`crates/pptx-render/src/layout.rs:769`](https://github.com/dsaad68/betteroffice/blob/df1a57dae7a091ea9ca8176ca013274cced71fdd/crates/pptx-render/src/layout.rs#L769)) exposes `anchor`, `autofit`
+ever reads it. `BodyCascade` ([`crates/pptx-render/src/layout.rs:769`](https://github.com/dsaad68/betteroffice/blob/a47dbde7498c781ab81b141e834da1950dcf4175/crates/pptx-render/src/layout.rs#L769)) exposes `anchor`, `autofit`
 and the four insets and no `vertical` accessor, and `render_text_box` derives its content box
-straight from the unrotated shape rect at [`crates/pptx-render/src/layout.rs:673`](https://github.com/dsaad68/betteroffice/blob/df1a57dae7a091ea9ca8176ca013274cced71fdd/crates/pptx-render/src/layout.rs#L673) with no
+straight from the unrotated shape rect at [`crates/pptx-render/src/layout.rs:673`](https://github.com/dsaad68/betteroffice/blob/a47dbde7498c781ab81b141e834da1950dcf4175/crates/pptx-render/src/layout.rs#L673) with no
 width/height swap. `grep -rn "vertical" crates/pptx-render crates/pptx-raster` returns only the
 unrelated `vertical_shift` anchor local, so the value is parsed and dropped.
 
@@ -122,10 +122,10 @@ Not confirmed: the behaviour for a *bare* `flipV="1"` with `rot="0"` (the table 
 upside-down text). Nothing in either deck exercises it, so that row is an extrapolation from the
 rule rather than an observation.
 
-Also worth noting: `HitRegion` ([`crates/pptx-render/src/layout.rs:1641`](https://github.com/dsaad68/betteroffice/blob/df1a57dae7a091ea9ca8176ca013274cced71fdd/crates/pptx-render/src/layout.rs#L1641)) keeps a single transform
+Also worth noting: `HitRegion` ([`crates/pptx-render/src/layout.rs:1641`](https://github.com/dsaad68/betteroffice/blob/a47dbde7498c781ab81b141e834da1950dcf4175/crates/pptx-render/src/layout.rs#L1641)) keeps a single transform
 for both the shape rect and its text, and `HitRegion::local_point`
-([`crates/pptx-render/src/layout.rs:1651`](https://github.com/dsaad68/betteroffice/blob/df1a57dae7a091ea9ca8176ca013274cced71fdd/crates/pptx-render/src/layout.rs#L1651)) un-flips caret hits with it. The unit test
-`hit_testing_flipped_text_reads_the_mirrored_caret` ([`crates/pptx-render/src/layout.rs:2070`](https://github.com/dsaad68/betteroffice/blob/df1a57dae7a091ea9ca8176ca013274cced71fdd/crates/pptx-render/src/layout.rs#L2070))
+([`crates/pptx-render/src/layout.rs:1651`](https://github.com/dsaad68/betteroffice/blob/a47dbde7498c781ab81b141e834da1950dcf4175/crates/pptx-render/src/layout.rs#L1651)) un-flips caret hits with it. The unit test
+`hit_testing_flipped_text_reads_the_mirrored_caret` ([`crates/pptx-render/src/layout.rs:2070`](https://github.com/dsaad68/betteroffice/blob/a47dbde7498c781ab81b141e834da1950dcf4175/crates/pptx-render/src/layout.rs#L2070))
 asserts that a `flip_h` shape reverses the caret mapping for its text — an expectation that
 follows from this same bug.
 
@@ -134,11 +134,11 @@ _(hypothesis, not yet confirmed by a fix)_
 **Suggested fix**
 
 Give the text box its own transform instead of reusing the shape's, and derive it inside
-`render_text_box` ([`crates/pptx-render/src/layout.rs:657`](https://github.com/dsaad68/betteroffice/blob/df1a57dae7a091ea9ca8176ca013274cced71fdd/crates/pptx-render/src/layout.rs#L657)) so both call sites — the snapshot path
-at [`crates/pptx-render/src/layout.rs:460`](https://github.com/dsaad68/betteroffice/blob/df1a57dae7a091ea9ca8176ca013274cced71fdd/crates/pptx-render/src/layout.rs#L460) and the parsed path at
-[`crates/pptx-render/src/layout.rs:565`](https://github.com/dsaad68/betteroffice/blob/df1a57dae7a091ea9ca8176ca013274cced71fdd/crates/pptx-render/src/layout.rs#L565) — are fixed at once. Nothing downstream needs to change:
+`render_text_box` ([`crates/pptx-render/src/layout.rs:657`](https://github.com/dsaad68/betteroffice/blob/a47dbde7498c781ab81b141e834da1950dcf4175/crates/pptx-render/src/layout.rs#L657)) so both call sites — the snapshot path
+at [`crates/pptx-render/src/layout.rs:460`](https://github.com/dsaad68/betteroffice/blob/a47dbde7498c781ab81b141e834da1950dcf4175/crates/pptx-render/src/layout.rs#L460) and the parsed path at
+[`crates/pptx-render/src/layout.rs:565`](https://github.com/dsaad68/betteroffice/blob/a47dbde7498c781ab81b141e834da1950dcf4175/crates/pptx-render/src/layout.rs#L565) — are fixed at once. Nothing downstream needs to change:
 `Primitive::TextBox` already carries a per-primitive `transform`, and `pptx-raster`
-([`crates/pptx-raster/src/lib.rs:242`](https://github.com/dsaad68/betteroffice/blob/df1a57dae7a091ea9ca8176ca013274cced71fdd/crates/pptx-raster/src/lib.rs#L242)), the canvas backend
+([`crates/pptx-raster/src/lib.rs:242`](https://github.com/dsaad68/betteroffice/blob/a47dbde7498c781ab81b141e834da1950dcf4175/crates/pptx-raster/src/lib.rs#L242)), the canvas backend
 ([`packages/pptx/src/render/canvas.ts:69`](https://github.com/openooxml/betteroffice/blob/187cebc9ef5d414e4e65ccd96fe68b8f46c7f528/packages/pptx/src/render/canvas.ts#L69)) and hit testing all read it from the primitive.
 
 Two pieces:
@@ -149,15 +149,15 @@ Two pieces:
    all four flip combinations (see the table in `report.md`).
 
 2. **`bodyPr/@vert`.** Add a `vertical()` accessor to `BodyCascade`
-   ([`crates/pptx-render/src/layout.rs:769`](https://github.com/dsaad68/betteroffice/blob/df1a57dae7a091ea9ca8176ca013274cced71fdd/crates/pptx-render/src/layout.rs#L769)) alongside `anchor()`, reading
+   ([`crates/pptx-render/src/layout.rs:769`](https://github.com/dsaad68/betteroffice/blob/a47dbde7498c781ab81b141e834da1950dcf4175/crates/pptx-render/src/layout.rs#L769)) alongside `anchor()`, reading
    `TextBody::vertical` ([`crates/pptx-parse/src/model.rs:271`](https://github.com/openooxml/betteroffice/blob/187cebc9ef5d414e4e65ccd96fe68b8f46c7f528/crates/pptx-parse/src/model.rs#L271), already parsed at
    [`crates/pptx-parse/src/drawing.rs:779`](https://github.com/openooxml/betteroffice/blob/187cebc9ef5d414e4e65ccd96fe68b8f46c7f528/crates/pptx-parse/src/drawing.rs#L779)). For `vert` add +90° and for `vert270` add −90° to the
    text rotation, and lay the text out in the shape box with width and height swapped about the
    shape centre — the box the glyphs occupy before that extra quarter turn. Treat `horz` and the
    unhandled East-Asian values (`eaVert`, `mongolianVert`, `wordArtVert*`) as horizontal.
 
-`HitRegion` ([`crates/pptx-render/src/layout.rs:1641`](https://github.com/dsaad68/betteroffice/blob/df1a57dae7a091ea9ca8176ca013274cced71fdd/crates/pptx-render/src/layout.rs#L1641)) needs the text transform and the swapped
-text rect stored next to the shape's, so `local_point` ([`crates/pptx-render/src/layout.rs:1651`](https://github.com/dsaad68/betteroffice/blob/df1a57dae7a091ea9ca8176ca013274cced71fdd/crates/pptx-render/src/layout.rs#L1651))
+`HitRegion` ([`crates/pptx-render/src/layout.rs:1641`](https://github.com/dsaad68/betteroffice/blob/a47dbde7498c781ab81b141e834da1950dcf4175/crates/pptx-render/src/layout.rs#L1641)) needs the text transform and the swapped
+text rect stored next to the shape's, so `local_point` ([`crates/pptx-render/src/layout.rs:1651`](https://github.com/dsaad68/betteroffice/blob/a47dbde7498c781ab81b141e834da1950dcf4175/crates/pptx-render/src/layout.rs#L1651))
 maps caret hits through the transform the glyphs were actually painted with rather than the
 shape's.
 
@@ -206,16 +206,16 @@ let text_rect = match flow {
 Risks and tests to add:
 
 - `hit_testing_flipped_text_reads_the_mirrored_caret`
-  ([`crates/pptx-render/src/layout.rs:2070`](https://github.com/dsaad68/betteroffice/blob/df1a57dae7a091ea9ca8176ca013274cced71fdd/crates/pptx-render/src/layout.rs#L2070)) asserts the current, wrong behaviour and must be
+  ([`crates/pptx-render/src/layout.rs:2070`](https://github.com/dsaad68/betteroffice/blob/a47dbde7498c781ab81b141e834da1950dcf4175/crates/pptx-render/src/layout.rs#L2070)) asserts the current, wrong behaviour and must be
   rewritten: a flipped shape no longer reverses its text's caret mapping. The test builds its
   `HitRegion` by hand, so it will keep compiling and silently keep asserting the bug unless it is
   updated deliberately.
 - Shape hit testing must keep using the shape transform. Splitting the two transforms on
   `HitRegion` is the part most likely to introduce a regression; the rect-membership test
   `hit_testing_a_rotated_shape_follows_its_painted_frame`
-  ([`crates/pptx-render/src/layout.rs:2026`](https://github.com/dsaad68/betteroffice/blob/df1a57dae7a091ea9ca8176ca013274cced71fdd/crates/pptx-render/src/layout.rs#L2026)) guards it.
+  ([`crates/pptx-render/src/layout.rs:2026`](https://github.com/dsaad68/betteroffice/blob/a47dbde7498c781ab81b141e834da1950dcf4175/crates/pptx-render/src/layout.rs#L2026)) guards it.
 - The swapped text rect changes wrapping and autofit input for every `vert` shape, so
-  `normAutofit`/`spAutoFit` shrink loops ([`crates/pptx-render/src/layout.rs:687`](https://github.com/dsaad68/betteroffice/blob/df1a57dae7a091ea9ca8176ca013274cced71fdd/crates/pptx-render/src/layout.rs#L687)) now run against
+  `normAutofit`/`spAutoFit` shrink loops ([`crates/pptx-render/src/layout.rs:687`](https://github.com/dsaad68/betteroffice/blob/a47dbde7498c781ab81b141e834da1950dcf4175/crates/pptx-render/src/layout.rs#L687)) now run against
   the rotated extent. That is correct, but it moves text on any deck that previously overflowed.
 - Insets (`lIns`/`tIns`/`rIns`/`bIns`) are expressed in the text body's own frame, so under `vert`
   they rotate with it. The sketch applies them after the swap, which is the intended reading;
@@ -225,7 +225,7 @@ Risks and tests to add:
 
 Tests to add: a `pptx-render` unit test pinning `text rotation = rot + 180·flip_v` across the four
 flip combinations; a `pptx-raster` golden with a rotated-and-flipped text box next to
-`golden_rotated` ([`crates/pptx-raster/tests/golden.rs:306`](https://github.com/dsaad68/betteroffice/blob/df1a57dae7a091ea9ca8176ca013274cced71fdd/crates/pptx-raster/tests/golden.rs#L306)); and a layout test that a `vert270`
+`golden_rotated` ([`crates/pptx-raster/tests/golden.rs:306`](https://github.com/dsaad68/betteroffice/blob/a47dbde7498c781ab81b141e834da1950dcf4175/crates/pptx-raster/tests/golden.rs#L306)); and a layout test that a `vert270`
 shape with `cx << cy` lays its text out on one line.
 
 **How to verify**
@@ -238,11 +238,11 @@ shape with `cx << cy` lays its text out on one line.
   `pattFill` failures that dominate their diffs. `project17/05` is the check for the bare-flip case.
 - Slide 21 additionally proves the layout half: the label-bar sentences must land on one line, not
   as a column of words.
-- Existing coverage to extend: `golden_rotated` ([`crates/pptx-raster/tests/golden.rs:306`](https://github.com/dsaad68/betteroffice/blob/df1a57dae7a091ea9ca8176ca013274cced71fdd/crates/pptx-raster/tests/golden.rs#L306)) rotates
+- Existing coverage to extend: `golden_rotated` ([`crates/pptx-raster/tests/golden.rs:306`](https://github.com/dsaad68/betteroffice/blob/a47dbde7498c781ab81b141e834da1950dcf4175/crates/pptx-raster/tests/golden.rs#L306)) rotates
   a shape but has no text, so it does not regress; add a golden with a rotated *and* flipped text
   box. `hit_testing_a_rotated_shape_follows_its_painted_frame`
-  ([`crates/pptx-render/src/layout.rs:2026`](https://github.com/dsaad68/betteroffice/blob/df1a57dae7a091ea9ca8176ca013274cced71fdd/crates/pptx-render/src/layout.rs#L2026)) stays valid, but
-  `hit_testing_flipped_text_reads_the_mirrored_caret` ([`crates/pptx-render/src/layout.rs:2070`](https://github.com/dsaad68/betteroffice/blob/df1a57dae7a091ea9ca8176ca013274cced71fdd/crates/pptx-render/src/layout.rs#L2070))
+  ([`crates/pptx-render/src/layout.rs:2026`](https://github.com/dsaad68/betteroffice/blob/a47dbde7498c781ab81b141e834da1950dcf4175/crates/pptx-render/src/layout.rs#L2026)) stays valid, but
+  `hit_testing_flipped_text_reads_the_mirrored_caret` ([`crates/pptx-render/src/layout.rs:2070`](https://github.com/dsaad68/betteroffice/blob/a47dbde7498c781ab81b141e834da1950dcf4175/crates/pptx-render/src/layout.rs#L2070))
   encodes the buggy expectation and has to be updated once the text region carries its own
   transform.
 
@@ -254,4 +254,17 @@ Related issues found in the same run: none.
 
 Files most likely involved: `crates/pptx-render/src/layout.rs`, `crates/pptx-render/src/display_list.rs`, `crates/pptx-raster/tests/golden.rs`
 
-Found with a comparison harness that renders decks with both engines, pixel-diffs them, and traces each difference back to the OOXML and the code path. Full report with all findings: https://github.com/dsaad68/betteroffice/blob/harness/pptx-render-improvement/render-improvement-harness/issues/transform-text-orientation-wrong-under-rotation/report.md. Methodology: https://gist.github.com/dsaad68/038b63c2977aeca16fc873c2df1152d0. Line numbers link to the exact commit they were checked against.
+**How this was found**
+
+A comparison harness renders each deck twice, once with LibreOffice and once with BetterOffice,
+pixel-diffs the two images slide by slide, and traces every visible difference back to the OOXML
+and to the code path responsible. Reference renders come from LibreOffice through
+[pptx-pdf](https://github.com/dsaad68/pptx-pdf), a single binary with LibreOffice embedded, at 96 dpi. Both engines
+are given the same Liberation, Carlito and Caladea faces under the family names the decks ask for,
+so a difference in text metrics is a real difference and not font substitution.
+
+- Harness, with the per-slide reports and all 35 issues this run produced: https://github.com/dsaad68/betteroffice/tree/harness/pptx-render-improvement/render-improvement-harness
+- Full report behind this issue, with every finding, the evidence table and the proposed fix: https://github.com/dsaad68/betteroffice/blob/harness/pptx-render-improvement/render-improvement-harness/issues/transform-text-orientation-wrong-under-rotation/report.md
+- How the harness works and why it is built this way: https://gist.github.com/dsaad68/038b63c2977aeca16fc873c2df1152d0
+
+Line numbers link to the exact commit they were checked against.

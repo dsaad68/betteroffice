@@ -63,11 +63,11 @@ Match the reference render. PowerPoint and LibreOffice agree on this behaviour; 
 Three separate defects sit behind this cluster. All three are confirmed against the decks' XML.
 
 **1. The rasteriser clips every text box to its own rect — confirmed.**
-[`crates/pptx-raster/src/lib.rs:282`](https://github.com/dsaad68/betteroffice/blob/df1a57dae7a091ea9ca8176ca013274cced71fdd/crates/pptx-raster/src/lib.rs#L282) intersects the current clip with the primitive's `x/y/w/h`
-([`crates/pptx-raster/src/lib.rs:288`](https://github.com/dsaad68/betteroffice/blob/df1a57dae7a091ea9ca8176ca013274cced71fdd/crates/pptx-raster/src/lib.rs#L288), helper at [`crates/pptx-raster/src/lib.rs:325`](https://github.com/dsaad68/betteroffice/blob/df1a57dae7a091ea9ca8176ca013274cced71fdd/crates/pptx-raster/src/lib.rs#L325)) and hands
+[`crates/pptx-raster/src/lib.rs:282`](https://github.com/dsaad68/betteroffice/blob/a47dbde7498c781ab81b141e834da1950dcf4175/crates/pptx-raster/src/lib.rs#L282) intersects the current clip with the primitive's `x/y/w/h`
+([`crates/pptx-raster/src/lib.rs:288`](https://github.com/dsaad68/betteroffice/blob/a47dbde7498c781ab81b141e834da1950dcf4175/crates/pptx-raster/src/lib.rs#L288), helper at [`crates/pptx-raster/src/lib.rs:325`](https://github.com/dsaad68/betteroffice/blob/a47dbde7498c781ab81b141e834da1950dcf4175/crates/pptx-raster/src/lib.rs#L325)) and hands
 that mask to `font::paint_lines`. There is no condition on it. DrawingML has no clip on autoshape
 text: text that does not fit is drawn outside the shape. The layout stage already knows this —
-it computes `overflow` at [`crates/pptx-render/src/layout.rs:739`](https://github.com/dsaad68/betteroffice/blob/df1a57dae7a091ea9ca8176ca013274cced71fdd/crates/pptx-render/src/layout.rs#L739) and ships it on the primitive
+it computes `overflow` at [`crates/pptx-render/src/layout.rs:739`](https://github.com/dsaad68/betteroffice/blob/a47dbde7498c781ab81b141e834da1950dcf4175/crates/pptx-render/src/layout.rs#L739) and ships it on the primitive
 ([`crates/pptx-render/src/display_list.rs:130`](https://github.com/openooxml/betteroffice/blob/187cebc9ef5d414e4e65ccd96fe68b8f46c7f528/crates/pptx-render/src/display_list.rs#L130)) — but nothing in the repo reads that field. The
 web canvas renderer clips the same way at [`packages/pptx/src/render/canvas.ts:218-220`](https://github.com/openooxml/betteroffice/blob/187cebc9ef5d414e4e65ccd96fe68b8f46c7f528/packages/pptx/src/render/canvas.ts#L218-L220).
 
@@ -76,10 +76,10 @@ no autofit child, `cy="731837"`), ocp-psp-plan/01/3, project17/08/2 and 11/3 (la
 `<a:noAutofit/>`, `cy="369332"`), and project20/01/3 (`<a:noAutofit/>` on the slide).
 
 **2. `spAutoFit` is treated as shrink-to-fit — confirmed.**
-[`crates/pptx-render/src/layout.rs:687-689`](https://github.com/dsaad68/betteroffice/blob/df1a57dae7a091ea9ca8176ca013274cced71fdd/crates/pptx-render/src/layout.rs#L687-L689) enters the shrink loop for
+[`crates/pptx-render/src/layout.rs:687-689`](https://github.com/dsaad68/betteroffice/blob/a47dbde7498c781ab81b141e834da1950dcf4175/crates/pptx-render/src/layout.rs#L687-L689) enters the shrink loop for
 `Some(TextAutofit::Normal { .. } | TextAutofit::Shape)`, and the loop at
-[`crates/pptx-render/src/layout.rs:691-697`](https://github.com/dsaad68/betteroffice/blob/df1a57dae7a091ea9ca8176ca013274cced71fdd/crates/pptx-render/src/layout.rs#L691-L697) multiplies the scale by 0.9 until the text fits or the
-scale hits `MIN_AUTOFIT_SCALE = 0.5` ([`crates/pptx-render/src/layout.rs:28`](https://github.com/dsaad68/betteroffice/blob/df1a57dae7a091ea9ca8176ca013274cced71fdd/crates/pptx-render/src/layout.rs#L28)). `spAutoFit` means
+[`crates/pptx-render/src/layout.rs:691-697`](https://github.com/dsaad68/betteroffice/blob/a47dbde7498c781ab81b141e834da1950dcf4175/crates/pptx-render/src/layout.rs#L691-L697) multiplies the scale by 0.9 until the text fits or the
+scale hits `MIN_AUTOFIT_SCALE = 0.5` ([`crates/pptx-render/src/layout.rs:28`](https://github.com/dsaad68/betteroffice/blob/a47dbde7498c781ab81b141e834da1950dcf4175/crates/pptx-render/src/layout.rs#L28)). `spAutoFit` means
 the *shape* resizes to the text; the font size is untouched. `TextAutofit::Shape` is parsed
 correctly at [`crates/pptx-parse/src/drawing.rs:795-797`](https://github.com/openooxml/betteroffice/blob/187cebc9ef5d414e4e65ccd96fe68b8f46c7f528/crates/pptx-parse/src/drawing.rs#L795-L797) into the variant at
 [`crates/pptx-parse/src/model.rs:286-293`](https://github.com/openooxml/betteroffice/blob/187cebc9ef5d414e4e65ccd96fe68b8f46c7f528/crates/pptx-parse/src/model.rs#L286-L293), so the value reaches layout intact — it is used wrongly,
@@ -89,7 +89,7 @@ This explains rollout-plan/06/2 (0.9^5 = 0.590, the reported 59% exactly) and pr
 (0.9^4 = 0.656, 48pt -> 31.5pt, the reported ~31pt).
 
 **3. The anchor shift is clamped at zero — confirmed, contributing.**
-[`crates/pptx-render/src/layout.rs:712-713`](https://github.com/dsaad68/betteroffice/blob/df1a57dae7a091ea9ca8176ca013274cced71fdd/crates/pptx-render/src/layout.rs#L712-L713) clamps the centre/bottom shift with `.max(0.0)`, so
+[`crates/pptx-render/src/layout.rs:712-713`](https://github.com/dsaad68/betteroffice/blob/a47dbde7498c781ab81b141e834da1950dcf4175/crates/pptx-render/src/layout.rs#L712-L713) clamps the centre/bottom shift with `.max(0.0)`, so
 overflowing text in an `anchor="ctr"` box starts at the box top instead of spilling equally above
 and below. That is the ~14px downward shift of the first line reported in cisco-cloud-security/19/3
 and visible in evidence-1.png. It only matters once the clip is lifted, but it must be fixed with
@@ -98,7 +98,7 @@ it or centred titles will land in the wrong place.
 **Not this cluster: `cisco-cloud-security/01/1`.** The finding claims a 60% shrink on the `ctrTitle`.
 Checked in `decks/cisco-cloud-security/xml/01`: neither the slide's `<a:bodyPr/>`, the layout's
 `<a:bodyPr anchor="b"/>` on the `ctrTitle` shape, nor the master's `title` placeholder `bodyPr`
-carries any autofit child, so `BodyCascade::autofit` ([`crates/pptx-render/src/layout.rs:777-782`](https://github.com/dsaad68/betteroffice/blob/df1a57dae7a091ea9ca8176ca013274cced71fdd/crates/pptx-render/src/layout.rs#L777-L782))
+carries any autofit child, so `BodyCascade::autofit` ([`crates/pptx-render/src/layout.rs:777-782`](https://github.com/dsaad68/betteroffice/blob/a47dbde7498c781ab81b141e834da1950dcf4175/crates/pptx-render/src/layout.rs#L777-L782))
 returns `None`, the scale stays 1.0 and the shrink loop never runs. The size drop is
 5200 -> 3200 = 61.5%: the layout shape's `<a:lstStyle>` `defRPr sz="5200"` is ignored and the
 master's `titleStyle` `sz="3200"` wins. That is `text-inheritance-layout-lststyle-ignored`, and
@@ -114,7 +114,7 @@ _(hypothesis, not yet confirmed by a fix)_
 
 Three changes, independent enough to land separately.
 
-**1. Never shrink for `spAutoFit`** — `render_text_box` in [`crates/pptx-render/src/layout.rs:687`](https://github.com/dsaad68/betteroffice/blob/df1a57dae7a091ea9ca8176ca013274cced71fdd/crates/pptx-render/src/layout.rs#L687).
+**1. Never shrink for `spAutoFit`** — `render_text_box` in [`crates/pptx-render/src/layout.rs:687`](https://github.com/dsaad68/betteroffice/blob/a47dbde7498c781ab81b141e834da1950dcf4175/crates/pptx-render/src/layout.rs#L687).
 Drop `TextAutofit::Shape` from the `matches!` that guards the shrink loop, so only
 `normAutofit` scales the font. `spAutoFit` then behaves like no autofit: the text is laid out at
 its authored size and overflows. That is what LibreOffice draws on rollout-plan/06 — the green
@@ -122,7 +122,7 @@ placeholder bar keeps its stored height and the second line spills below it — 
 to grow the shape rect as well. Growing the box would also change the shape's fill and outline,
 which the reference does not do.
 
-**2. Let text paint outside its box** — [`crates/pptx-raster/src/lib.rs:282-297`](https://github.com/dsaad68/betteroffice/blob/df1a57dae7a091ea9ca8176ca013274cced71fdd/crates/pptx-raster/src/lib.rs#L282-L297). Stop narrowing
+**2. Let text paint outside its box** — [`crates/pptx-raster/src/lib.rs:282-297`](https://github.com/dsaad68/betteroffice/blob/a47dbde7498c781ab81b141e834da1950dcf4175/crates/pptx-raster/src/lib.rs#L282-L297). Stop narrowing
 the clip to the text box; pass the inherited `clip` (the group or chart clip, or `None`) straight
 to `font::paint_lines`. Keep the off-surface cull, but compute it from the laid-out line extents
 rather than the box, so a wholly off-slide text box still costs nothing. The `overflow` flag on
@@ -134,7 +134,7 @@ from `paintTextBox`. Note `paintPrimitive` wraps each primitive in `ctx.save()`/
 so removing the clip there does not leak state.
 
 **3. Let a centred or bottom-anchored overflow spill symmetrically** —
-[`crates/pptx-render/src/layout.rs:710-714`](https://github.com/dsaad68/betteroffice/blob/df1a57dae7a091ea9ca8176ca013274cced71fdd/crates/pptx-render/src/layout.rs#L710-L714). Remove the `.max(0.0)` from the centre and bottom
+[`crates/pptx-render/src/layout.rs:710-714`](https://github.com/dsaad68/betteroffice/blob/a47dbde7498c781ab81b141e834da1950dcf4175/crates/pptx-render/src/layout.rs#L710-L714). Remove the `.max(0.0)` from the centre and bottom
 shifts so an overflowing box centres its text on the box instead of pinning it to the top.
 
 ```rust
@@ -174,7 +174,7 @@ Risks and tests to add:
   updated to assert it is *not* called for a text box (the chart clip assertion stays).
 - Add: a layout unit test next to
   `normal_autofit_scales_text_until_the_shape_height_is_respected`
-  ([`crates/pptx-render/src/layout.rs:2239`](https://github.com/dsaad68/betteroffice/blob/df1a57dae7a091ea9ca8176ca013274cced71fdd/crates/pptx-render/src/layout.rs#L2239)) that sets `TextAutofit::Shape` and asserts the font
+  ([`crates/pptx-render/src/layout.rs:2239`](https://github.com/dsaad68/betteroffice/blob/a47dbde7498c781ab81b141e834da1950dcf4175/crates/pptx-render/src/layout.rs#L2239)) that sets `TextAutofit::Shape` and asserts the font
   size is unchanged and `overflow` is true; a second asserting a centred overflowing box places
   its first line above `rect.y`; and a raster golden with a text box taller than its shape.
 
@@ -191,9 +191,9 @@ Re-render the thirteen findings' slides and compare `diff-summary.json`:
 - `cisco-cloud-security` 01 must be unchanged by this fix.
 
 Existing coverage: `normal_autofit_scales_text_until_the_shape_height_is_respected`
-([`crates/pptx-render/src/layout.rs:2239`](https://github.com/dsaad68/betteroffice/blob/df1a57dae7a091ea9ca8176ca013274cced71fdd/crates/pptx-render/src/layout.rs#L2239)) is the only autofit test and must keep passing, since
+([`crates/pptx-render/src/layout.rs:2239`](https://github.com/dsaad68/betteroffice/blob/a47dbde7498c781ab81b141e834da1950dcf4175/crates/pptx-render/src/layout.rs#L2239)) is the only autofit test and must keep passing, since
 `normAutofit` still shrinks. `crates/pptx-raster/tests/golden.rs` holds `text.png`; the
-`a_clipped_primitive_off_the_surface_draws_nothing` test at [`crates/pptx-raster/src/lib.rs:899`](https://github.com/dsaad68/betteroffice/blob/df1a57dae7a091ea9ca8176ca013274cced71fdd/crates/pptx-raster/src/lib.rs#L899)
+`a_clipped_primitive_off_the_surface_draws_nothing` test at [`crates/pptx-raster/src/lib.rs:899`](https://github.com/dsaad68/betteroffice/blob/a47dbde7498c781ab81b141e834da1950dcf4175/crates/pptx-raster/src/lib.rs#L899)
 uses a `Chart` primitive, so lifting the text-box clip does not weaken it. Canvas coverage that
 asserts the clip call is at [`packages/pptx/src/render/canvas.test.ts:113`](https://github.com/openooxml/betteroffice/blob/187cebc9ef5d414e4e65ccd96fe68b8f46c7f528/packages/pptx/src/render/canvas.test.ts#L113),205`.
 
@@ -205,4 +205,17 @@ Related issues found in the same run: `text-inheritance-layout-lststyle-ignored`
 
 Files most likely involved: `crates/pptx-raster/src/lib.rs`, `crates/pptx-render/src/layout.rs`, `packages/pptx/src/render/canvas.ts`
 
-Found with a comparison harness that renders decks with both engines, pixel-diffs them, and traces each difference back to the OOXML and the code path. Full report with all findings: https://github.com/dsaad68/betteroffice/blob/harness/pptx-render-improvement/render-improvement-harness/issues/text-overflow-autofit-not-handled/report.md. Methodology: https://gist.github.com/dsaad68/038b63c2977aeca16fc873c2df1152d0. Line numbers link to the exact commit they were checked against.
+**How this was found**
+
+A comparison harness renders each deck twice, once with LibreOffice and once with BetterOffice,
+pixel-diffs the two images slide by slide, and traces every visible difference back to the OOXML
+and to the code path responsible. Reference renders come from LibreOffice through
+[pptx-pdf](https://github.com/dsaad68/pptx-pdf), a single binary with LibreOffice embedded, at 96 dpi. Both engines
+are given the same Liberation, Carlito and Caladea faces under the family names the decks ask for,
+so a difference in text metrics is a real difference and not font substitution.
+
+- Harness, with the per-slide reports and all 35 issues this run produced: https://github.com/dsaad68/betteroffice/tree/harness/pptx-render-improvement/render-improvement-harness
+- Full report behind this issue, with every finding, the evidence table and the proposed fix: https://github.com/dsaad68/betteroffice/blob/harness/pptx-render-improvement/render-improvement-harness/issues/text-overflow-autofit-not-handled/report.md
+- How the harness works and why it is built this way: https://gist.github.com/dsaad68/038b63c2977aeca16fc873c2df1152d0
+
+Line numbers link to the exact commit they were checked against.

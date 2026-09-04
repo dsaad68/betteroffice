@@ -138,8 +138,8 @@ let title_h = if let Some(title) = chart.title.filter(|s| !s.is_empty()) {
 the difference). `PlotOp::Text` carries `x`, `baseline_y` and `width` but no alignment
 ([`crates/ooxml-drawingml/src/chart/geometry.rs:171-178`](https://github.com/openooxml/betteroffice/blob/187cebc9ef5d414e4e65ccd96fe68b8f46c7f528/crates/ooxml-drawingml/src/chart/geometry.rs#L171-L178)), and every host lays the run out from `x`
 rightwards: `chart_text_primitive` starts its glyph cursor at `x` and hard-codes
-`align: Some(TextAlign::Left)` ([`crates/pptx-render/src/layout.rs:1094`](https://github.com/dsaad68/betteroffice/blob/df1a57dae7a091ea9ca8176ca013274cced71fdd/crates/pptx-render/src/layout.rs#L1094),
-[`crates/pptx-render/src/layout.rs:1096-1108`](https://github.com/dsaad68/betteroffice/blob/df1a57dae7a091ea9ca8176ca013274cced71fdd/crates/pptx-render/src/layout.rs#L1096-L1108), [`crates/pptx-render/src/layout.rs:1135`](https://github.com/dsaad68/betteroffice/blob/df1a57dae7a091ea9ca8176ca013274cced71fdd/crates/pptx-render/src/layout.rs#L1135)), xlsx emits
+`align: Some(TextAlign::Left)` ([`crates/pptx-render/src/layout.rs:1094`](https://github.com/dsaad68/betteroffice/blob/a47dbde7498c781ab81b141e834da1950dcf4175/crates/pptx-render/src/layout.rs#L1094),
+[`crates/pptx-render/src/layout.rs:1096-1108`](https://github.com/dsaad68/betteroffice/blob/a47dbde7498c781ab81b141e834da1950dcf4175/crates/pptx-render/src/layout.rs#L1096-L1108), [`crates/pptx-render/src/layout.rs:1135`](https://github.com/dsaad68/betteroffice/blob/a47dbde7498c781ab81b141e834da1950dcf4175/crates/pptx-render/src/layout.rs#L1135)), xlsx emits
 `align: Align::Left` ([`crates/xlsx-render/src/chart.rs:830`](https://github.com/openooxml/betteroffice/blob/187cebc9ef5d414e4e65ccd96fe68b8f46c7f528/crates/xlsx-render/src/chart.rs#L830)) and docx emits a plain positioned run
 ([`crates/docx-layout/src/display_list.rs:8009-8022`](https://github.com/openooxml/betteroffice/blob/187cebc9ef5d414e4e65ccd96fe68b8f46c7f528/crates/docx-layout/src/display_list.rs#L8009-L8022)). So `width` is a bounding hint, not a box the
 text is aligned inside - nothing in the pipeline can centre the title today.
@@ -260,8 +260,8 @@ inside it lands on the frame centre, x=639 on this deck, which is what the refer
 Each host resolves it against the `width` it already receives:
 
 - **pptx** is the easy one: `chart_text_primitive`
-  ([`crates/pptx-render/src/layout.rs:1077`](https://github.com/dsaad68/betteroffice/blob/df1a57dae7a091ea9ca8176ca013274cced71fdd/crates/pptx-render/src/layout.rs#L1077)) shapes the run itself and already sums the advances
-  into `cursor` ([`crates/pptx-render/src/layout.rs:1107`](https://github.com/dsaad68/betteroffice/blob/df1a57dae7a091ea9ca8176ca013274cced71fdd/crates/pptx-render/src/layout.rs#L1107)). Sum `shaped` once before the glyph
+  ([`crates/pptx-render/src/layout.rs:1077`](https://github.com/dsaad68/betteroffice/blob/a47dbde7498c781ab81b141e834da1950dcf4175/crates/pptx-render/src/layout.rs#L1077)) shapes the run itself and already sums the advances
+  into `cursor` ([`crates/pptx-render/src/layout.rs:1107`](https://github.com/dsaad68/betteroffice/blob/a47dbde7498c781ab81b141e834da1950dcf4175/crates/pptx-render/src/layout.rs#L1107)). Sum `shaped` once before the glyph
   loop and offset the start:
 
   ```rust
@@ -274,9 +274,9 @@ Each host resolves it against the `width` it already receives:
 
   Everything downstream (`run.x`, the glyph cursor, the `TextBox` rect, the `lines` entry) is
   derived from that `x`, and `pptx-raster` paints from the positioned glyphs
-  ([`crates/pptx-raster/src/font.rs:47-69`](https://github.com/dsaad68/betteroffice/blob/df1a57dae7a091ea9ca8176ca013274cced71fdd/crates/pptx-raster/src/font.rs#L47-L69)), so the shift is the whole fix. Set
+  ([`crates/pptx-raster/src/font.rs:47-69`](https://github.com/dsaad68/betteroffice/blob/a47dbde7498c781ab81b141e834da1950dcf4175/crates/pptx-raster/src/font.rs#L47-L69)), so the shift is the whole fix. Set
   `align: Some(TextAlign::Center)` on the paragraph too
-  ([`crates/pptx-render/src/layout.rs:1135`](https://github.com/dsaad68/betteroffice/blob/df1a57dae7a091ea9ca8176ca013274cced71fdd/crates/pptx-render/src/layout.rs#L1135)) for consumers that re-layout.
+  ([`crates/pptx-render/src/layout.rs:1135`](https://github.com/dsaad68/betteroffice/blob/a47dbde7498c781ab81b141e834da1950dcf4175/crates/pptx-render/src/layout.rs#L1135)) for consumers that re-layout.
 - **xlsx** already carries the concept: `DrawCmd::Text` takes an `Align` and its consumer treats
   `Align::Center` as "x is the centre" ([`crates/xlsx-render/src/lib.rs:477`](https://github.com/openooxml/betteroffice/blob/187cebc9ef5d414e4e65ccd96fe68b8f46c7f528/crates/xlsx-render/src/lib.rs#L477),
   [`crates/xlsx-render/src/lib.rs:667`](https://github.com/openooxml/betteroffice/blob/187cebc9ef5d414e4e65ccd96fe68b8f46c7f528/crates/xlsx-render/src/lib.rs#L667)), so [`crates/xlsx-render/src/chart.rs:810-833`](https://github.com/openooxml/betteroffice/blob/187cebc9ef5d414e4e65ccd96fe68b8f46c7f528/crates/xlsx-render/src/chart.rs#L810-L833) maps
@@ -343,7 +343,7 @@ Risks and tests to add:
 - **The plot area moves for every bottom-legend chart.** Handing 104px of width back and taking
   ~22px of height changes the aspect of a lot of charts at once, in all three formats. Every chart
   golden that has a legend with `legendPos="b"` will move; `crates/pptx-raster/tests/golden/chart.png`
-  ([`crates/pptx-raster/tests/golden.rs:346`](https://github.com/dsaad68/betteroffice/blob/df1a57dae7a091ea9ca8176ca013274cced71fdd/crates/pptx-raster/tests/golden.rs#L346)) needs regenerating, and the diff should be inspected,
+  ([`crates/pptx-raster/tests/golden.rs:346`](https://github.com/dsaad68/betteroffice/blob/a47dbde7498c781ab81b141e834da1950dcf4175/crates/pptx-raster/tests/golden.rs#L346)) needs regenerating, and the diff should be inspected,
   not just accepted.
 - **The advance estimate is the weak point.** `text_advance` will drift on long series names and on
   CJK, so the row will be centred approximately and, at 8 entries, may overrun the frame. Clamping
@@ -405,7 +405,7 @@ Existing tests that cover this area and must keep passing:
   [`crates/pptx-render/src/chart.rs:470`](https://github.com/openooxml/betteroffice/blob/187cebc9ef5d414e4e65ccd96fe68b8f46c7f528/crates/pptx-render/src/chart.rs#L470) plot every chart type into primitives - both exercise the
   host side of any `PlotOp::Text` signature change;
 - the raster golden `crates/pptx-raster/tests/golden/chart.png`
-  ([`crates/pptx-raster/tests/golden.rs:346`](https://github.com/dsaad68/betteroffice/blob/df1a57dae7a091ea9ca8176ca013274cced71fdd/crates/pptx-raster/tests/golden.rs#L346)) will need regenerating if the title moves.
+  ([`crates/pptx-raster/tests/golden.rs:346`](https://github.com/dsaad68/betteroffice/blob/a47dbde7498c781ab81b141e834da1950dcf4175/crates/pptx-raster/tests/golden.rs#L346)) will need regenerating if the title moves.
 
 No test asserts a legend's position, only its contents; and no test asserts a title's x. Both
 assertions are new.
@@ -418,4 +418,17 @@ Related issues found in the same run: `chart-axis-autoscale-not-rounded`, `chart
 
 Files most likely involved: `crates/ooxml-drawingml/src/chart/geometry.rs`, `crates/pptx-render/src/layout.rs`, `crates/pptx-render/src/chart.rs`, `crates/xlsx-render/src/chart.rs`, `crates/docx-layout/src/display_list.rs`
 
-Found with a comparison harness that renders decks with both engines, pixel-diffs them, and traces each difference back to the OOXML and the code path. Full report with all findings: https://github.com/dsaad68/betteroffice/blob/harness/pptx-render-improvement/render-improvement-harness/issues/chart-legend-and-title-position-wrong/report.md. Methodology: https://gist.github.com/dsaad68/038b63c2977aeca16fc873c2df1152d0. Line numbers link to the exact commit they were checked against.
+**How this was found**
+
+A comparison harness renders each deck twice, once with LibreOffice and once with BetterOffice,
+pixel-diffs the two images slide by slide, and traces every visible difference back to the OOXML
+and to the code path responsible. Reference renders come from LibreOffice through
+[pptx-pdf](https://github.com/dsaad68/pptx-pdf), a single binary with LibreOffice embedded, at 96 dpi. Both engines
+are given the same Liberation, Carlito and Caladea faces under the family names the decks ask for,
+so a difference in text metrics is a real difference and not font substitution.
+
+- Harness, with the per-slide reports and all 35 issues this run produced: https://github.com/dsaad68/betteroffice/tree/harness/pptx-render-improvement/render-improvement-harness
+- Full report behind this issue, with every finding, the evidence table and the proposed fix: https://github.com/dsaad68/betteroffice/blob/harness/pptx-render-improvement/render-improvement-harness/issues/chart-legend-and-title-position-wrong/report.md
+- How the harness works and why it is built this way: https://gist.github.com/dsaad68/038b63c2977aeca16fc873c2df1152d0
+
+Line numbers link to the exact commit they were checked against.

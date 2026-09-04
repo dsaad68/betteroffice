@@ -67,13 +67,13 @@ Match the reference render. PowerPoint and LibreOffice agree on this behaviour; 
   [`crates/pptx-parse/src/drawing.rs:752`](https://github.com/openooxml/betteroffice/blob/187cebc9ef5d414e4e65ccd96fe68b8f46c7f528/crates/pptx-parse/src/drawing.rs#L752) fills every side of `PictureCrop`
   (field at [`crates/pptx-parse/src/model.rs:216`](https://github.com/openooxml/betteroffice/blob/187cebc9ef5d414e4e65ccd96fe68b8f46c7f528/crates/pptx-parse/src/model.rs#L216), type at
   [`crates/pptx-parse/src/model.rs:222`](https://github.com/openooxml/betteroffice/blob/187cebc9ef5d414e4e65ccd96fe68b8f46c7f528/crates/pptx-parse/src/model.rs#L222)) in OOXML thousandths of a percent.
-- Nothing downstream reads that field. [`crates/pptx-raster/README.md:49`](https://github.com/dsaad68/betteroffice/blob/df1a57dae7a091ea9ca8176ca013274cced71fdd/crates/pptx-raster/README.md#L49) already records
+- Nothing downstream reads that field. [`crates/pptx-raster/README.md:49`](https://github.com/dsaad68/betteroffice/blob/a47dbde7498c781ab81b141e834da1950dcf4175/crates/pptx-raster/README.md#L49) already records
   this: "`PictureCrop` (`srcRect`) is parsed but dropped by the layout pass".
 - Both layout paths drop it. Master and layout shapes go through `render_parsed_shape`,
-  whose `ShapeNode::Picture` arm at [`crates/pptx-render/src/layout.rs:534`](https://github.com/dsaad68/betteroffice/blob/df1a57dae7a091ea9ca8176ca013274cced71fdd/crates/pptx-render/src/layout.rs#L534) builds
+  whose `ShapeNode::Picture` arm at [`crates/pptx-render/src/layout.rs:534`](https://github.com/dsaad68/betteroffice/blob/a47dbde7498c781ab81b141e834da1950dcf4175/crates/pptx-render/src/layout.rs#L534) builds
   `Primitive::Image` from `media_part_path`, `outline` and the rect only — this is the
   project17 master-logo case. Slide shapes go through `render_snapshot_shape`, whose
-  `ShapeKind::Picture` arm at [`crates/pptx-render/src/layout.rs:425`](https://github.com/dsaad68/betteroffice/blob/df1a57dae7a091ea9ca8176ca013274cced71fdd/crates/pptx-render/src/layout.rs#L425) does the same — this
+  `ShapeKind::Picture` arm at [`crates/pptx-render/src/layout.rs:425`](https://github.com/dsaad68/betteroffice/blob/a47dbde7498c781ab81b141e834da1950dcf4175/crates/pptx-render/src/layout.rs#L425) does the same — this
   is the cisco case.
 - The snapshot path loses it even earlier: [`crates/pptx-edit/src/deck.rs:139`](https://github.com/openooxml/betteroffice/blob/187cebc9ef5d414e4e65ccd96fe68b8f46c7f528/crates/pptx-edit/src/deck.rs#L139) seeds a
   picture into the collaborative document with only `kind`, `geometry`, `fillJson`,
@@ -85,8 +85,8 @@ Match the reference render. PowerPoint and LibreOffice agree on this behaviour; 
   transform}`. The host-composed path repeats the omission at
   [`crates/pptx-render/src/lib.rs:48`](https://github.com/openooxml/betteroffice/blob/187cebc9ef5d414e4e65ccd96fe68b8f46c7f528/crates/pptx-render/src/lib.rs#L48) and [`crates/pptx-render/src/lib.rs:200`](https://github.com/openooxml/betteroffice/blob/187cebc9ef5d414e4e65ccd96fe68b8f46c7f528/crates/pptx-render/src/lib.rs#L200).
 - Consequently both backends stretch: `paint_image` at
-  [`crates/pptx-raster/src/lib.rs:391`](https://github.com/dsaad68/betteroffice/blob/df1a57dae7a091ea9ca8176ca013274cced71fdd/crates/pptx-raster/src/lib.rs#L391) builds `fit` from `frame.width() / source.width()`
-  and `frame.height() / source.height()` ([`crates/pptx-raster/src/lib.rs:406`](https://github.com/dsaad68/betteroffice/blob/df1a57dae7a091ea9ca8176ca013274cced71fdd/crates/pptx-raster/src/lib.rs#L406)) and blits
+  [`crates/pptx-raster/src/lib.rs:391`](https://github.com/dsaad68/betteroffice/blob/a47dbde7498c781ab81b141e834da1950dcf4175/crates/pptx-raster/src/lib.rs#L391) builds `fit` from `frame.width() / source.width()`
+  and `frame.height() / source.height()` ([`crates/pptx-raster/src/lib.rs:406`](https://github.com/dsaad68/betteroffice/blob/a47dbde7498c781ab81b141e834da1950dcf4175/crates/pptx-raster/src/lib.rs#L406)) and blits
   the whole pixmap; the canvas backend calls the 5-argument
   `ctx.drawImage(source, x, y, w, h)` at [`packages/pptx/src/render/canvas.ts:208`](https://github.com/openooxml/betteroffice/blob/187cebc9ef5d414e4e65ccd96fe68b8f46c7f528/packages/pptx/src/render/canvas.ts#L208), with
   `ImagePrimitive` ([`packages/pptx/src/types.ts:246`](https://github.com/openooxml/betteroffice/blob/187cebc9ef5d414e4e65ccd96fe68b8f46c7f528/packages/pptx/src/types.ts#L246)) carrying no crop.
@@ -145,18 +145,18 @@ Carry the crop through the four layers that currently drop it, then mask.
    added shapes and rejects non-`Shape` kinds ([`crates/pptx-edit/src/save.rs:412`](https://github.com/openooxml/betteroffice/blob/187cebc9ef5d414e4e65ccd96fe68b8f46c7f528/crates/pptx-edit/src/save.rs#L412)), so no
    writer needs to learn `srcRect`.
 
-4. **Layout.** Both picture arms ([`crates/pptx-render/src/layout.rs:425`](https://github.com/dsaad68/betteroffice/blob/df1a57dae7a091ea9ca8176ca013274cced71fdd/crates/pptx-render/src/layout.rs#L425) and
-   [`crates/pptx-render/src/layout.rs:534`](https://github.com/dsaad68/betteroffice/blob/df1a57dae7a091ea9ca8176ca013274cced71fdd/crates/pptx-render/src/layout.rs#L534)) convert the thousandths-of-a-percent crop to
+4. **Layout.** Both picture arms ([`crates/pptx-render/src/layout.rs:425`](https://github.com/dsaad68/betteroffice/blob/a47dbde7498c781ab81b141e834da1950dcf4175/crates/pptx-render/src/layout.rs#L425) and
+   [`crates/pptx-render/src/layout.rs:534`](https://github.com/dsaad68/betteroffice/blob/a47dbde7498c781ab81b141e834da1950dcf4175/crates/pptx-render/src/layout.rs#L534)) convert the thousandths-of-a-percent crop to
    fractions and, when the geometry is not `rect`, attach the same
-   `geometry_path(...)` ([`crates/pptx-render/src/layout.rs:1946`](https://github.com/dsaad68/betteroffice/blob/df1a57dae7a091ea9ca8176ca013274cced71fdd/crates/pptx-render/src/layout.rs#L1946)) the shape arm already
+   `geometry_path(...)` ([`crates/pptx-render/src/layout.rs:1946`](https://github.com/dsaad68/betteroffice/blob/a47dbde7498c781ab81b141e834da1950dcf4175/crates/pptx-render/src/layout.rs#L1946)) the shape arm already
    builds. Do the same in the host-composed path
    ([`crates/pptx-render/src/lib.rs:48`](https://github.com/openooxml/betteroffice/blob/187cebc9ef5d414e4e65ccd96fe68b8f46c7f528/crates/pptx-render/src/lib.rs#L48), [`crates/pptx-render/src/lib.rs:200`](https://github.com/openooxml/betteroffice/blob/187cebc9ef5d414e4e65ccd96fe68b8f46c7f528/crates/pptx-render/src/lib.rs#L200)).
 
-5. **Raster.** In `paint_image` ([`crates/pptx-raster/src/lib.rs:391`](https://github.com/dsaad68/betteroffice/blob/df1a57dae7a091ea9ca8176ca013274cced71fdd/crates/pptx-raster/src/lib.rs#L391)), scale the fit
+5. **Raster.** In `paint_image` ([`crates/pptx-raster/src/lib.rs:391`](https://github.com/dsaad68/betteroffice/blob/a47dbde7498c781ab81b141e834da1950dcf4175/crates/pptx-raster/src/lib.rs#L391)), scale the fit
    transform by the kept fraction and translate by the discarded left/top, then draw
    through a mask: intersect the existing `clip` with the frame rect (or with the
    geometry path when present) using the same machinery as `clipped`
-   ([`crates/pptx-raster/src/lib.rs:325`](https://github.com/dsaad68/betteroffice/blob/df1a57dae7a091ea9ca8176ca013274cced71fdd/crates/pptx-raster/src/lib.rs#L325)), which is what stops the outsized source spilling
+   ([`crates/pptx-raster/src/lib.rs:325`](https://github.com/dsaad68/betteroffice/blob/a47dbde7498c781ab81b141e834da1950dcf4175/crates/pptx-raster/src/lib.rs#L325)), which is what stops the outsized source spilling
    past the frame.
 
 6. **Canvas.** Switch [`packages/pptx/src/render/canvas.ts:208`](https://github.com/openooxml/betteroffice/blob/187cebc9ef5d414e4e65ccd96fe68b8f46c7f528/packages/pptx/src/render/canvas.ts#L208) to the 9-argument
@@ -196,7 +196,7 @@ Risks and tests to add:
   exactly fills its frame; after the fix the source overhangs, so a missing mask turns a
   crop into a bleed over neighbouring shapes. Every path that paints an image needs the
   mask, including the rotated case — `Mask` is built in device space, so the frame path
-  must be transformed first, exactly as [`crates/pptx-raster/src/lib.rs:337`](https://github.com/dsaad68/betteroffice/blob/df1a57dae7a091ea9ca8176ca013274cced71fdd/crates/pptx-raster/src/lib.rs#L337) does.
+  must be transformed first, exactly as [`crates/pptx-raster/src/lib.rs:337`](https://github.com/dsaad68/betteroffice/blob/a47dbde7498c781ab81b141e834da1950dcf4175/crates/pptx-raster/src/lib.rs#L337) does.
 - **Negative `srcRect`** (outset) parses fine into `i32`
   ([`crates/pptx-parse/src/drawing.rs:942`](https://github.com/openooxml/betteroffice/blob/187cebc9ef5d414e4e65ccd96fe68b8f46c7f528/crates/pptx-parse/src/drawing.rs#L942)) but would make the kept fraction exceed 1 and
   place the source inside the frame with a gap. Clamp, and add a parse test.
@@ -209,7 +209,7 @@ Risks and tests to add:
   fixtures regenerated even though they are skip-serialized when absent.
 - Tests to add: a `pptx-parse` unit test for `PictureCrop` and for a picture's
   `prstGeom`; a cropped and an ellipse-masked golden beside `golden_image`
-  ([`crates/pptx-raster/tests/golden.rs:283`](https://github.com/dsaad68/betteroffice/blob/df1a57dae7a091ea9ca8176ca013274cced71fdd/crates/pptx-raster/tests/golden.rs#L283)); a layout assertion that
+  ([`crates/pptx-raster/tests/golden.rs:283`](https://github.com/dsaad68/betteroffice/blob/a47dbde7498c781ab81b141e834da1950dcf4175/crates/pptx-raster/tests/golden.rs#L283)); a layout assertion that
   `Primitive::Image` carries the crop on both the snapshot and the parsed-shape path
   (master pictures only reach the parsed path).
 
@@ -223,12 +223,12 @@ of this cluster; their `fine_pct` should drop noticeably once the dock and bezel
 disappear. `project17` slides move less — the master logo is a small corner shape — but
 slide 10's two portraits should become circles.
 
-Existing coverage to extend: `golden_image` at [`crates/pptx-raster/tests/golden.rs:283`](https://github.com/dsaad68/betteroffice/blob/df1a57dae7a091ea9ca8176ca013274cced71fdd/crates/pptx-raster/tests/golden.rs#L283) is
+Existing coverage to extend: `golden_image` at [`crates/pptx-raster/tests/golden.rs:283`](https://github.com/dsaad68/betteroffice/blob/a47dbde7498c781ab81b141e834da1950dcf4175/crates/pptx-raster/tests/golden.rs#L283) is
 the only picture golden and it paints an uncropped checker; add a cropped and a masked
 variant beside it. `crates/pptx-parse` has no `srcRect` test at all — the only occurrence
 of that string under `crates/` outside docx is the parser line itself — so a parse test
 for `PictureCrop` and for a picture's `prstGeom` is new ground.
-[`crates/pptx-render/src/layout.rs:2008`](https://github.com/dsaad68/betteroffice/blob/df1a57dae7a091ea9ca8176ca013274cced71fdd/crates/pptx-render/src/layout.rs#L2008) holds the layout unit tests, where an assertion
+[`crates/pptx-render/src/layout.rs:2008`](https://github.com/dsaad68/betteroffice/blob/a47dbde7498c781ab81b141e834da1950dcf4175/crates/pptx-render/src/layout.rs#L2008) holds the layout unit tests, where an assertion
 that the emitted `Primitive::Image` carries the crop belongs.
 
 **Additional context**
@@ -239,4 +239,17 @@ Related issues found in the same run: none.
 
 Files most likely involved: `crates/pptx-parse/src/drawing.rs`, `crates/pptx-parse/src/model.rs`, `crates/pptx-edit/src/deck.rs`, `crates/pptx-edit/src/model.rs`, `crates/pptx-render/src/layout.rs`, `crates/pptx-render/src/lib.rs`, `crates/pptx-render/src/display_list.rs`, `crates/pptx-raster/src/lib.rs`, `crates/pptx-raster/README.md`, `packages/pptx/src/types.ts`, `packages/pptx/src/render/canvas.ts`
 
-Found with a comparison harness that renders decks with both engines, pixel-diffs them, and traces each difference back to the OOXML and the code path. Full report with all findings: https://github.com/dsaad68/betteroffice/blob/harness/pptx-render-improvement/render-improvement-harness/issues/picture-srcrect-crop-ignored/report.md. Methodology: https://gist.github.com/dsaad68/038b63c2977aeca16fc873c2df1152d0. Line numbers link to the exact commit they were checked against.
+**How this was found**
+
+A comparison harness renders each deck twice, once with LibreOffice and once with BetterOffice,
+pixel-diffs the two images slide by slide, and traces every visible difference back to the OOXML
+and to the code path responsible. Reference renders come from LibreOffice through
+[pptx-pdf](https://github.com/dsaad68/pptx-pdf), a single binary with LibreOffice embedded, at 96 dpi. Both engines
+are given the same Liberation, Carlito and Caladea faces under the family names the decks ask for,
+so a difference in text metrics is a real difference and not font substitution.
+
+- Harness, with the per-slide reports and all 35 issues this run produced: https://github.com/dsaad68/betteroffice/tree/harness/pptx-render-improvement/render-improvement-harness
+- Full report behind this issue, with every finding, the evidence table and the proposed fix: https://github.com/dsaad68/betteroffice/blob/harness/pptx-render-improvement/render-improvement-harness/issues/picture-srcrect-crop-ignored/report.md
+- How the harness works and why it is built this way: https://gist.github.com/dsaad68/038b63c2977aeca16fc873c2df1152d0
+
+Line numbers link to the exact commit they were checked against.

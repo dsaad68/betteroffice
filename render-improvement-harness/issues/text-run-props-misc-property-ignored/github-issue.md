@@ -57,7 +57,7 @@ Match the reference render. PowerPoint and LibreOffice agree on this behaviour; 
 `a:latin/@typeface`, `a:solidFill`, `lang` and `a:hlinkClick/@r:id`, and nothing else.
 `RunProperties` ([`crates/pptx-parse/src/model.rs:338`](https://github.com/openooxml/betteroffice/blob/187cebc9ef5d414e4e65ccd96fe68b8f46c7f528/crates/pptx-parse/src/model.rs#L338)) has no field for a baseline shift, so the
 attribute is dropped at the XML boundary and cannot reach layout. Downstream there is nothing to
-receive it either: `ResolvedStyle` ([`crates/pptx-render/src/layout.rs:924`](https://github.com/dsaad68/betteroffice/blob/df1a57dae7a091ea9ca8176ca013274cced71fdd/crates/pptx-render/src/layout.rs#L924)) carries only face,
+receive it either: `ResolvedStyle` ([`crates/pptx-render/src/layout.rs:924`](https://github.com/dsaad68/betteroffice/blob/a47dbde7498c781ab81b141e834da1950dcf4175/crates/pptx-render/src/layout.rs#L924)) carries only face,
 family, size, bold, italic, underline and colour, and `PositionedTextRun`
 ([`crates/pptx-render/src/display_list.rs:230`](https://github.com/openooxml/betteroffice/blob/187cebc9ef5d414e4e65ccd96fe68b8f46c7f528/crates/pptx-render/src/display_list.rs#L230)) is the same list plus geometry.
 
@@ -73,7 +73,7 @@ for that slide merges the marker into its neighbour as one run:
 
 The marker has the same `fontSizePx` and the same glyph `y` as the sentence — no size change, no
 shift, and not even a run boundary, because `positioned_runs`
-([`crates/pptx-render/src/layout.rs:1472`](https://github.com/dsaad68/betteroffice/blob/df1a57dae7a091ea9ca8176ca013274cced71fdd/crates/pptx-render/src/layout.rs#L1472)) coalesces adjacent clusters on `(end == start, font_id)`
+([`crates/pptx-render/src/layout.rs:1472`](https://github.com/dsaad68/betteroffice/blob/a47dbde7498c781ab81b141e834da1950dcf4175/crates/pptx-render/src/layout.rs#L1472)) coalesces adjacent clusters on `(end == start, font_id)`
 alone, and a baseline shift is not part of that key.
 
 Measured off the two 96 dpi images (`decks/cisco-cloud-security/{lo,bo}-img/05.png`, red-ink
@@ -87,7 +87,7 @@ Not confirmed: what PowerPoint's reduction ratio is. The repo's own docx convent
 0.4em raise ([`crates/ooxml-text/src/measure/prepare.rs:466`](https://github.com/openooxml/betteroffice/blob/187cebc9ef5d414e4e65ccd96fe68b8f46c7f528/crates/ooxml-text/src/measure/prepare.rs#L466)), which is larger than what the
 reference draws here. Note that pptx-render does not use the `ooxml-text` measure pipeline at all
 — it imports only `shape`, `break_opportunities` and `single_line_box`
-([`crates/pptx-render/src/layout.rs:8`](https://github.com/dsaad68/betteroffice/blob/df1a57dae7a091ea9ca8176ca013274cced71fdd/crates/pptx-render/src/layout.rs#L8)) — so the docx superscript support is not reusable, only its
+([`crates/pptx-render/src/layout.rs:8`](https://github.com/dsaad68/betteroffice/blob/a47dbde7498c781ab81b141e834da1950dcf4175/crates/pptx-render/src/layout.rs#L8)) — so the docx superscript support is not reusable, only its
 convention is.
 
 `baseline="0"` also appears on `defRPr` in the layout's `lstStyle`
@@ -99,11 +99,11 @@ so once modeled the cascade picks it up for free and a `0` is a no-op shift.
 `i="1"` is parsed ([`crates/pptx-parse/src/drawing.rs:911`](https://github.com/openooxml/betteroffice/blob/187cebc9ef5d414e4e65ccd96fe68b8f46c7f528/crates/pptx-parse/src/drawing.rs#L911)), stored
 ([`crates/pptx-parse/src/model.rs:341`](https://github.com/openooxml/betteroffice/blob/187cebc9ef5d414e4e65ccd96fe68b8f46c7f528/crates/pptx-parse/src/model.rs#L341)), carried through the snapshot
 ([`crates/pptx-edit/src/story.rs:645`](https://github.com/openooxml/betteroffice/blob/187cebc9ef5d414e4e65ccd96fe68b8f46c7f528/crates/pptx-edit/src/story.rs#L645), [`crates/pptx-edit/src/model.rs:38`](https://github.com/openooxml/betteroffice/blob/187cebc9ef5d414e4e65ccd96fe68b8f46c7f528/crates/pptx-edit/src/model.rs#L38)), resolved
-([`crates/pptx-render/src/layout.rs:1020`](https://github.com/dsaad68/betteroffice/blob/df1a57dae7a091ea9ca8176ca013274cced71fdd/crates/pptx-render/src/layout.rs#L1020)) and passed to `resolve_face`
-([`crates/pptx-render/src/layout.rs:1041`](https://github.com/dsaad68/betteroffice/blob/df1a57dae7a091ea9ca8176ca013274cced71fdd/crates/pptx-render/src/layout.rs#L1041)). It survives all the way to the display list — the run
+([`crates/pptx-render/src/layout.rs:1020`](https://github.com/dsaad68/betteroffice/blob/a47dbde7498c781ab81b141e834da1950dcf4175/crates/pptx-render/src/layout.rs#L1020)) and passed to `resolve_face`
+([`crates/pptx-render/src/layout.rs:1041`](https://github.com/dsaad68/betteroffice/blob/a47dbde7498c781ab81b141e834da1950dcf4175/crates/pptx-render/src/layout.rs#L1041)). It survives all the way to the display list — the run
 for "Incentives/Investment " comes out with `italic: True`.
 
-It is thrown away in `resolve_face` ([`crates/pptx-render/src/layout.rs:245`](https://github.com/dsaad68/betteroffice/blob/df1a57dae7a091ea9ca8176ca013274cced71fdd/crates/pptx-render/src/layout.rs#L245)):
+It is thrown away in `resolve_face` ([`crates/pptx-render/src/layout.rs:245`](https://github.com/dsaad68/betteroffice/blob/a47dbde7498c781ab81b141e834da1950dcf4175/crates/pptx-render/src/layout.rs#L245)):
 
 ```rust
 self.faces
@@ -113,7 +113,7 @@ self.faces
 ```
 
 These runs ask for `Segoe UI`, which no host registers, so both lookups miss and the run lands on
-`self.fallback` — the first face ever registered ([`crates/pptx-render/src/layout.rs:111`](https://github.com/dsaad68/betteroffice/blob/df1a57dae7a091ea9ca8176ca013274cced71fdd/crates/pptx-render/src/layout.rs#L111)), which
+`self.fallback` — the first face ever registered ([`crates/pptx-render/src/layout.rs:111`](https://github.com/dsaad68/betteroffice/blob/a47dbde7498c781ab81b141e834da1950dcf4175/crates/pptx-render/src/layout.rs#L111)), which
 carries no style. Nothing downstream can recover: there is no synthetic oblique anywhere in
 `crates/pptx-raster/src/font.rs`, which only fills the outlines of the face it is handed.
 
@@ -141,7 +141,7 @@ already slants text the raster leaves upright. Fixing `resolve_face` removes tha
 Two halves, one of which is somebody else's change.
 
 **Italic — do nothing here.** Take `text-run-props-bold-ignored`'s style-aware fallback chain in
-`resolve_face` ([`crates/pptx-render/src/layout.rs:245`](https://github.com/dsaad68/betteroffice/blob/df1a57dae7a091ea9ca8176ca013274cced71fdd/crates/pptx-render/src/layout.rs#L245)). Its step "the same four style keys against
+`resolve_face` ([`crates/pptx-render/src/layout.rs:245`](https://github.com/dsaad68/betteroffice/blob/a47dbde7498c781ab81b141e834da1950dcf4175/crates/pptx-render/src/layout.rs#L245)). Its step "the same four style keys against
 `fallback_family`" resolves `(fallback family, false, true)` and hands these runs Liberation Sans
 Italic. Adding a second, italic-only fix would collide with it.
 
@@ -167,18 +167,18 @@ glyphs are offset off the line's baseline.
    ([`crates/pptx-edit/src/story.rs:643`](https://github.com/openooxml/betteroffice/blob/187cebc9ef5d414e4e65ccd96fe68b8f46c7f528/crates/pptx-edit/src/story.rs#L643)), `style_from_attrs`
    ([`crates/pptx-edit/src/story.rs:654`](https://github.com/openooxml/betteroffice/blob/187cebc9ef5d414e4e65ccd96fe68b8f46c7f528/crates/pptx-edit/src/story.rs#L654), a Yjs `Any::Number`), `run_write`
    ([`crates/pptx-edit/src/save.rs:384`](https://github.com/openooxml/betteroffice/blob/187cebc9ef5d414e4e65ccd96fe68b8f46c7f528/crates/pptx-edit/src/save.rs#L384)), `style_from_properties`
-   ([`crates/pptx-render/src/layout.rs:1849`](https://github.com/dsaad68/betteroffice/blob/df1a57dae7a091ea9ca8176ca013274cced71fdd/crates/pptx-render/src/layout.rs#L1849)) and `merge_run_properties`
-   ([`crates/pptx-render/src/layout.rs:1825`](https://github.com/dsaad68/betteroffice/blob/df1a57dae7a091ea9ca8176ca013274cced71fdd/crates/pptx-render/src/layout.rs#L1825)).
+   ([`crates/pptx-render/src/layout.rs:1849`](https://github.com/dsaad68/betteroffice/blob/a47dbde7498c781ab81b141e834da1950dcf4175/crates/pptx-render/src/layout.rs#L1849)) and `merge_run_properties`
+   ([`crates/pptx-render/src/layout.rs:1825`](https://github.com/dsaad68/betteroffice/blob/a47dbde7498c781ab81b141e834da1950dcf4175/crates/pptx-render/src/layout.rs#L1825)).
 4. **Resolve into pixels.** Add `baseline_shift_px` (and an effective size) to `ResolvedStyle`
-   ([`crates/pptx-render/src/layout.rs:924`](https://github.com/dsaad68/betteroffice/blob/df1a57dae7a091ea9ca8176ca013274cced71fdd/crates/pptx-render/src/layout.rs#L924)), computed in `resolve_style`
-   ([`crates/pptx-render/src/layout.rs:1010`](https://github.com/dsaad68/betteroffice/blob/df1a57dae7a091ea9ca8176ca013274cced71fdd/crates/pptx-render/src/layout.rs#L1010)) direct-then-fallback. Shrink the size there, once, so
+   ([`crates/pptx-render/src/layout.rs:924`](https://github.com/dsaad68/betteroffice/blob/a47dbde7498c781ab81b141e834da1950dcf4175/crates/pptx-render/src/layout.rs#L924)), computed in `resolve_style`
+   ([`crates/pptx-render/src/layout.rs:1010`](https://github.com/dsaad68/betteroffice/blob/a47dbde7498c781ab81b141e834da1950dcf4175/crates/pptx-render/src/layout.rs#L1010)) direct-then-fallback. Shrink the size there, once, so
    every consumer of `style.font_size_pt` — shaping, line box, the display list — agrees without
    knowing why the run is small.
-5. **Offset the glyphs.** `positioned_runs` ([`crates/pptx-render/src/layout.rs:1472`](https://github.com/dsaad68/betteroffice/blob/df1a57dae7a091ea9ca8176ca013274cced71fdd/crates/pptx-render/src/layout.rs#L1472)) already
+5. **Offset the glyphs.** `positioned_runs` ([`crates/pptx-render/src/layout.rs:1472`](https://github.com/dsaad68/betteroffice/blob/a47dbde7498c781ab81b141e834da1950dcf4175/crates/pptx-render/src/layout.rs#L1472)) already
    writes `y_offset: baseline + glyph.y_offset` at `:1516`; subtract the run's shift there. Two
-   companion edits: the coalescing test at [`crates/pptx-render/src/layout.rs:1484`](https://github.com/dsaad68/betteroffice/blob/df1a57dae7a091ea9ca8176ca013274cced71fdd/crates/pptx-render/src/layout.rs#L1484) must include the
+   companion edits: the coalescing test at [`crates/pptx-render/src/layout.rs:1484`](https://github.com/dsaad68/betteroffice/blob/a47dbde7498c781ab81b141e834da1950dcf4175/crates/pptx-render/src/layout.rs#L1484) must include the
    shift in its key, or the marker keeps merging into the sentence run (it does today); and
-   `clusters_line_box` ([`crates/pptx-render/src/layout.rs:1525`](https://github.com/dsaad68/betteroffice/blob/df1a57dae7a091ea9ca8176ca013274cced71fdd/crates/pptx-render/src/layout.rs#L1525)) must fold the shift into ascent
+   `clusters_line_box` ([`crates/pptx-render/src/layout.rs:1525`](https://github.com/dsaad68/betteroffice/blob/a47dbde7498c781ab81b141e834da1950dcf4175/crates/pptx-render/src/layout.rs#L1525)) must fold the shift into ascent
    and descent the way [`crates/ooxml-text/src/measure/line_filler.rs:547`](https://github.com/openooxml/betteroffice/blob/187cebc9ef5d414e4e65ccd96fe68b8f46c7f528/crates/ooxml-text/src/measure/line_filler.rs#L547) does, so a tall
    superscript grows the line instead of clipping.
 6. **Tell the canvas.** `crates/pptx-raster/src/font.rs` needs no change — it paints the absolute
@@ -187,7 +187,7 @@ glyphs are offset off the line's baseline.
    `PositionedTextRun` ([`crates/pptx-render/src/display_list.rs:230`](https://github.com/openooxml/betteroffice/blob/187cebc9ef5d414e4e65ccd96fe68b8f46c7f528/crates/pptx-render/src/display_list.rs#L230)) needs a
    `baselineOffsetPx` that `paintTextRun` subtracts. Without it raster and canvas diverge on
    exactly these runs. `underline` is drawn from `line.baseline` in both backends
-   ([`crates/pptx-raster/src/font.rs:110`](https://github.com/dsaad68/betteroffice/blob/df1a57dae7a091ea9ca8176ca013274cced71fdd/crates/pptx-raster/src/font.rs#L110), [`packages/pptx/src/render/canvas.ts:239`](https://github.com/openooxml/betteroffice/blob/187cebc9ef5d414e4e65ccd96fe68b8f46c7f528/packages/pptx/src/render/canvas.ts#L239)) and should use
+   ([`crates/pptx-raster/src/font.rs:110`](https://github.com/dsaad68/betteroffice/blob/a47dbde7498c781ab81b141e834da1950dcf4175/crates/pptx-raster/src/font.rs#L110), [`packages/pptx/src/render/canvas.ts:239`](https://github.com/openooxml/betteroffice/blob/187cebc9ef5d414e4e65ccd96fe68b8f46c7f528/packages/pptx/src/render/canvas.ts#L239)) and should use
    the shifted baseline too.
 
 ```rust
@@ -247,7 +247,7 @@ Risks and tests to add:
   new behaviour.
 - Tests to add: `baseline` parse and round-trip in `crates/pptx-parse` (extend the `rPr` fixture at
   [`crates/pptx-parse/src/drawing.rs:956`](https://github.com/openooxml/betteroffice/blob/187cebc9ef5d414e4e65ccd96fe68b8f46c7f528/crates/pptx-parse/src/drawing.rs#L956)); run-size, glyph-`y` and non-coalescing assertions in the
-  [`crates/pptx-render/src/layout.rs:2008`](https://github.com/dsaad68/betteroffice/blob/df1a57dae7a091ea9ca8176ca013274cced71fdd/crates/pptx-render/src/layout.rs#L2008) test module; a `baseline="0"` no-op case.
+  [`crates/pptx-render/src/layout.rs:2008`](https://github.com/dsaad68/betteroffice/blob/a47dbde7498c781ab81b141e834da1950dcf4175/crates/pptx-render/src/layout.rs#L2008) test module; a `baseline="0"` no-op case.
 
 **How to verify**
 
@@ -269,15 +269,28 @@ verification on ocp-psp-plan/02.
 
 No existing coverage for either. [`crates/pptx-parse/src/drawing.rs:956`](https://github.com/openooxml/betteroffice/blob/187cebc9ef5d414e4e65ccd96fe68b8f46c7f528/crates/pptx-parse/src/drawing.rs#L956)
 (`parses_text_formatting_and_nested_shape_types`) is the `rPr` fixture a `baseline` case belongs in; the `crates/pptx-render/src/layout.rs`
-test module ([`crates/pptx-render/src/layout.rs:2008`](https://github.com/dsaad68/betteroffice/blob/df1a57dae7a091ea9ca8176ca013274cced71fdd/crates/pptx-render/src/layout.rs#L2008)) has nothing asserting run size or glyph `y`
+test module ([`crates/pptx-render/src/layout.rs:2008`](https://github.com/dsaad68/betteroffice/blob/a47dbde7498c781ab81b141e834da1950dcf4175/crates/pptx-render/src/layout.rs#L2008)) has nothing asserting run size or glyph `y`
 for a shifted run; `crates/pptx-raster/tests/golden.rs` has no superscript fixture.
 
 **Additional context**
 
 none.
 
-Related issues found in the same run: `geometry-custom-collapses-to-bbox`, `text-run-props-bold-ignored`
+Related issues found in the same run: `geometry-custom-collapses-to-bbox`, #266
 
 Files most likely involved: `crates/pptx-parse/src/model.rs`, `crates/pptx-parse/src/drawing.rs`, `crates/pptx-parse/src/write.rs`, `crates/pptx-edit/src/model.rs`, `crates/pptx-edit/src/story.rs`, `crates/pptx-edit/src/save.rs`, `crates/pptx-render/src/layout.rs`, `crates/pptx-render/src/display_list.rs`, `packages/pptx/src/render/canvas.ts`
 
-Found with a comparison harness that renders decks with both engines, pixel-diffs them, and traces each difference back to the OOXML and the code path. Full report with all findings: https://github.com/dsaad68/betteroffice/blob/harness/pptx-render-improvement/render-improvement-harness/issues/text-run-props-misc-property-ignored/report.md. Methodology: https://gist.github.com/dsaad68/038b63c2977aeca16fc873c2df1152d0. Line numbers link to the exact commit they were checked against.
+**How this was found**
+
+A comparison harness renders each deck twice, once with LibreOffice and once with BetterOffice,
+pixel-diffs the two images slide by slide, and traces every visible difference back to the OOXML
+and to the code path responsible. Reference renders come from LibreOffice through
+[pptx-pdf](https://github.com/dsaad68/pptx-pdf), a single binary with LibreOffice embedded, at 96 dpi. Both engines
+are given the same Liberation, Carlito and Caladea faces under the family names the decks ask for,
+so a difference in text metrics is a real difference and not font substitution.
+
+- Harness, with the per-slide reports and all 35 issues this run produced: https://github.com/dsaad68/betteroffice/tree/harness/pptx-render-improvement/render-improvement-harness
+- Full report behind this issue, with every finding, the evidence table and the proposed fix: https://github.com/dsaad68/betteroffice/blob/harness/pptx-render-improvement/render-improvement-harness/issues/text-run-props-misc-property-ignored/report.md
+- How the harness works and why it is built this way: https://gist.github.com/dsaad68/038b63c2977aeca16fc873c2df1152d0
+
+Line numbers link to the exact commit they were checked against.

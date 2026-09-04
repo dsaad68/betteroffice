@@ -76,13 +76,13 @@ resolver the pptx render path calls.
 - Model: the value survives into `ShapeFill::color`
   ([`crates/ooxml-drawingml/src/shape.rs:11`](https://github.com/openooxml/betteroffice/blob/187cebc9ef5d414e4e65ccd96fe68b8f46c7f528/crates/ooxml-drawingml/src/shape.rs#L11)) and `ShapeOutline::color`
   ([`crates/ooxml-drawingml/src/shape.rs:47`](https://github.com/openooxml/betteroffice/blob/187cebc9ef5d414e4e65ccd96fe68b8f46c7f528/crates/ooxml-drawingml/src/shape.rs#L47)) as a full `ColorValue`.
-- Drop: `paint()` at [`crates/pptx-render/src/layout.rs:1897`](https://github.com/dsaad68/betteroffice/blob/df1a57dae7a091ea9ca8176ca013274cced71fdd/crates/pptx-render/src/layout.rs#L1897) is the single funnel for every
+- Drop: `paint()` at [`crates/pptx-render/src/layout.rs:1897`](https://github.com/dsaad68/betteroffice/blob/a47dbde7498c781ab81b141e834da1950dcf4175/crates/pptx-render/src/layout.rs#L1897) is the single funnel for every
   shape fill and for the slide background (`layout.rs:183`, `:388`, `:526`). Its last
-  statement, [`crates/pptx-render/src/layout.rs:1926`](https://github.com/dsaad68/betteroffice/blob/df1a57dae7a091ea9ca8176ca013274cced71fdd/crates/pptx-render/src/layout.rs#L1926), calls
+  statement, [`crates/pptx-render/src/layout.rs:1926`](https://github.com/dsaad68/betteroffice/blob/a47dbde7498c781ab81b141e834da1950dcf4175/crates/pptx-render/src/layout.rs#L1926), calls
   `resolve_color_value_to_hex_with_theme`, which returns `#RRGGBB`
   ([`crates/ooxml-drawingml/src/color.rs:61-85`](https://github.com/openooxml/betteroffice/blob/187cebc9ef5d414e4e65ccd96fe68b8f46c7f528/crates/ooxml-drawingml/src/color.rs#L61-L85)) and never reads `color.alpha`. `stroke()`
-  at [`crates/pptx-render/src/layout.rs:1931`](https://github.com/dsaad68/betteroffice/blob/df1a57dae7a091ea9ca8176ca013274cced71fdd/crates/pptx-render/src/layout.rs#L1931) does the same for `a:ln`. Gradient stops go
-  through the same opaque resolver at [`crates/pptx-render/src/layout.rs:1914`](https://github.com/dsaad68/betteroffice/blob/df1a57dae7a091ea9ca8176ca013274cced71fdd/crates/pptx-render/src/layout.rs#L1914).
+  at [`crates/pptx-render/src/layout.rs:1931`](https://github.com/dsaad68/betteroffice/blob/a47dbde7498c781ab81b141e834da1950dcf4175/crates/pptx-render/src/layout.rs#L1931) does the same for `a:ln`. Gradient stops go
+  through the same opaque resolver at [`crates/pptx-render/src/layout.rs:1914`](https://github.com/dsaad68/betteroffice/blob/a47dbde7498c781ab81b141e834da1950dcf4175/crates/pptx-render/src/layout.rs#L1914).
 - The correct resolver already exists and is unit-tested -
   `resolve_color_value_to_rgba_hex` at [`crates/ooxml-drawingml/src/color.rs:91`](https://github.com/openooxml/betteroffice/blob/187cebc9ef5d414e4e65ccd96fe68b8f46c7f528/crates/ooxml-drawingml/src/color.rs#L91), test
   `alpha_reaches_the_rgba_resolver_and_never_the_opaque_one` at
@@ -92,10 +92,10 @@ resolver the pptx render path calls.
 Both consumers of the display list already accept the 8-digit form, so nothing downstream
 needs to change:
 
-- Raster: `parse_color` ([`crates/pptx-raster/src/lib.rs:770`](https://github.com/dsaad68/betteroffice/blob/df1a57dae7a091ea9ca8176ca013274cced71fdd/crates/pptx-raster/src/lib.rs#L770)) delegates to
-  `parse_hex_color` ([`crates/pptx-raster/src/lib.rs:780`](https://github.com/dsaad68/betteroffice/blob/df1a57dae7a091ea9ca8176ca013274cced71fdd/crates/pptx-raster/src/lib.rs#L780)), whose length match accepts
-  `6 | 8` and reads the alpha byte at [`crates/pptx-raster/src/lib.rs:798`](https://github.com/dsaad68/betteroffice/blob/df1a57dae7a091ea9ca8176ca013274cced71fdd/crates/pptx-raster/src/lib.rs#L798). tiny-skia's
-  `fill_path` ([`crates/pptx-raster/src/lib.rs:382`](https://github.com/dsaad68/betteroffice/blob/df1a57dae7a091ea9ca8176ca013274cced71fdd/crates/pptx-raster/src/lib.rs#L382)) composites source-over by default.
+- Raster: `parse_color` ([`crates/pptx-raster/src/lib.rs:770`](https://github.com/dsaad68/betteroffice/blob/a47dbde7498c781ab81b141e834da1950dcf4175/crates/pptx-raster/src/lib.rs#L770)) delegates to
+  `parse_hex_color` ([`crates/pptx-raster/src/lib.rs:780`](https://github.com/dsaad68/betteroffice/blob/a47dbde7498c781ab81b141e834da1950dcf4175/crates/pptx-raster/src/lib.rs#L780)), whose length match accepts
+  `6 | 8` and reads the alpha byte at [`crates/pptx-raster/src/lib.rs:798`](https://github.com/dsaad68/betteroffice/blob/a47dbde7498c781ab81b141e834da1950dcf4175/crates/pptx-raster/src/lib.rs#L798). tiny-skia's
+  `fill_path` ([`crates/pptx-raster/src/lib.rs:382`](https://github.com/dsaad68/betteroffice/blob/a47dbde7498c781ab81b141e834da1950dcf4175/crates/pptx-raster/src/lib.rs#L382)) composites source-over by default.
 - Canvas: `Paint::Solid.color` is a plain string
   ([`crates/pptx-render/src/display_list.rs:24-27`](https://github.com/openooxml/betteroffice/blob/187cebc9ef5d414e4e65ccd96fe68b8f46c7f528/crates/pptx-render/src/display_list.rs#L24-L27)) that `paintStyle` hands straight to
   `ctx.fillStyle` ([`packages/pptx/src/render/canvas.ts:183`](https://github.com/openooxml/betteroffice/blob/187cebc9ef5d414e4e65ccd96fe68b8f46c7f528/packages/pptx/src/render/canvas.ts#L183)), and Canvas2D accepts
@@ -112,8 +112,8 @@ this cluster and out of that one.
 are *not* claimed to be fixed by this issue:
 
 - Run-level text alpha also goes through the opaque resolver
-  ([`crates/pptx-render/src/layout.rs:1049`](https://github.com/dsaad68/betteroffice/blob/df1a57dae7a091ea9ca8176ca013274cced71fdd/crates/pptx-render/src/layout.rs#L1049), `:1854`), and `valid_color`
-  ([`crates/pptx-render/src/layout.rs:1982`](https://github.com/dsaad68/betteroffice/blob/df1a57dae7a091ea9ca8176ca013274cced71fdd/crates/pptx-render/src/layout.rs#L1982)) hard-requires a 6-digit hex, so widening text
+  ([`crates/pptx-render/src/layout.rs:1049`](https://github.com/dsaad68/betteroffice/blob/a47dbde7498c781ab81b141e834da1950dcf4175/crates/pptx-render/src/layout.rs#L1049), `:1854`), and `valid_color`
+  ([`crates/pptx-render/src/layout.rs:1982`](https://github.com/dsaad68/betteroffice/blob/a47dbde7498c781ab81b141e834da1950dcf4175/crates/pptx-render/src/layout.rs#L1982)) hard-requires a 6-digit hex, so widening text
   color to RGBA is a larger change than the fill fix.
 - Picture transparency (`a:alphaModFix` on a `blipFill`) is a separate mechanism and is not
   covered here.
@@ -138,7 +138,7 @@ Three call sites in `crates/pptx-render/src/layout.rs`:
 
 No display-list, raster or canvas change is needed: `Paint::Solid.color` is already an
 untyped string ([`crates/pptx-render/src/display_list.rs:25`](https://github.com/openooxml/betteroffice/blob/187cebc9ef5d414e4e65ccd96fe68b8f46c7f528/crates/pptx-render/src/display_list.rs#L25)), `parse_hex_color` already
-accepts 8 hex digits ([`crates/pptx-raster/src/lib.rs:782-799`](https://github.com/dsaad68/betteroffice/blob/df1a57dae7a091ea9ca8176ca013274cced71fdd/crates/pptx-raster/src/lib.rs#L782-L799)), and `ctx.fillStyle` accepts
+accepts 8 hex digits ([`crates/pptx-raster/src/lib.rs:782-799`](https://github.com/dsaad68/betteroffice/blob/a47dbde7498c781ab81b141e834da1950dcf4175/crates/pptx-raster/src/lib.rs#L782-L799)), and `ctx.fillStyle` accepts
 `#RRGGBBAA` ([`packages/pptx/src/render/canvas.ts:183`](https://github.com/openooxml/betteroffice/blob/187cebc9ef5d414e4e65ccd96fe68b8f46c7f528/packages/pptx/src/render/canvas.ts#L183)).
 
 Optional tidy-up: emit `#RRGGBB` when the alpha byte is `FF`, so the overwhelming majority
@@ -182,7 +182,7 @@ Risks and tests to add:
 - **`alpha="0"`.** A fully transparent fill becomes `#RRGGBB00` rather than `None`. The
   raster paints nothing visible, so this is correct, but a shape that previously painted an
   opaque block will now vanish - which is the intended behaviour and may move goldens.
-- **Text colours are untouched.** `valid_color` ([`crates/pptx-render/src/layout.rs:1982`](https://github.com/dsaad68/betteroffice/blob/df1a57dae7a091ea9ca8176ca013274cced71fdd/crates/pptx-render/src/layout.rs#L1982))
+- **Text colours are untouched.** `valid_color` ([`crates/pptx-render/src/layout.rs:1982`](https://github.com/dsaad68/betteroffice/blob/a47dbde7498c781ab81b141e834da1950dcf4175/crates/pptx-render/src/layout.rs#L1982))
   requires exactly 6 hex digits, so if the same change is later extended to run properties
   (`layout.rs:1049`, `:1854`) that predicate must be widened to accept 8 as well. Doing
   fills only avoids that edit entirely.
@@ -223,4 +223,17 @@ Related issues found in the same run: `geometry-custom-collapses-to-bbox`, `pict
 
 Files most likely involved: `crates/pptx-render/src/layout.rs`, `crates/ooxml-drawingml/src/color.rs`, `crates/pptx-parse/src/drawing.rs`, `crates/pptx-raster/src/lib.rs`, `crates/pptx-render/src/display_list.rs`, `packages/pptx/src/render/canvas.ts`
 
-Found with a comparison harness that renders decks with both engines, pixel-diffs them, and traces each difference back to the OOXML and the code path. Full report with all findings: https://github.com/dsaad68/betteroffice/blob/harness/pptx-render-improvement/render-improvement-harness/issues/fill-alpha-modifier-ignored/report.md. Methodology: https://gist.github.com/dsaad68/038b63c2977aeca16fc873c2df1152d0. Line numbers link to the exact commit they were checked against.
+**How this was found**
+
+A comparison harness renders each deck twice, once with LibreOffice and once with BetterOffice,
+pixel-diffs the two images slide by slide, and traces every visible difference back to the OOXML
+and to the code path responsible. Reference renders come from LibreOffice through
+[pptx-pdf](https://github.com/dsaad68/pptx-pdf), a single binary with LibreOffice embedded, at 96 dpi. Both engines
+are given the same Liberation, Carlito and Caladea faces under the family names the decks ask for,
+so a difference in text metrics is a real difference and not font substitution.
+
+- Harness, with the per-slide reports and all 35 issues this run produced: https://github.com/dsaad68/betteroffice/tree/harness/pptx-render-improvement/render-improvement-harness
+- Full report behind this issue, with every finding, the evidence table and the proposed fix: https://github.com/dsaad68/betteroffice/blob/harness/pptx-render-improvement/render-improvement-harness/issues/fill-alpha-modifier-ignored/report.md
+- How the harness works and why it is built this way: https://gist.github.com/dsaad68/038b63c2977aeca16fc873c2df1152d0
+
+Line numbers link to the exact commit they were checked against.

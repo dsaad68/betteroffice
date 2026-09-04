@@ -72,18 +72,18 @@ final decode fails.
 - [`crates/pptx-parse/src/drawing.rs:159`](https://github.com/openooxml/betteroffice/blob/187cebc9ef5d414e4e65ccd96fe68b8f46c7f528/crates/pptx-parse/src/drawing.rs#L159) parses `<p:pic>`, resolving `r:embed` to a media
   part path at [`crates/pptx-parse/src/drawing.rs:176`](https://github.com/openooxml/betteroffice/blob/187cebc9ef5d414e4e65ccd96fe68b8f46c7f528/crates/pptx-parse/src/drawing.rs#L176).
 - Both layout paths emit a `Primitive::Image` carrying that path as `asset_id` —
-  [`crates/pptx-render/src/layout.rs:425`](https://github.com/dsaad68/betteroffice/blob/df1a57dae7a091ea9ca8176ca013274cced71fdd/crates/pptx-render/src/layout.rs#L425) (slide snapshot shapes) and
-  [`crates/pptx-render/src/layout.rs:534`](https://github.com/dsaad68/betteroffice/blob/df1a57dae7a091ea9ca8176ca013274cced71fdd/crates/pptx-render/src/layout.rs#L534) (layout/master shapes).
-- [`crates/pptx-raster/src/lib.rs:404`](https://github.com/dsaad68/betteroffice/blob/df1a57dae7a091ea9ca8176ca013274cced71fdd/crates/pptx-raster/src/lib.rs#L404) looks the asset up and calls `ImageCache::decode` at
-  [`crates/pptx-raster/src/lib.rs:733`](https://github.com/dsaad68/betteroffice/blob/df1a57dae7a091ea9ca8176ca013274cced71fdd/crates/pptx-raster/src/lib.rs#L733), which hands the bytes to
+  [`crates/pptx-render/src/layout.rs:425`](https://github.com/dsaad68/betteroffice/blob/a47dbde7498c781ab81b141e834da1950dcf4175/crates/pptx-render/src/layout.rs#L425) (slide snapshot shapes) and
+  [`crates/pptx-render/src/layout.rs:534`](https://github.com/dsaad68/betteroffice/blob/a47dbde7498c781ab81b141e834da1950dcf4175/crates/pptx-render/src/layout.rs#L534) (layout/master shapes).
+- [`crates/pptx-raster/src/lib.rs:404`](https://github.com/dsaad68/betteroffice/blob/a47dbde7498c781ab81b141e834da1950dcf4175/crates/pptx-raster/src/lib.rs#L404) looks the asset up and calls `ImageCache::decode` at
+  [`crates/pptx-raster/src/lib.rs:733`](https://github.com/dsaad68/betteroffice/blob/a47dbde7498c781ab81b141e834da1950dcf4175/crates/pptx-raster/src/lib.rs#L733), which hands the bytes to
   `image::ImageReader::with_guessed_format()` / `into_decoder()`
-  ([`crates/pptx-raster/src/lib.rs:736`](https://github.com/dsaad68/betteroffice/blob/df1a57dae7a091ea9ca8176ca013274cced71fdd/crates/pptx-raster/src/lib.rs#L736)-`740`). The `image` crate has no EMF or WMF support
+  ([`crates/pptx-raster/src/lib.rs:736`](https://github.com/dsaad68/betteroffice/blob/a47dbde7498c781ab81b141e834da1950dcf4175/crates/pptx-raster/src/lib.rs#L736)-`740`). The `image` crate has no EMF or WMF support
   at any feature level, and the enabled features are only `bmp, gif, jpeg, png, tiff,
-  webp` ([`crates/pptx-raster/Cargo.toml:18`](https://github.com/dsaad68/betteroffice/blob/df1a57dae7a091ea9ca8176ca013274cced71fdd/crates/pptx-raster/Cargo.toml#L18)-`25`), so `with_guessed_format` cannot
+  webp` ([`crates/pptx-raster/Cargo.toml:18`](https://github.com/dsaad68/betteroffice/blob/a47dbde7498c781ab81b141e834da1950dcf4175/crates/pptx-raster/Cargo.toml#L18)-`25`), so `with_guessed_format` cannot
   identify the stream and the `?` returns `None`.
-- [`crates/pptx-raster/src/lib.rs:426`](https://github.com/dsaad68/betteroffice/blob/df1a57dae7a091ea9ca8176ca013274cced71fdd/crates/pptx-raster/src/lib.rs#L426) turns that `None` into `skipped_images += 1` and
+- [`crates/pptx-raster/src/lib.rs:426`](https://github.com/dsaad68/betteroffice/blob/a47dbde7498c781ab81b141e834da1950dcf4175/crates/pptx-raster/src/lib.rs#L426) turns that `None` into `skipped_images += 1` and
   paints nothing. This is deliberate degradation, documented at
-  [`crates/pptx-raster/README.md:62`](https://github.com/dsaad68/betteroffice/blob/df1a57dae7a091ea9ca8176ca013274cced71fdd/crates/pptx-raster/README.md#L62)-`64`.
+  [`crates/pptx-raster/README.md:62`](https://github.com/dsaad68/betteroffice/blob/a47dbde7498c781ab81b141e834da1950dcf4175/crates/pptx-raster/README.md#L62)-`64`.
 - The browser backend is in the same position: [`packages/pptx/src/render/canvas.ts:206`](https://github.com/openooxml/betteroffice/blob/187cebc9ef5d414e4e65ccd96fe68b8f46c7f528/packages/pptx/src/render/canvas.ts#L206)
   hands `assetId` to a host-supplied `CanvasImageResolver`, and no browser
   `CanvasImageSource` can be built from EMF/WMF bytes either. A fix that lives only in
@@ -105,10 +105,10 @@ no non-metafile picture is skipped anywhere.
   `<a:graphicData uri=".../presentationml/2006/ole">`, falls into
   `GraphicFrameData::Unknown` at [`crates/pptx-parse/src/drawing.rs:240`](https://github.com/openooxml/betteroffice/blob/187cebc9ef5d414e4e65ccd96fe68b8f46c7f528/crates/pptx-parse/src/drawing.rs#L240), keeping only the
   URI string.
-- [`crates/pptx-render/src/layout.rs:593`](https://github.com/dsaad68/betteroffice/blob/df1a57dae7a091ea9ca8176ca013274cced71fdd/crates/pptx-render/src/layout.rs#L593) (`render_graphic_frame`) only special-cases chart
+- [`crates/pptx-render/src/layout.rs:593`](https://github.com/dsaad68/betteroffice/blob/a47dbde7498c781ab81b141e834da1950dcf4175/crates/pptx-render/src/layout.rs#L593) (`render_graphic_frame`) only special-cases chart
   spaces; everything else pushes a `Primitive::Placeholder` at
-  [`crates/pptx-render/src/layout.rs:625`](https://github.com/dsaad68/betteroffice/blob/df1a57dae7a091ea9ca8176ca013274cced71fdd/crates/pptx-render/src/layout.rs#L625) with `label: None` (`graphic_label` at
-  [`crates/pptx-render/src/layout.rs:1960`](https://github.com/dsaad68/betteroffice/blob/df1a57dae7a091ea9ca8176ca013274cced71fdd/crates/pptx-render/src/layout.rs#L1960) returns `None` for `Unknown`), which is the
+  [`crates/pptx-render/src/layout.rs:625`](https://github.com/dsaad68/betteroffice/blob/a47dbde7498c781ab81b141e834da1950dcf4175/crates/pptx-render/src/layout.rs#L625) with `label: None` (`graphic_label` at
+  [`crates/pptx-render/src/layout.rs:1960`](https://github.com/dsaad68/betteroffice/blob/a47dbde7498c781ab81b141e834da1950dcf4175/crates/pptx-render/src/layout.rs#L1960) returns `None` for `Unknown`), which is the
   dashed empty box in `evidence-3.png`.
 - Separately, `parse_shape_children` ([`crates/pptx-parse/src/drawing.rs:101`](https://github.com/openooxml/betteroffice/blob/187cebc9ef5d414e4e65ccd96fe68b8f46c7f528/crates/pptx-parse/src/drawing.rs#L101)) dispatches on
   `local_name()` and has no `mc:AlternateContent` arm, so any picture wrapped in
@@ -122,7 +122,7 @@ claims the full-bleed `image1.jpeg` is not drawn; the black slide has a differen
 deck with the single shape `Rectangle 109` deleted from `slide1.xml` — a full-slide
 `<a:solidFill><a:schemeClr val="tx1"><a:alpha val="33000"/>` scrim — makes the photo
 appear correctly. `a:alpha` is dropped on the way to the display list: every pptx call site
-uses `resolve_color_value_to_hex_with_theme` ([`crates/pptx-render/src/layout.rs:1049`](https://github.com/dsaad68/betteroffice/blob/df1a57dae7a091ea9ca8176ca013274cced71fdd/crates/pptx-render/src/layout.rs#L1049),
+uses `resolve_color_value_to_hex_with_theme` ([`crates/pptx-render/src/layout.rs:1049`](https://github.com/dsaad68/betteroffice/blob/a47dbde7498c781ab81b141e834da1950dcf4175/crates/pptx-render/src/layout.rs#L1049),
 `:1854`, `:1914`, `:1926`, `:1931`), and `resolve_color_value_to_rgba_hex`
 ([`crates/ooxml-drawingml/src/color.rs:91`](https://github.com/openooxml/betteroffice/blob/187cebc9ef5d414e4e65ccd96fe68b8f46c7f528/crates/ooxml-drawingml/src/color.rs#L91)) has no non-test caller in the repo, so the
 33%-black scrim paints fully opaque over the photo. This belongs with
@@ -159,9 +159,9 @@ picture is exactly what PowerPoint and LibreOffice paint for a non-activated OLE
   `Unknown` arm, look for a `pic` descendant under `graphicData` and, when found, run the
   existing `parse_picture` on it. Store it as a new `GraphicFrameData::Ole { picture:
   Box<Picture> }` in [`crates/pptx-parse/src/model.rs:243`](https://github.com/openooxml/betteroffice/blob/187cebc9ef5d414e4e65ccd96fe68b8f46c7f528/crates/pptx-parse/src/model.rs#L243).
-- In `render_graphic_frame` ([`crates/pptx-render/src/layout.rs:593`](https://github.com/dsaad68/betteroffice/blob/df1a57dae7a091ea9ca8176ca013274cced71fdd/crates/pptx-render/src/layout.rs#L593)), add an arm that
+- In `render_graphic_frame` ([`crates/pptx-render/src/layout.rs:593`](https://github.com/dsaad68/betteroffice/blob/a47dbde7498c781ab81b141e834da1950dcf4175/crates/pptx-render/src/layout.rs#L593)), add an arm that
   pushes the same `Primitive::Image` the `ShapeNode::Picture` arm builds
-  ([`crates/pptx-render/src/layout.rs:534`](https://github.com/dsaad68/betteroffice/blob/df1a57dae7a091ea9ca8176ca013274cced71fdd/crates/pptx-render/src/layout.rs#L534)), using the frame's own rect rather than the
+  ([`crates/pptx-render/src/layout.rs:534`](https://github.com/dsaad68/betteroffice/blob/a47dbde7498c781ab81b141e834da1950dcf4175/crates/pptx-render/src/layout.rs#L534)), using the frame's own rect rather than the
   nested `p:pic`'s `a:xfrm` — the graphic frame is authoritative for placement.
 - Give `parse_shape_children` ([`crates/pptx-parse/src/drawing.rs:101`](https://github.com/openooxml/betteroffice/blob/187cebc9ef5d414e4e65ccd96fe68b8f46c7f528/crates/pptx-parse/src/drawing.rs#L101)) an
   `"AlternateContent"` arm that recurses into `mc:Fallback` (then `mc:Choice`), so
@@ -172,14 +172,14 @@ picture is exactly what PowerPoint and LibreOffice paint for a non-activated OLE
 ### Part B — a metafile interpreter that emits display-list primitives (hard)
 
 Decoding must not live in `pptx-raster`: that crate never compiles for wasm
-([`crates/pptx-raster/README.md:38`](https://github.com/dsaad68/betteroffice/blob/df1a57dae7a091ea9ca8176ca013274cced71fdd/crates/pptx-raster/README.md#L38)-`42`) and the browser path goes through a host
+([`crates/pptx-raster/README.md:38`](https://github.com/dsaad68/betteroffice/blob/a47dbde7498c781ab81b141e834da1950dcf4175/crates/pptx-raster/README.md#L38)-`42`) and the browser path goes through a host
 `CanvasImageResolver` ([`packages/pptx/src/render/canvas.ts:206`](https://github.com/openooxml/betteroffice/blob/187cebc9ef5d414e4e65ccd96fe68b8f46c7f528/packages/pptx/src/render/canvas.ts#L206)) that cannot handle
 metafile bytes either. Put the interpreter in a new wasm-safe crate (say
 `ooxml-metafile`) that turns EMF/WMF bytes into the primitives the contract already has,
 and call it from the layout pass so both backends get the artwork for free.
 
 `Primitive::Shape` is a good target: its `path` is `Vec<GeometryPathCommand>` in
-0..1 coordinates relative to the shape frame ([`crates/pptx-raster/src/lib.rs:575`](https://github.com/dsaad68/betteroffice/blob/df1a57dae7a091ea9ca8176ca013274cced71fdd/crates/pptx-raster/src/lib.rs#L575)-`600`),
+0..1 coordinates relative to the shape frame ([`crates/pptx-raster/src/lib.rs:575`](https://github.com/dsaad68/betteroffice/blob/a47dbde7498c781ab81b141e834da1950dcf4175/crates/pptx-raster/src/lib.rs#L575)-`600`),
 which is exactly what an EMF's window/viewport mapping normalises to.
 
 - Detect metafiles by media content type, which `MediaPart` already carries
@@ -232,15 +232,15 @@ Risks and tests to add:
   `packages/pptx/src/render/canvas.ts`. Bumping `CONTRACT_VERSION` touches every consumer.
 - **Primitive count.** rollout-plan `image7.emf` alone contains 116 fill/stroke groups; a
   slide with several EMFs could add thousands of primitives. Budget it the way charts are
-  budgeted (`chart_budget`, [`crates/pptx-render/src/layout.rs:620`](https://github.com/dsaad68/betteroffice/blob/df1a57dae7a091ea9ca8176ca013274cced71fdd/crates/pptx-render/src/layout.rs#L620)), and treat a metafile
+  budgeted (`chart_budget`, [`crates/pptx-render/src/layout.rs:620`](https://github.com/dsaad68/betteroffice/blob/a47dbde7498c781ab81b141e834da1950dcf4175/crates/pptx-render/src/layout.rs#L620)), and treat a metafile
   that blows the budget as today's skip.
 - **Fuzz surface.** A record interpreter reading offsets and counts out of untrusted bytes
   needs the same defensive posture as the existing decode budgets in
-  [`crates/pptx-raster/src/lib.rs:733`](https://github.com/dsaad68/betteroffice/blob/df1a57dae7a091ea9ca8176ca013274cced71fdd/crates/pptx-raster/src/lib.rs#L733)-`765`, plus a fuzz target.
+  [`crates/pptx-raster/src/lib.rs:733`](https://github.com/dsaad68/betteroffice/blob/a47dbde7498c781ab81b141e834da1950dcf4175/crates/pptx-raster/src/lib.rs#L733)-`765`, plus a fuzz target.
 - **`skipped_images` semantics.** Once metafiles route through layout, they stop passing
   through `ImageCache::decode`, so `skipped_images` no longer counts them; the golden
-  assertion at [`crates/pptx-raster/tests/golden.rs:31`](https://github.com/dsaad68/betteroffice/blob/df1a57dae7a091ea9ca8176ca013274cced71fdd/crates/pptx-raster/tests/golden.rs#L31) and
-  [`crates/pptx-raster/README.md:62`](https://github.com/dsaad68/betteroffice/blob/df1a57dae7a091ea9ca8176ca013274cced71fdd/crates/pptx-raster/README.md#L62)-`64` need updating.
+  assertion at [`crates/pptx-raster/tests/golden.rs:31`](https://github.com/dsaad68/betteroffice/blob/a47dbde7498c781ab81b141e834da1950dcf4175/crates/pptx-raster/tests/golden.rs#L31) and
+  [`crates/pptx-raster/README.md:62`](https://github.com/dsaad68/betteroffice/blob/a47dbde7498c781ab81b141e834da1950dcf4175/crates/pptx-raster/README.md#L62)-`64` need updating.
 - Tests to add: unit tests per record group in the new crate against small hand-built
   EMFs; a `pptx-raster` golden that paints one small committed EMF end to end; a parse test
   for the OLE fallback shape asserting the frame yields a picture, not an `Unknown`.
@@ -260,10 +260,10 @@ Risks and tests to add:
   dashed placeholder disappearing as the pass condition rather than the counter.
 - `green-solutions/01` will not improve from this issue; it improves when
   `fill-alpha-modifier-ignored` lands.
-- Existing coverage to extend: [`crates/pptx-raster/tests/golden.rs:31`](https://github.com/dsaad68/betteroffice/blob/df1a57dae7a091ea9ca8176ca013274cced71fdd/crates/pptx-raster/tests/golden.rs#L31) already asserts
+- Existing coverage to extend: [`crates/pptx-raster/tests/golden.rs:31`](https://github.com/dsaad68/betteroffice/blob/a47dbde7498c781ab81b141e834da1950dcf4175/crates/pptx-raster/tests/golden.rs#L31) already asserts
   `skipped_images == 0` for every golden scenario, so a golden that paints a small EMF
   becomes a regression test for free. `a_missing_asset_is_skipped_and_counted`
-  ([`crates/pptx-raster/src/lib.rs:854`](https://github.com/dsaad68/betteroffice/blob/df1a57dae7a091ea9ca8176ca013274cced71fdd/crates/pptx-raster/src/lib.rs#L854)) is the matching negative case and must keep passing
+  ([`crates/pptx-raster/src/lib.rs:854`](https://github.com/dsaad68/betteroffice/blob/a47dbde7498c781ab81b141e834da1950dcf4175/crates/pptx-raster/src/lib.rs#L854)) is the matching negative case and must keep passing
   for genuinely undecodable bytes.
 
 **Additional context**
@@ -274,4 +274,17 @@ Related issues found in the same run: `fill-alpha-modifier-ignored`
 
 Files most likely involved: `crates/pptx-raster/Cargo.toml`, `crates/pptx-raster/src/lib.rs`, `crates/pptx-raster/README.md`, `crates/pptx-parse/src/drawing.rs`, `crates/pptx-parse/src/model.rs`, `crates/pptx-render/src/layout.rs`, `crates/pptx-render/src/lib.rs`, `crates/pptx-render/src/display_list.rs`, `packages/pptx/src/types.ts`, `packages/pptx/src/render/canvas.ts`
 
-Found with a comparison harness that renders decks with both engines, pixel-diffs them, and traces each difference back to the OOXML and the code path. Full report with all findings: https://github.com/dsaad68/betteroffice/blob/harness/pptx-render-improvement/render-improvement-harness/issues/picture-fill-fails-to-render/report.md. Methodology: https://gist.github.com/dsaad68/038b63c2977aeca16fc873c2df1152d0. Line numbers link to the exact commit they were checked against.
+**How this was found**
+
+A comparison harness renders each deck twice, once with LibreOffice and once with BetterOffice,
+pixel-diffs the two images slide by slide, and traces every visible difference back to the OOXML
+and to the code path responsible. Reference renders come from LibreOffice through
+[pptx-pdf](https://github.com/dsaad68/pptx-pdf), a single binary with LibreOffice embedded, at 96 dpi. Both engines
+are given the same Liberation, Carlito and Caladea faces under the family names the decks ask for,
+so a difference in text metrics is a real difference and not font substitution.
+
+- Harness, with the per-slide reports and all 35 issues this run produced: https://github.com/dsaad68/betteroffice/tree/harness/pptx-render-improvement/render-improvement-harness
+- Full report behind this issue, with every finding, the evidence table and the proposed fix: https://github.com/dsaad68/betteroffice/blob/harness/pptx-render-improvement/render-improvement-harness/issues/picture-fill-fails-to-render/report.md
+- How the harness works and why it is built this way: https://gist.github.com/dsaad68/038b63c2977aeca16fc873c2df1152d0
+
+Line numbers link to the exact commit they were checked against.

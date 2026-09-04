@@ -53,11 +53,11 @@ Match the reference render. PowerPoint and LibreOffice agree on this behaviour; 
 `b="1"` is parsed into `RunProperties::bold` ([`crates/pptx-parse/src/drawing.rs:910`](https://github.com/openooxml/betteroffice/blob/187cebc9ef5d414e4e65ccd96fe68b8f46c7f528/crates/pptx-parse/src/drawing.rs#L910),
 [`crates/pptx-parse/src/model.rs:340`](https://github.com/openooxml/betteroffice/blob/187cebc9ef5d414e4e65ccd96fe68b8f46c7f528/crates/pptx-parse/src/model.rs#L340)) and copied into the snapshot's `TextStyle::bold`
 ([`crates/pptx-edit/src/story.rs:645`](https://github.com/openooxml/betteroffice/blob/187cebc9ef5d414e4e65ccd96fe68b8f46c7f528/crates/pptx-edit/src/story.rs#L645), [`crates/pptx-edit/src/model.rs:37`](https://github.com/openooxml/betteroffice/blob/187cebc9ef5d414e4e65ccd96fe68b8f46c7f528/crates/pptx-edit/src/model.rs#L37)). It survives the cascade:
-[`crates/pptx-render/src/layout.rs:1016`](https://github.com/dsaad68/betteroffice/blob/055655e1420d752234a26f0f7f5c16efc5cb40ff/crates/pptx-render/src/layout.rs#L1016) resolves the effective `bold` and
-[`crates/pptx-render/src/layout.rs:1041`](https://github.com/dsaad68/betteroffice/blob/055655e1420d752234a26f0f7f5c16efc5cb40ff/crates/pptx-render/src/layout.rs#L1041) passes it to `resolve_face`. The flag is not lost on the
+[`crates/pptx-render/src/layout.rs:1016`](https://github.com/dsaad68/betteroffice/blob/a47dbde7498c781ab81b141e834da1950dcf4175/crates/pptx-render/src/layout.rs#L1016) resolves the effective `bold` and
+[`crates/pptx-render/src/layout.rs:1041`](https://github.com/dsaad68/betteroffice/blob/a47dbde7498c781ab81b141e834da1950dcf4175/crates/pptx-render/src/layout.rs#L1041) passes it to `resolve_face`. The flag is not lost on the
 way in.
 
-`SlideRenderer::resolve_face` ([`crates/pptx-render/src/layout.rs:245`](https://github.com/dsaad68/betteroffice/blob/055655e1420d752234a26f0f7f5c16efc5cb40ff/crates/pptx-render/src/layout.rs#L245)) is where the weight is
+`SlideRenderer::resolve_face` ([`crates/pptx-render/src/layout.rs:245`](https://github.com/dsaad68/betteroffice/blob/a47dbde7498c781ab81b141e834da1950dcf4175/crates/pptx-render/src/layout.rs#L245)) is where the weight is
 thrown away:
 
 ```rust
@@ -68,16 +68,16 @@ self.faces
 ```
 
 `self.fallback` is a single `FontFace` set to whichever face was registered first
-([`crates/pptx-render/src/layout.rs:111`](https://github.com/dsaad68/betteroffice/blob/055655e1420d752234a26f0f7f5c16efc5cb40ff/crates/pptx-render/src/layout.rs#L111)), with no memory of its bold/italic key. So when the
+([`crates/pptx-render/src/layout.rs:111`](https://github.com/dsaad68/betteroffice/blob/a47dbde7498c781ab81b141e834da1950dcf4175/crates/pptx-render/src/layout.rs#L111)), with no memory of its bold/italic key. So when the
 requested family is absent from `self.faces` — the case in every finding here — both lookups miss
 and every run, bold or not, lands on that one face. Line 254 drops the weight a second time for
 the case where the family is registered but only in regular.
 
-`normalize_family` is a lowercase-and-trim ([`crates/pptx-render/src/layout.rs:1978`](https://github.com/dsaad68/betteroffice/blob/055655e1420d752234a26f0f7f5c16efc5cb40ff/crates/pptx-render/src/layout.rs#L1978)) and there is
+`normalize_family` is a lowercase-and-trim ([`crates/pptx-render/src/layout.rs:1978`](https://github.com/dsaad68/betteroffice/blob/a47dbde7498c781ab81b141e834da1950dcf4175/crates/pptx-render/src/layout.rs#L1978)) and there is
 no family aliasing anywhere, so `Segoe UI` never reaches a registered face under another name.
 
 The face chosen here is the only thing that decides the rasterized weight: layout shapes with
-`run.style.face.id` ([`crates/pptx-render/src/layout.rs:1383`](https://github.com/dsaad68/betteroffice/blob/055655e1420d752234a26f0f7f5c16efc5cb40ff/crates/pptx-render/src/layout.rs#L1383)) and `crates/pptx-raster/src/font.rs`
+`run.style.face.id` ([`crates/pptx-render/src/layout.rs:1383`](https://github.com/dsaad68/betteroffice/blob/a47dbde7498c781ab81b141e834da1950dcf4175/crates/pptx-render/src/layout.rs#L1383)) and `crates/pptx-raster/src/font.rs`
 only fills the glyph outlines it is handed — there is no synthetic emboldening.
 
 Confirmed by experiment, not by reading alone. Rendering project20 slide 4 twice through
@@ -116,12 +116,12 @@ belongs with the autofit cluster.
 **Suggested fix**
 
 Make the substitute face style-aware. `SlideRenderer` keeps one `fallback: Option<FontFace>`
-([`crates/pptx-render/src/layout.rs:60`](https://github.com/dsaad68/betteroffice/blob/055655e1420d752234a26f0f7f5c16efc5cb40ff/crates/pptx-render/src/layout.rs#L60), set at `:111`), which is the first face registered and
+([`crates/pptx-render/src/layout.rs:60`](https://github.com/dsaad68/betteroffice/blob/a47dbde7498c781ab81b141e834da1950dcf4175/crates/pptx-render/src/layout.rs#L60), set at `:111`), which is the first face registered and
 carries no style. Replace it with the normalized family name of the first registration
 (`fallback_family: Option<String>`) so `resolve_face` can look the fallback family up in
 `self.faces` at the requested `(bold, italic)`.
 
-`resolve_face` ([`crates/pptx-render/src/layout.rs:245`](https://github.com/dsaad68/betteroffice/blob/055655e1420d752234a26f0f7f5c16efc5cb40ff/crates/pptx-render/src/layout.rs#L245)) then walks a chain that degrades family
+`resolve_face` ([`crates/pptx-render/src/layout.rs:245`](https://github.com/dsaad68/betteroffice/blob/a47dbde7498c781ab81b141e834da1950dcf4175/crates/pptx-render/src/layout.rs#L245)) then walks a chain that degrades family
 before it degrades style, and degrades italic before weight:
 
 1. `(family, bold, italic)`
@@ -133,7 +133,7 @@ Step 3 is what fixes all 15 findings: the harness and every real host register a
 their default family, so `Segoe UI` + bold reaches Liberation Sans Bold instead of Liberation
 Sans Regular.
 
-`fallback_font` ([`crates/pptx-render/src/layout.rs:124`](https://github.com/dsaad68/betteroffice/blob/055655e1420d752234a26f0f7f5c16efc5cb40ff/crates/pptx-render/src/layout.rs#L124)) is public and used by the raster
+`fallback_font` ([`crates/pptx-render/src/layout.rs:124`](https://github.com/dsaad68/betteroffice/blob/a47dbde7498c781ab81b141e834da1950dcf4175/crates/pptx-render/src/layout.rs#L124)) is public and used by the raster
 backend for its placeholder labels; keep it returning the first registered face's id so that
 callers do not change.
 
@@ -205,7 +205,7 @@ ocp-psp-plan/02 (14.25), project17/07 (13.83, only if the `+mj-lt` note above is
 project20/05 (52.06) and rollout-plan/03 (44.94) are dominated by other clusters and should
 improve only slightly. No slide should regress.
 
-There is no existing coverage: [`crates/pptx-render/src/layout.rs:2018`](https://github.com/dsaad68/betteroffice/blob/055655e1420d752234a26f0f7f5c16efc5cb40ff/crates/pptx-render/src/layout.rs#L2018) registers `Arial` in both
+There is no existing coverage: [`crates/pptx-render/src/layout.rs:2018`](https://github.com/dsaad68/betteroffice/blob/a47dbde7498c781ab81b141e834da1950dcf4175/crates/pptx-render/src/layout.rs#L2018) registers `Arial` in both
 weights but nothing asserts what an unregistered family resolves to, and
 `crates/pptx-raster/tests/golden.rs` only exercises `bold: false`. Unit tests on `resolve_face`
 belong in the `layout.rs` test module; a bold golden image under
@@ -219,4 +219,17 @@ Related issues found in the same run: none.
 
 Files most likely involved: `crates/pptx-render/src/layout.rs`, `crates/ooxml-drawingml/src/theme.rs`
 
-Found with a comparison harness that renders decks with both engines, pixel-diffs them, and traces each difference back to the OOXML and the code path. Full report with all findings: https://github.com/dsaad68/betteroffice/blob/harness/pptx-render-improvement/render-improvement-harness/issues/text-run-props-bold-ignored/report.md. Methodology: https://gist.github.com/dsaad68/038b63c2977aeca16fc873c2df1152d0. Line numbers link to the exact commit they were checked against.
+**How this was found**
+
+A comparison harness renders each deck twice, once with LibreOffice and once with BetterOffice,
+pixel-diffs the two images slide by slide, and traces every visible difference back to the OOXML
+and to the code path responsible. Reference renders come from LibreOffice through
+[pptx-pdf](https://github.com/dsaad68/pptx-pdf), a single binary with LibreOffice embedded, at 96 dpi. Both engines
+are given the same Liberation, Carlito and Caladea faces under the family names the decks ask for,
+so a difference in text metrics is a real difference and not font substitution.
+
+- Harness, with the per-slide reports and all 35 issues this run produced: https://github.com/dsaad68/betteroffice/tree/harness/pptx-render-improvement/render-improvement-harness
+- Full report behind this issue, with every finding, the evidence table and the proposed fix: https://github.com/dsaad68/betteroffice/blob/harness/pptx-render-improvement/render-improvement-harness/issues/text-run-props-bold-ignored/report.md
+- How the harness works and why it is built this way: https://gist.github.com/dsaad68/038b63c2977aeca16fc873c2df1152d0
+
+Line numbers link to the exact commit they were checked against.

@@ -58,4 +58,17 @@ Related issues found in the same run: {{related}}
 
 Files most likely involved: {{files}}
 
-Found with a comparison harness that renders decks with both engines, pixel-diffs them, and traces each difference back to the OOXML and the code path. Full report with all findings: {{report_link}}. Methodology: {{gist_link}}. Line numbers link to the exact commit they were checked against.
+**How this was found**
+
+A comparison harness renders each deck twice, once with LibreOffice and once with BetterOffice,
+pixel-diffs the two images slide by slide, and traces every visible difference back to the OOXML
+and to the code path responsible. Reference renders come from LibreOffice through
+[pptx-pdf]({{pptx_pdf_link}}), a single binary with LibreOffice embedded, at 96 dpi. Both engines
+are given the same Liberation, Carlito and Caladea faces under the family names the decks ask for,
+so a difference in text metrics is a real difference and not font substitution.
+
+- Harness, with the per-slide reports and all {{cluster_count}} issues this run produced: {{harness_link}}
+- Full report behind this issue, with every finding, the evidence table and the proposed fix: {{report_link}}
+- How the harness works and why it is built this way: {{gist_link}}
+
+Line numbers link to the exact commit they were checked against.

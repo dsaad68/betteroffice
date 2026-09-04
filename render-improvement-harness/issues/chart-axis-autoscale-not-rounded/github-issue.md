@@ -369,7 +369,7 @@ inside its lane:
   infinite span does not escape.
 
 `crates/pptx-raster/tests/golden/chart.png` is *not* affected: `golden_chart`
-([`crates/pptx-raster/tests/golden.rs:346`](https://github.com/dsaad68/betteroffice/blob/df1a57dae7a091ea9ca8176ca013274cced71fdd/crates/pptx-raster/tests/golden.rs#L346)) hand-builds its primitives and never calls
+([`crates/pptx-raster/tests/golden.rs:346`](https://github.com/dsaad68/betteroffice/blob/a47dbde7498c781ab81b141e834da1950dcf4175/crates/pptx-raster/tests/golden.rs#L346)) hand-builds its primitives and never calls
 `plot_chart_into`. `crates/xlsx-render/tests/snapshots/chart_display_list.json` is a pie chart and
 carries no tick labels.
 
@@ -384,4 +384,17 @@ Related issues found in the same run: `chart-axis-position-swapped`, `chart-dlbl
 
 Files most likely involved: `crates/ooxml-drawingml/src/chart/geometry.rs`, `crates/docx-layout/tests/chart_snapshots.rs`
 
-Found with a comparison harness that renders decks with both engines, pixel-diffs them, and traces each difference back to the OOXML and the code path. Full report with all findings: https://github.com/dsaad68/betteroffice/blob/harness/pptx-render-improvement/render-improvement-harness/issues/chart-axis-autoscale-not-rounded/report.md. Methodology: https://gist.github.com/dsaad68/038b63c2977aeca16fc873c2df1152d0. Line numbers link to the exact commit they were checked against.
+**How this was found**
+
+A comparison harness renders each deck twice, once with LibreOffice and once with BetterOffice,
+pixel-diffs the two images slide by slide, and traces every visible difference back to the OOXML
+and to the code path responsible. Reference renders come from LibreOffice through
+[pptx-pdf](https://github.com/dsaad68/pptx-pdf), a single binary with LibreOffice embedded, at 96 dpi. Both engines
+are given the same Liberation, Carlito and Caladea faces under the family names the decks ask for,
+so a difference in text metrics is a real difference and not font substitution.
+
+- Harness, with the per-slide reports and all 35 issues this run produced: https://github.com/dsaad68/betteroffice/tree/harness/pptx-render-improvement/render-improvement-harness
+- Full report behind this issue, with every finding, the evidence table and the proposed fix: https://github.com/dsaad68/betteroffice/blob/harness/pptx-render-improvement/render-improvement-harness/issues/chart-axis-autoscale-not-rounded/report.md
+- How the harness works and why it is built this way: https://gist.github.com/dsaad68/038b63c2977aeca16fc873c2df1152d0
+
+Line numbers link to the exact commit they were checked against.

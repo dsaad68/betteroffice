@@ -70,14 +70,14 @@ Two separate gaps, both confirmed against the XML.
 [`crates/pptx-parse/src/drawing.rs:853-867`](https://github.com/openooxml/betteroffice/blob/187cebc9ef5d414e4e65ccd96fe68b8f46c7f528/crates/pptx-parse/src/drawing.rs#L853-L867), stored at [`crates/pptx-parse/src/drawing.rs:876`](https://github.com/openooxml/betteroffice/blob/187cebc9ef5d414e4e65ccd96fe68b8f46c7f528/crates/pptx-parse/src/drawing.rs#L876),
 with `marL` / `indent` alongside at [`crates/pptx-parse/src/drawing.rs:874-875`](https://github.com/openooxml/betteroffice/blob/187cebc9ef5d414e4e65ccd96fe68b8f46c7f528/crates/pptx-parse/src/drawing.rs#L874-L875). The render
 cascade merges all three through the master → layout → slide chain
-([`crates/pptx-render/src/layout.rs:808-828`](https://github.com/dsaad68/betteroffice/blob/df1a57dae7a091ea9ca8176ca013274cced71fdd/crates/pptx-render/src/layout.rs#L808-L828), field-by-field merge at
-[`crates/pptx-render/src/layout.rs:1808-1816`](https://github.com/dsaad68/betteroffice/blob/df1a57dae7a091ea9ca8176ca013274cced71fdd/crates/pptx-render/src/layout.rs#L1808-L1816)).
+([`crates/pptx-render/src/layout.rs:808-828`](https://github.com/dsaad68/betteroffice/blob/a47dbde7498c781ab81b141e834da1950dcf4175/crates/pptx-render/src/layout.rs#L808-L828), field-by-field merge at
+[`crates/pptx-render/src/layout.rs:1808-1816`](https://github.com/dsaad68/betteroffice/blob/a47dbde7498c781ab81b141e834da1950dcf4175/crates/pptx-render/src/layout.rs#L1808-L1816)).
 
-The value dies at [`crates/pptx-render/src/layout.rs:994-1004`](https://github.com/dsaad68/betteroffice/blob/df1a57dae7a091ea9ca8176ca013274cced71fdd/crates/pptx-render/src/layout.rs#L994-L1004): `ResolvedParagraph`
-([`crates/pptx-render/src/layout.rs:910-915`](https://github.com/dsaad68/betteroffice/blob/df1a57dae7a091ea9ca8176ca013274cced71fdd/crates/pptx-render/src/layout.rs#L910-L915)) has exactly one geometry field, `margin_left_px`,
+The value dies at [`crates/pptx-render/src/layout.rs:994-1004`](https://github.com/dsaad68/betteroffice/blob/a47dbde7498c781ab81b141e834da1950dcf4175/crates/pptx-render/src/layout.rs#L994-L1004): `ResolvedParagraph`
+([`crates/pptx-render/src/layout.rs:910-915`](https://github.com/dsaad68/betteroffice/blob/a47dbde7498c781ab81b141e834da1950dcf4175/crates/pptx-render/src/layout.rs#L910-L915)) has exactly one geometry field, `margin_left_px`,
 and no bullet field at all. `layout_content` therefore only shifts the paragraph box right by
-`marL` ([`crates/pptx-render/src/layout.rs:1177-1178`](https://github.com/dsaad68/betteroffice/blob/df1a57dae7a091ea9ca8176ca013274cced71fdd/crates/pptx-render/src/layout.rs#L1177-L1178)) and `layout_paragraph` shapes nothing but
-the run text ([`crates/pptx-render/src/layout.rs:1192-1265`](https://github.com/dsaad68/betteroffice/blob/df1a57dae7a091ea9ca8176ca013274cced71fdd/crates/pptx-render/src/layout.rs#L1192-L1265)). Grepping `bullet` across
+`marL` ([`crates/pptx-render/src/layout.rs:1177-1178`](https://github.com/dsaad68/betteroffice/blob/a47dbde7498c781ab81b141e834da1950dcf4175/crates/pptx-render/src/layout.rs#L1177-L1178)) and `layout_paragraph` shapes nothing but
+the run text ([`crates/pptx-render/src/layout.rs:1192-1265`](https://github.com/dsaad68/betteroffice/blob/a47dbde7498c781ab81b141e834da1950dcf4175/crates/pptx-render/src/layout.rs#L1192-L1265)). Grepping `bullet` across
 `crates/pptx-render`, `crates/pptx-raster`, `crates/ooxml-drawingml` and `crates/ooxml-text`
 returns only the two merge lines above — no consumer exists downstream. Parsed and ignored.
 
@@ -99,7 +99,7 @@ to the text colour, so this is a fidelity detail rather than the cause of the bl
 a bullet drawn in the run's own font at the run's own size will be visibly wrong for decks that
 use Wingdings dingbats.
 
-Painting is not the problem: `paint_lines` ([`crates/pptx-raster/src/font.rs:47-68`](https://github.com/dsaad68/betteroffice/blob/df1a57dae7a091ea9ca8176ca013274cced71fdd/crates/pptx-raster/src/font.rs#L47-L68)) walks
+Painting is not the problem: `paint_lines` ([`crates/pptx-raster/src/font.rs:47-68`](https://github.com/dsaad68/betteroffice/blob/a47dbde7498c781ab81b141e834da1950dcf4175/crates/pptx-raster/src/font.rs#L47-L68)) walks
 `line.runs`, so a synthetic bullet run appended to the first line of each paragraph renders with
 no raster change.
 
@@ -117,22 +117,22 @@ nine-slot vector. `parse_style_levels` is private to `drawing.rs`, so no visibil
 needed. `text-inheritance-layout-lststyle-ignored` needs this same field, so land it once.
 
 **Consult it in the cascade.** In `BodyCascade::paragraph_properties`
-([`crates/pptx-render/src/layout.rs:808-828`](https://github.com/dsaad68/betteroffice/blob/df1a57dae7a091ea9ca8176ca013274cced71fdd/crates/pptx-render/src/layout.rs#L808-L828)), merge each body's `list_style[level]` before that
+([`crates/pptx-render/src/layout.rs:808-828`](https://github.com/dsaad68/betteroffice/blob/a47dbde7498c781ab81b141e834da1950dcf4175/crates/pptx-render/src/layout.rs#L808-L828)), merge each body's `list_style[level]` before that
 body's own paragraph, keeping master → layout → primary order. The existing
-`merge_paragraph_properties` ([`crates/pptx-render/src/layout.rs:1804`](https://github.com/dsaad68/betteroffice/blob/df1a57dae7a091ea9ca8176ca013274cced71fdd/crates/pptx-render/src/layout.rs#L1804)) already does the
+`merge_paragraph_properties` ([`crates/pptx-render/src/layout.rs:1804`](https://github.com/dsaad68/betteroffice/blob/a47dbde7498c781ab81b141e834da1950dcf4175/crates/pptx-render/src/layout.rs#L1804)) already does the
 field-wise override, so nothing else moves.
 
 **Carry the bullet into layout and emit it as a run.** Add `bullet: Option<Bullet>` and
-`indent_px: f32` to `ResolvedParagraph` ([`crates/pptx-render/src/layout.rs:910-915`](https://github.com/dsaad68/betteroffice/blob/df1a57dae7a091ea9ca8176ca013274cced71fdd/crates/pptx-render/src/layout.rs#L910-L915)), populated
-at [`crates/pptx-render/src/layout.rs:994-1004`](https://github.com/dsaad68/betteroffice/blob/df1a57dae7a091ea9ca8176ca013274cced71fdd/crates/pptx-render/src/layout.rs#L994-L1004) next to `margin_left_px`. In `layout_paragraph`
-([`crates/pptx-render/src/layout.rs:1192`](https://github.com/dsaad68/betteroffice/blob/df1a57dae7a091ea9ca8176ca013274cced71fdd/crates/pptx-render/src/layout.rs#L1192)), when the paragraph resolves to
+`indent_px: f32` to `ResolvedParagraph` ([`crates/pptx-render/src/layout.rs:910-915`](https://github.com/dsaad68/betteroffice/blob/a47dbde7498c781ab81b141e834da1950dcf4175/crates/pptx-render/src/layout.rs#L910-L915)), populated
+at [`crates/pptx-render/src/layout.rs:994-1004`](https://github.com/dsaad68/betteroffice/blob/a47dbde7498c781ab81b141e834da1950dcf4175/crates/pptx-render/src/layout.rs#L994-L1004) next to `margin_left_px`. In `layout_paragraph`
+([`crates/pptx-render/src/layout.rs:1192`](https://github.com/dsaad68/betteroffice/blob/a47dbde7498c781ab81b141e834da1950dcf4175/crates/pptx-render/src/layout.rs#L1192)), when the paragraph resolves to
 `Bullet::Character` and has at least one non-empty line, shape the character with the first
 run's style through the existing `add_shaped_segment` path and prepend the resulting
 `PositionedTextRun` to the first line's `runs` at `x = rect.x + marL + indent` (clamped to
 `>= rect.x`). Leave `line.x`, `line.width`, `line.start`/`end` and `caret_stops` untouched: hit
-testing reads only `caret_stops` ([`crates/pptx-render/src/layout.rs:296`](https://github.com/dsaad68/betteroffice/blob/df1a57dae7a091ea9ca8176ca013274cced71fdd/crates/pptx-render/src/layout.rs#L296)), so the bullet stays
+testing reads only `caret_stops` ([`crates/pptx-render/src/layout.rs:296`](https://github.com/dsaad68/betteroffice/blob/a47dbde7498c781ab81b141e834da1950dcf4175/crates/pptx-render/src/layout.rs#L296)), so the bullet stays
 out of the story's character space. `paint_lines`
-([`crates/pptx-raster/src/font.rs:47-68`](https://github.com/dsaad68/betteroffice/blob/df1a57dae7a091ea9ca8176ca013274cced71fdd/crates/pptx-raster/src/font.rs#L47-L68)) needs no change.
+([`crates/pptx-raster/src/font.rs:47-68`](https://github.com/dsaad68/betteroffice/blob/a47dbde7498c781ab81b141e834da1950dcf4175/crates/pptx-raster/src/font.rs#L47-L68)) needs no change.
 
 `Bullet::None` must suppress an inherited bullet — it already does, because
 `merge_paragraph_properties` overwrites with `Some(Bullet::None)`.
@@ -171,8 +171,8 @@ Risks and tests to add:
   `packages/pptx-react` paint from `lines`; check `packages/pptx/src/render/canvas.test.ts` and
   `packages/pptx-react/src/interactions.ts` for such a reconstruction before landing.
 - `margin_left_px` is not multiplied by `scale` today
-  ([`crates/pptx-render/src/layout.rs:1002`](https://github.com/dsaad68/betteroffice/blob/df1a57dae7a091ea9ca8176ca013274cced71fdd/crates/pptx-render/src/layout.rs#L1002) vs the autofit loop at
-  [`crates/pptx-render/src/layout.rs:686-698`](https://github.com/dsaad68/betteroffice/blob/df1a57dae7a091ea9ca8176ca013274cced71fdd/crates/pptx-render/src/layout.rs#L686-L698)); the bullet offset will inherit the same
+  ([`crates/pptx-render/src/layout.rs:1002`](https://github.com/dsaad68/betteroffice/blob/a47dbde7498c781ab81b141e834da1950dcf4175/crates/pptx-render/src/layout.rs#L1002) vs the autofit loop at
+  [`crates/pptx-render/src/layout.rs:686-698`](https://github.com/dsaad68/betteroffice/blob/a47dbde7498c781ab81b141e834da1950dcf4175/crates/pptx-render/src/layout.rs#L686-L698)); the bullet offset will inherit the same
   inconsistency. Worth fixing in the same change, but it moves text on autofit shapes, so gate
   it behind its own test.
 - `buFont`/`buClr`/`buSzPct` are still unmodelled, so the bullet inherits the run's face, colour
@@ -195,12 +195,12 @@ The bullet column should fill in and the text columns should not move. Expected 
 `rollout-plan/02` 4.79% should drop toward the noise floor. `project20/04` will improve only
 partly — that slide also loses its `spcBef`/`spcAft` paragraph gaps, a different defect.
 
-No existing test covers bullets: the test module at [`crates/pptx-render/src/layout.rs:2008`](https://github.com/dsaad68/betteroffice/blob/df1a57dae7a091ea9ca8176ca013274cced71fdd/crates/pptx-render/src/layout.rs#L2008)
+No existing test covers bullets: the test module at [`crates/pptx-render/src/layout.rs:2008`](https://github.com/dsaad68/betteroffice/blob/a47dbde7498c781ab81b141e834da1950dcf4175/crates/pptx-render/src/layout.rs#L2008)
 onward has no bullet or `marL` case, and grepping `margin_left` across `crates/pptx-render`
 finds only production code. A new unit test there should assert that a paragraph with
 `marL`/`indent`/`buChar` produces a first line whose runs begin with the bullet glyph at
 `rect.x + marL + indent`, that the text run still starts at `rect.x + marL`, and that
-`caret_stops` are unchanged so hit testing ([`crates/pptx-render/src/layout.rs:296`](https://github.com/dsaad68/betteroffice/blob/df1a57dae7a091ea9ca8176ca013274cced71fdd/crates/pptx-render/src/layout.rs#L296)) does not
+`caret_stops` are unchanged so hit testing ([`crates/pptx-render/src/layout.rs:296`](https://github.com/dsaad68/betteroffice/blob/a47dbde7498c781ab81b141e834da1950dcf4175/crates/pptx-render/src/layout.rs#L296)) does not
 shift.
 
 **Additional context**
@@ -211,4 +211,17 @@ Related issues found in the same run: `text-bullets-autonum-not-drawn`, `text-in
 
 Files most likely involved: `crates/pptx-render/src/layout.rs`, `crates/pptx-parse/src/model.rs`, `crates/pptx-parse/src/drawing.rs`
 
-Found with a comparison harness that renders decks with both engines, pixel-diffs them, and traces each difference back to the OOXML and the code path. Full report with all findings: https://github.com/dsaad68/betteroffice/blob/harness/pptx-render-improvement/render-improvement-harness/issues/text-bullets-char-indent-dropped/report.md. Methodology: https://gist.github.com/dsaad68/038b63c2977aeca16fc873c2df1152d0. Line numbers link to the exact commit they were checked against.
+**How this was found**
+
+A comparison harness renders each deck twice, once with LibreOffice and once with BetterOffice,
+pixel-diffs the two images slide by slide, and traces every visible difference back to the OOXML
+and to the code path responsible. Reference renders come from LibreOffice through
+[pptx-pdf](https://github.com/dsaad68/pptx-pdf), a single binary with LibreOffice embedded, at 96 dpi. Both engines
+are given the same Liberation, Carlito and Caladea faces under the family names the decks ask for,
+so a difference in text metrics is a real difference and not font substitution.
+
+- Harness, with the per-slide reports and all 35 issues this run produced: https://github.com/dsaad68/betteroffice/tree/harness/pptx-render-improvement/render-improvement-harness
+- Full report behind this issue, with every finding, the evidence table and the proposed fix: https://github.com/dsaad68/betteroffice/blob/harness/pptx-render-improvement/render-improvement-harness/issues/text-bullets-char-indent-dropped/report.md
+- How the harness works and why it is built this way: https://gist.github.com/dsaad68/038b63c2977aeca16fc873c2df1152d0
+
+Line numbers link to the exact commit they were checked against.

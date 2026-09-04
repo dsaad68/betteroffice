@@ -82,13 +82,13 @@ there is no table-style stage, and `PptxPackage` has no field for one
 could not read the part lazily.
 
 **3. Layout emits a placeholder and stops.** Slide shapes always take the snapshot path
-([`crates/pptx-render/src/layout.rs:230`](https://github.com/dsaad68/betteroffice/blob/df1a57dae7a091ea9ca8176ca013274cced71fdd/crates/pptx-render/src/layout.rs#L230)), whose `ShapeKind::GraphicFrame` arm calls
-`render_graphic_frame` ([`crates/pptx-render/src/layout.rs:439`](https://github.com/dsaad68/betteroffice/blob/df1a57dae7a091ea9ca8176ca013274cced71fdd/crates/pptx-render/src/layout.rs#L439)-`447`). That function plots a
+([`crates/pptx-render/src/layout.rs:230`](https://github.com/dsaad68/betteroffice/blob/a47dbde7498c781ab81b141e834da1950dcf4175/crates/pptx-render/src/layout.rs#L230)), whose `ShapeKind::GraphicFrame` arm calls
+`render_graphic_frame` ([`crates/pptx-render/src/layout.rs:439`](https://github.com/dsaad68/betteroffice/blob/a47dbde7498c781ab81b141e834da1950dcf4175/crates/pptx-render/src/layout.rs#L439)-`447`). That function plots a
 chart when the graphic resolves to a chart part and otherwise pushes
-`Primitive::Placeholder` ([`crates/pptx-render/src/layout.rs:593`](https://github.com/dsaad68/betteroffice/blob/df1a57dae7a091ea9ca8176ca013274cced71fdd/crates/pptx-render/src/layout.rs#L593)-`636`, push at `:625`),
+`Primitive::Placeholder` ([`crates/pptx-render/src/layout.rs:593`](https://github.com/dsaad68/betteroffice/blob/a47dbde7498c781ab81b141e834da1950dcf4175/crates/pptx-render/src/layout.rs#L593)-`636`, push at `:625`),
 labelled from `graphic_label`, which returns `"Table"` for the table variant
-([`crates/pptx-render/src/layout.rs:1960`](https://github.com/dsaad68/betteroffice/blob/df1a57dae7a091ea9ca8176ca013274cced71fdd/crates/pptx-render/src/layout.rs#L1960)-`1966`). The parsed path used for layout and master
-shapes does the same ([`crates/pptx-render/src/layout.rs:551`](https://github.com/dsaad68/betteroffice/blob/df1a57dae7a091ea9ca8176ca013274cced71fdd/crates/pptx-render/src/layout.rs#L551)-`559`), and the standalone
+([`crates/pptx-render/src/layout.rs:1960`](https://github.com/dsaad68/betteroffice/blob/a47dbde7498c781ab81b141e834da1950dcf4175/crates/pptx-render/src/layout.rs#L1960)-`1966`). The parsed path used for layout and master
+shapes does the same ([`crates/pptx-render/src/layout.rs:551`](https://github.com/dsaad68/betteroffice/blob/a47dbde7498c781ab81b141e834da1950dcf4175/crates/pptx-render/src/layout.rs#L551)-`559`), and the standalone
 compile path has its own `ComposedShape::TablePlaceholder` arm
 ([`crates/pptx-render/src/lib.rs:213`](https://github.com/openooxml/betteroffice/blob/187cebc9ef5d414e4e65ccd96fe68b8f46c7f528/crates/pptx-render/src/lib.rs#L213)-`215`).
 
@@ -96,14 +96,14 @@ compile path has its own `ComposedShape::TablePlaceholder` arm
 `Placeholder` and `Chart` (placeholder variant at
 [`crates/pptx-render/src/display_list.rs:134`](https://github.com/openooxml/betteroffice/blob/187cebc9ef5d414e4e65ccd96fe68b8f46c7f528/crates/pptx-render/src/display_list.rs#L134)). `pptx-raster` paints a placeholder as a 1px
 dashed `[5, 4]` grey rectangle plus a 12px centred label
-([`crates/pptx-raster/src/lib.rs:300`](https://github.com/dsaad68/betteroffice/blob/df1a57dae7a091ea9ca8176ca013274cced71fdd/crates/pptx-raster/src/lib.rs#L300)-`302` dispatch,
-[`crates/pptx-raster/src/lib.rs:436`](https://github.com/dsaad68/betteroffice/blob/df1a57dae7a091ea9ca8176ca013274cced71fdd/crates/pptx-raster/src/lib.rs#L436)-`480`), and [`packages/pptx/src/render/canvas.ts:80`](https://github.com/openooxml/betteroffice/blob/187cebc9ef5d414e4e65ccd96fe68b8f46c7f528/packages/pptx/src/render/canvas.ts#L80) /
+([`crates/pptx-raster/src/lib.rs:300`](https://github.com/dsaad68/betteroffice/blob/a47dbde7498c781ab81b141e834da1950dcf4175/crates/pptx-raster/src/lib.rs#L300)-`302` dispatch,
+[`crates/pptx-raster/src/lib.rs:436`](https://github.com/dsaad68/betteroffice/blob/a47dbde7498c781ab81b141e834da1950dcf4175/crates/pptx-raster/src/lib.rs#L436)-`480`), and [`packages/pptx/src/render/canvas.ts:80`](https://github.com/openooxml/betteroffice/blob/187cebc9ef5d414e4e65ccd96fe68b8f46c7f528/packages/pptx/src/render/canvas.ts#L80) /
 `:247` do the same in the browser. So even with the grid in the model, nothing downstream
 could express it.
 
 **5. A confirmed secondary bug: one stray cell of text is drawn over the whole frame.**
 After the shape-kind `match`, the snapshot path lays out `shape.text_stories.first()` across
-the frame's full rectangle ([`crates/pptx-render/src/layout.rs:458`](https://github.com/dsaad68/betteroffice/blob/df1a57dae7a091ea9ca8176ca013274cced71fdd/crates/pptx-render/src/layout.rs#L458)). `seed_shape` seeds one
+the frame's full rectangle ([`crates/pptx-render/src/layout.rs:458`](https://github.com/dsaad68/betteroffice/blob/a47dbde7498c781ab81b141e834da1950dcf4175/crates/pptx-render/src/layout.rs#L458)). `seed_shape` seeds one
 story per cell for a table frame ([`crates/pptx-edit/src/deck.rs:148`](https://github.com/openooxml/betteroffice/blob/187cebc9ef5d414e4e65ccd96fe68b8f46c7f528/crates/pptx-edit/src/deck.rs#L148)-`161`), so the *first
 cell only* is rendered, at the frame's origin, and every other cell is silently discarded.
 Dumping the display list confirms it: ocp-psp-plan slide 4 emits
@@ -112,7 +112,7 @@ Dumping the display list confirms it: ocp-psp-plan slide 4 emits
 placeholders each shadowed by a white `"Resource Name"` textBox. It is invisible today only
 because those header runs are white on a white slide; a dark first cell would paint a stray
 word across the placeholder. `node_text` returns `None` for a graphic frame
-([`crates/pptx-render/src/layout.rs:1772`](https://github.com/dsaad68/betteroffice/blob/df1a57dae7a091ea9ca8176ca013274cced71fdd/crates/pptx-render/src/layout.rs#L1772)-`1777`), so the parsed path does not have this bug.
+([`crates/pptx-render/src/layout.rs:1772`](https://github.com/dsaad68/betteroffice/blob/a47dbde7498c781ab81b141e834da1950dcf4175/crates/pptx-render/src/layout.rs#L1772)-`1777`), so the parsed path does not have this bug.
 
 What PowerPoint does: lay the columns out from `a:gridCol@w`, treat `a:tr@h` as a *minimum*
 row height and grow the row to its tallest cell, resolve each cell's fill, borders and text
@@ -173,7 +173,7 @@ variant of `parse_outline` ([`crates/pptx-parse/src/drawing.rs:624`](https://git
 Fold `a:tcPr`'s `anchor`, `vert` and `marL`/`marT`/`marR`/`marB` straight into the cell's
 `TextBody` (`anchor`, `vertical`, `inset_*` -- [`crates/pptx-parse/src/model.rs:266`](https://github.com/openooxml/betteroffice/blob/187cebc9ef5d414e4e65ccd96fe68b8f46c7f528/crates/pptx-parse/src/model.rs#L266)-`278`) at
 parse time. That is exactly the shape `BodyCascade` already reads
-([`crates/pptx-render/src/layout.rs:769`](https://github.com/dsaad68/betteroffice/blob/df1a57dae7a091ea9ca8176ca013274cced71fdd/crates/pptx-render/src/layout.rs#L769)-`780`), so cell text needs no new cascade plumbing.
+([`crates/pptx-render/src/layout.rs:769`](https://github.com/dsaad68/betteroffice/blob/a47dbde7498c781ab81b141e834da1950dcf4175/crates/pptx-render/src/layout.rs#L769)-`780`), so cell text needs no new cascade plumbing.
 
 Keep `rows` row-major and the cell order stable: `seed_shape` derives story ids positionally
 as `story:{shape}:table:{row}:{cell}` ([`crates/pptx-edit/src/deck.rs:152`](https://github.com/openooxml/betteroffice/blob/187cebc9ef5d414e4e65ccd96fe68b8f46c7f528/crates/pptx-edit/src/deck.rs#L152)-`158`), and layout
@@ -201,7 +201,7 @@ decks -- fall back to the `def` style id from `tableStyles.xml` before falling b
 A built-in style table for the common PowerPoint GUIDs can follow later; do not block on it.
 
 **3. Lay the table out (`crates/pptx-render/src/layout.rs`).** Replace the placeholder push
-in `render_graphic_frame` ([`crates/pptx-render/src/layout.rs:625`](https://github.com/dsaad68/betteroffice/blob/df1a57dae7a091ea9ca8176ca013274cced71fdd/crates/pptx-render/src/layout.rs#L625)) with a `render_table` arm
+in `render_graphic_frame` ([`crates/pptx-render/src/layout.rs:625`](https://github.com/dsaad68/betteroffice/blob/a47dbde7498c781ab81b141e834da1950dcf4175/crates/pptx-render/src/layout.rs#L625)) with a `render_table` arm
 for `GraphicFrameData::Table`, keeping the placeholder as the fallback for `Diagram` and
 `Unknown`:
 
@@ -218,13 +218,13 @@ for `GraphicFrameData::Table`, keeping the placeholder as the fallback for `Diag
   ([`crates/pptx-render/src/display_list.rs:148`](https://github.com/openooxml/betteroffice/blob/187cebc9ef5d414e4e65ccd96fe68b8f46c7f528/crates/pptx-render/src/display_list.rs#L148)-`161`): a container whose children paint
   clipped to its rectangle. Children per cell: a `Primitive::Shape` with the resolved fill,
   a `Primitive::Shape` per drawn border edge, and the `Primitive::TextBox` that
-  `render_text_box` ([`crates/pptx-render/src/layout.rs:657`](https://github.com/dsaad68/betteroffice/blob/df1a57dae7a091ea9ca8176ca013274cced71fdd/crates/pptx-render/src/layout.rs#L657)) already produces -- give it the
+  `render_text_box` ([`crates/pptx-render/src/layout.rs:657`](https://github.com/dsaad68/betteroffice/blob/a47dbde7498c781ab81b141e834da1950dcf4175/crates/pptx-render/src/layout.rs#L657)) already produces -- give it the
   cell rect and a `BodyCascade` whose `primary` is the cell's `TextBody`. Draw all fills
   before all borders, or shared edges get overpainted.
 - Cell text comes from the snapshot when present (`shape.text_stories[row * cols + col]` via
   `content_from_story`) and from the parsed cell body otherwise (`content_from_body`), which
-  is what the layout/master path at [`crates/pptx-render/src/layout.rs:551`](https://github.com/dsaad68/betteroffice/blob/df1a57dae7a091ea9ca8176ca013274cced71fdd/crates/pptx-render/src/layout.rs#L551) needs.
-- Then fix the stray-text bug: [`crates/pptx-render/src/layout.rs:458`](https://github.com/dsaad68/betteroffice/blob/df1a57dae7a091ea9ca8176ca013274cced71fdd/crates/pptx-render/src/layout.rs#L458) must not run
+  is what the layout/master path at [`crates/pptx-render/src/layout.rs:551`](https://github.com/dsaad68/betteroffice/blob/a47dbde7498c781ab81b141e834da1950dcf4175/crates/pptx-render/src/layout.rs#L551) needs.
+- Then fix the stray-text bug: [`crates/pptx-render/src/layout.rs:458`](https://github.com/dsaad68/betteroffice/blob/a47dbde7498c781ab81b141e834da1950dcf4175/crates/pptx-render/src/layout.rs#L458) must not run
   `text_stories.first()` for `ShapeKind::GraphicFrame`, because `render_table` now consumes
   every story. This alone is a two-line change and can land first.
 - `render_text_box` charges `self.line_count` against `MAX_TEXT_LINES`; a 1204-cell deck will
@@ -232,7 +232,7 @@ for `GraphicFrameData::Table`, keeping the placeholder as the fallback for `Diag
 
 **4. Paint it (`crates/pptx-raster`, `packages/pptx`).** `Primitive::Table` paints exactly
 like `Primitive::Chart` today: clip to the rect, recurse over children
-([`crates/pptx-raster/src/lib.rs:303`](https://github.com/dsaad68/betteroffice/blob/df1a57dae7a091ea9ca8176ca013274cced71fdd/crates/pptx-raster/src/lib.rs#L303)-`318`; `paintChart` in
+([`crates/pptx-raster/src/lib.rs:303`](https://github.com/dsaad68/betteroffice/blob/a47dbde7498c781ab81b141e834da1950dcf4175/crates/pptx-raster/src/lib.rs#L303)-`318`; `paintChart` in
 [`packages/pptx/src/render/canvas.ts:92`](https://github.com/openooxml/betteroffice/blob/187cebc9ef5d414e4e65ccd96fe68b8f46c7f528/packages/pptx/src/render/canvas.ts#L92)-`101`). Add the variant to `SlidePrimitive`
 ([`packages/pptx/src/types.ts:331`](https://github.com/openooxml/betteroffice/blob/187cebc9ef5d414e4e65ccd96fe68b8f46c7f528/packages/pptx/src/types.ts#L331)-`336`) and a `case 'table'` at
 [`packages/pptx/src/render/canvas.ts:80`](https://github.com/openooxml/betteroffice/blob/187cebc9ef5d414e4e65ccd96fe68b8f46c7f528/packages/pptx/src/render/canvas.ts#L80). Bump `CONTRACT_VERSION`
@@ -322,12 +322,12 @@ Risks and tests to add:
   and LibreOffice do, and it makes ocp-psp-plan/04's table run off the bottom of the slide --
   which looks like a regression next to a tidy clipped table but matches the reference.
 - **Text budget.** 1204 cells across three decks all route through `render_text_box`, which
-  accumulates into `MAX_TEXT_LINES` ([`crates/pptx-render/src/layout.rs:699`](https://github.com/dsaad68/betteroffice/blob/df1a57dae7a091ea9ca8176ca013274cced71fdd/crates/pptx-render/src/layout.rs#L699)-`704`). A single
+  accumulates into `MAX_TEXT_LINES` ([`crates/pptx-render/src/layout.rs:699`](https://github.com/dsaad68/betteroffice/blob/a47dbde7498c781ab81b141e834da1950dcf4175/crates/pptx-render/src/layout.rs#L699)-`704`). A single
   large table could now trip a resource limit that no slide reached before.
 - **Contract version.** Adding a primitive kind breaks any consumer that exhaustively
   switches on `kind`. Bump `CONTRACT_VERSION` and update the fixtures at
   [`packages/pptx/src/render/canvas.test.ts:30`](https://github.com/openooxml/betteroffice/blob/187cebc9ef5d414e4e65ccd96fe68b8f46c7f528/packages/pptx/src/render/canvas.test.ts#L30), `:129` and
-  [`packages/pptx/src/render/png.test.ts:6`](https://github.com/dsaad68/betteroffice/blob/df1a57dae7a091ea9ca8176ca013274cced71fdd/packages/pptx/src/render/png.test.ts#L6).
+  [`packages/pptx/src/render/png.test.ts:6`](https://github.com/dsaad68/betteroffice/blob/a47dbde7498c781ab81b141e834da1950dcf4175/packages/pptx/src/render/png.test.ts#L6).
 - **Editing.** Cell stories already exist and are already addressable for writes
   ([`crates/pptx-parse/src/write.rs:1274`](https://github.com/openooxml/betteroffice/blob/187cebc9ef5d414e4e65ccd96fe68b8f46c7f528/crates/pptx-parse/src/write.rs#L1274)-`1278`), so text edits should round-trip -- but each
   cell now emits its own `TextBox` with its own `story_id`, which changes hit-testing for
@@ -355,10 +355,10 @@ carries four unrelated findings (title size, run `gradFill`, a missing connector
 `lo-suspect` footer), so its residual will not reach zero from this fix alone.
 
 No test covers table rendering today. The nearest coverage is
-[`crates/pptx-raster/tests/golden.rs:327`](https://github.com/dsaad68/betteroffice/blob/df1a57dae7a091ea9ca8176ca013274cced71fdd/crates/pptx-raster/tests/golden.rs#L327)-`343` (`golden_placeholder`, which renders exactly
+[`crates/pptx-raster/tests/golden.rs:327`](https://github.com/dsaad68/betteroffice/blob/a47dbde7498c781ab81b141e834da1950dcf4175/crates/pptx-raster/tests/golden.rs#L327)-`343` (`golden_placeholder`, which renders exactly
 this "Table" placeholder into `crates/pptx-raster/tests/golden/placeholder.png` and can stay
 as the fallback case) and the chart-frame test at
-[`crates/pptx-render/src/layout.rs:2379`](https://github.com/dsaad68/betteroffice/blob/df1a57dae7a091ea9ca8176ca013274cced71fdd/crates/pptx-render/src/layout.rs#L2379), which asserts a graphic frame without its part keeps
+[`crates/pptx-render/src/layout.rs:2379`](https://github.com/dsaad68/betteroffice/blob/a47dbde7498c781ab81b141e834da1950dcf4175/crates/pptx-render/src/layout.rs#L2379), which asserts a graphic frame without its part keeps
 a placeholder. Nothing in `crates/pptx-parse` asserts anything about `a:tbl` beyond the
 text-target lookup in [`crates/pptx-parse/src/write.rs:1274`](https://github.com/openooxml/betteroffice/blob/187cebc9ef5d414e4e65ccd96fe68b8f46c7f528/crates/pptx-parse/src/write.rs#L1274)-`1278`, so the fix needs new
 tests at every layer.
@@ -371,4 +371,17 @@ Related issues found in the same run: none.
 
 Files most likely involved: `crates/pptx-parse/src/drawing.rs`, `crates/pptx-parse/src/model.rs`, `crates/pptx-parse/src/package.rs`, `crates/pptx-render/src/layout.rs`, `crates/pptx-render/src/display_list.rs`, `crates/pptx-render/src/lib.rs`, `crates/pptx-raster/src/lib.rs`, `crates/pptx-edit/src/deck.rs`, `packages/pptx/src/render/canvas.ts`, `packages/pptx/src/types.ts`
 
-Found with a comparison harness that renders decks with both engines, pixel-diffs them, and traces each difference back to the OOXML and the code path. Full report with all findings: https://github.com/dsaad68/betteroffice/blob/harness/pptx-render-improvement/render-improvement-harness/issues/unsupported-table-not-rendered/report.md. Methodology: https://gist.github.com/dsaad68/038b63c2977aeca16fc873c2df1152d0. Line numbers link to the exact commit they were checked against.
+**How this was found**
+
+A comparison harness renders each deck twice, once with LibreOffice and once with BetterOffice,
+pixel-diffs the two images slide by slide, and traces every visible difference back to the OOXML
+and to the code path responsible. Reference renders come from LibreOffice through
+[pptx-pdf](https://github.com/dsaad68/pptx-pdf), a single binary with LibreOffice embedded, at 96 dpi. Both engines
+are given the same Liberation, Carlito and Caladea faces under the family names the decks ask for,
+so a difference in text metrics is a real difference and not font substitution.
+
+- Harness, with the per-slide reports and all 35 issues this run produced: https://github.com/dsaad68/betteroffice/tree/harness/pptx-render-improvement/render-improvement-harness
+- Full report behind this issue, with every finding, the evidence table and the proposed fix: https://github.com/dsaad68/betteroffice/blob/harness/pptx-render-improvement/render-improvement-harness/issues/unsupported-table-not-rendered/report.md
+- How the harness works and why it is built this way: https://gist.github.com/dsaad68/038b63c2977aeca16fc873c2df1152d0
+
+Line numbers link to the exact commit they were checked against.

@@ -69,7 +69,7 @@ a bare `Option<ColorValue>`, not a fill.
 
 Downstream, the `None` propagates unchanged. `style_from_run_properties`
 ([`crates/pptx-edit/src/story.rs:643`](https://github.com/openooxml/betteroffice/blob/187cebc9ef5d414e4e65ccd96fe68b8f46c7f528/crates/pptx-edit/src/story.rs#L643)) maps `properties.color` straight onto the snapshot's
-`TextStyle.color`, and `resolve_style` ([`crates/pptx-render/src/layout.rs:1042`](https://github.com/dsaad68/betteroffice/blob/df1a57dae7a091ea9ca8176ca013274cced71fdd/crates/pptx-render/src/layout.rs#L1042)) then falls back to
+`TextStyle.color`, and `resolve_style` ([`crates/pptx-render/src/layout.rs:1042`](https://github.com/dsaad68/betteroffice/blob/a47dbde7498c781ab81b141e834da1950dcf4175/crates/pptx-render/src/layout.rs#L1042)) then falls back to
 the inherited `defRPr` color before its final `"#000000"` default. For `project20` slide 1 that
 inherited value is the master's `otherStyle` `lvl1pPr/defRPr`
 `<a:solidFill><a:schemeClr val="tx1"/></a:solidFill>`, which the deck's `clrMap` sends to `dk1` =
@@ -132,7 +132,7 @@ to the one solid color the rest of the pipeline can carry.
 
 Nothing changes in `pptx-edit` or `pptx-render`: `style_from_run_properties`
 ([`crates/pptx-edit/src/story.rs:643`](https://github.com/openooxml/betteroffice/blob/187cebc9ef5d414e4e65ccd96fe68b8f46c7f528/crates/pptx-edit/src/story.rs#L643)) and `resolve_style`
-([`crates/pptx-render/src/layout.rs:1042`](https://github.com/dsaad68/betteroffice/blob/df1a57dae7a091ea9ca8176ca013274cced71fdd/crates/pptx-render/src/layout.rs#L1042)) already do the right thing once `color` is populated.
+([`crates/pptx-render/src/layout.rs:1042`](https://github.com/dsaad68/betteroffice/blob/a47dbde7498c781ab81b141e834da1950dcf4175/crates/pptx-render/src/layout.rs#L1042)) already do the right thing once `color` is populated.
 
 ```rust
 // crates/pptx-parse/src/drawing.rs, in parse_run_properties
@@ -205,4 +205,17 @@ Related issues found in the same run: `fill-alpha-modifier-ignored`
 
 Files most likely involved: `crates/pptx-parse/src/drawing.rs`, `crates/pptx-parse/src/model.rs`, `crates/pptx-parse/src/write.rs`, `crates/pptx-edit/src/story.rs`, `crates/pptx-render/src/layout.rs`
 
-Found with a comparison harness that renders decks with both engines, pixel-diffs them, and traces each difference back to the OOXML and the code path. Full report with all findings: https://github.com/dsaad68/betteroffice/blob/harness/pptx-render-improvement/render-improvement-harness/issues/text-run-props-gradfill-not-resolved/report.md. Methodology: https://gist.github.com/dsaad68/038b63c2977aeca16fc873c2df1152d0. Line numbers link to the exact commit they were checked against.
+**How this was found**
+
+A comparison harness renders each deck twice, once with LibreOffice and once with BetterOffice,
+pixel-diffs the two images slide by slide, and traces every visible difference back to the OOXML
+and to the code path responsible. Reference renders come from LibreOffice through
+[pptx-pdf](https://github.com/dsaad68/pptx-pdf), a single binary with LibreOffice embedded, at 96 dpi. Both engines
+are given the same Liberation, Carlito and Caladea faces under the family names the decks ask for,
+so a difference in text metrics is a real difference and not font substitution.
+
+- Harness, with the per-slide reports and all 35 issues this run produced: https://github.com/dsaad68/betteroffice/tree/harness/pptx-render-improvement/render-improvement-harness
+- Full report behind this issue, with every finding, the evidence table and the proposed fix: https://github.com/dsaad68/betteroffice/blob/harness/pptx-render-improvement/render-improvement-harness/issues/text-run-props-gradfill-not-resolved/report.md
+- How the harness works and why it is built this way: https://gist.github.com/dsaad68/038b63c2977aeca16fc873c2df1152d0
+
+Line numbers link to the exact commit they were checked against.

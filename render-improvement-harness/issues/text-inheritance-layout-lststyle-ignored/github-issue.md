@@ -69,10 +69,10 @@ which emits an *empty* `<a:lstStyle/>` when serializing a newly added shape. So 
 parsed — not parsed-and-dropped.
 
 On the render side, `BodyCascade::paragraph_properties`
-([`crates/pptx-render/src/layout.rs:808-827`](https://github.com/dsaad68/betteroffice/blob/df1a57dae7a091ea9ca8176ca013274cced71fdd/crates/pptx-render/src/layout.rs#L808-L827)) builds the effective paragraph properties as:
+([`crates/pptx-render/src/layout.rs:808-827`](https://github.com/dsaad68/betteroffice/blob/a47dbde7498c781ab81b141e834da1950dcf4175/crates/pptx-render/src/layout.rs#L808-L827)) builds the effective paragraph properties as:
 
 1. `master_style(...)` — the master's `p:txStyles` `titleStyle`/`bodyStyle`/`otherStyle` for the
-   placeholder type and level ([`crates/pptx-render/src/layout.rs:1786-1802`](https://github.com/dsaad68/betteroffice/blob/df1a57dae7a091ea9ca8176ca013274cced71fdd/crates/pptx-render/src/layout.rs#L1786-L1802)), then
+   placeholder type and level ([`crates/pptx-render/src/layout.rs:1786-1802`](https://github.com/dsaad68/betteroffice/blob/a47dbde7498c781ab81b141e834da1950dcf4175/crates/pptx-render/src/layout.rs#L1786-L1802)), then
 2. `merge_paragraph_properties` from the master shape's, the layout shape's, and finally the slide
    shape's *paragraph* `pPr`, looked up by paragraph index (`layout.rs:814-826`).
 
@@ -82,9 +82,9 @@ placeholders' sample paragraphs are prompt text (`<a:p><a:pPr lvl="0"/><a:r><a:r
 element up, in the `lstStyle` the parser discards.
 
 The per-level properties do reach the runs once populated: `resolve_content` passes
-`properties.default_run` into `resolve_style` ([`crates/pptx-render/src/layout.rs:969-1000`](https://github.com/dsaad68/betteroffice/blob/df1a57dae7a091ea9ca8176ca013274cced71fdd/crates/pptx-render/src/layout.rs#L969-L1000)), which is
+`properties.default_run` into `resolve_style` ([`crates/pptx-render/src/layout.rs:969-1000`](https://github.com/dsaad68/betteroffice/blob/a47dbde7498c781ab81b141e834da1950dcf4175/crates/pptx-render/src/layout.rs#L969-L1000)), which is
 where size / bold / family / colour fall back, and paragraph alignment falls back to
-`properties.alignment` at [`crates/pptx-render/src/layout.rs:995-1000`](https://github.com/dsaad68/betteroffice/blob/df1a57dae7a091ea9ca8176ca013274cced71fdd/crates/pptx-render/src/layout.rs#L995-L1000). So a correctly populated
+`properties.alignment` at [`crates/pptx-render/src/layout.rs:995-1000`](https://github.com/dsaad68/betteroffice/blob/a47dbde7498c781ab81b141e834da1950dcf4175/crates/pptx-render/src/layout.rs#L995-L1000). So a correctly populated
 `lstStyle` tier would land on exactly the properties that are wrong today, and
 `merge_run_properties` (`layout.rs:1825-1847`) already merges every field an `lstStyle` `defRPr`
 can set.
@@ -114,12 +114,12 @@ Confirmed against the XML for every deck in the cluster:
 The same gap also covers project17/04/1's `TextBox 35/39/41`, which are *not* placeholders: they
 carry their own `<a:lstStyle><a:lvl2pPr …><a:defRPr sz="1400">`. For a plain shape the `lstStyle` is
 the shape's own primary tier, and `BodyCascade { primary: Some(body), layout: None, master: None }`
-([`crates/pptx-render/src/layout.rs:570-577`](https://github.com/dsaad68/betteroffice/blob/df1a57dae7a091ea9ca8176ca013274cced71fdd/crates/pptx-render/src/layout.rs#L570-L577)) has nowhere to read it from either.
+([`crates/pptx-render/src/layout.rs:570-577`](https://github.com/dsaad68/betteroffice/blob/a47dbde7498c781ab81b141e834da1950dcf4175/crates/pptx-render/src/layout.rs#L570-L577)) has nowhere to read it from either.
 
 ### Not confirmed
 
 - **"position override ignored"** in the cluster symptom. `resolved_transform_value`
-  ([`crates/pptx-render/src/layout.rs:1860-1895`](https://github.com/dsaad68/betteroffice/blob/df1a57dae7a091ea9ca8176ca013274cced71fdd/crates/pptx-render/src/layout.rs#L1860-L1895)) already falls back to the layout node's, then the
+  ([`crates/pptx-render/src/layout.rs:1860-1895`](https://github.com/dsaad68/betteroffice/blob/a47dbde7498c781ab81b141e834da1950dcf4175/crates/pptx-render/src/layout.rs#L1860-L1895)) already falls back to the layout node's, then the
   master node's, transform when the slide shape has no `xfrm`, and `find_placeholder` /
   `placeholders_match` (`layout.rs:1711-1733`) match `idx="10"` correctly. evidence-1.png and
   evidence-4.png show the candidate text sitting in the right box; what reads as "mispositioned" in
@@ -153,7 +153,7 @@ field `#[serde(default, skip_serializing_if = "Vec::is_empty")]` so existing sna
 round-tripping.
 
 **Render.** In `BodyCascade::paragraph_properties`
-([`crates/pptx-render/src/layout.rs:808`](https://github.com/dsaad68/betteroffice/blob/df1a57dae7a091ea9ca8176ca013274cced71fdd/crates/pptx-render/src/layout.rs#L808)), interleave each body's `list_style[level]` ahead of that
+([`crates/pptx-render/src/layout.rs:808`](https://github.com/dsaad68/betteroffice/blob/a47dbde7498c781ab81b141e834da1950dcf4175/crates/pptx-render/src/layout.rs#L808)), interleave each body's `list_style[level]` ahead of that
 body's paragraph `pPr`, walking master → layout → primary. The resulting order is the ECMA-376 one:
 master `txStyles` → master shape `lstStyle` → layout shape `lstStyle` → shape's own `lstStyle` →
 paragraph `pPr`. Keeping the existing paragraph-`pPr` merges in place makes this additive rather than
@@ -164,7 +164,7 @@ defines only `lvl1pPr` must contribute nothing to a level-3 paragraph.
 
 This also covers non-placeholder shapes such as project17/04's `TextBox 35/39/41`, because their
 `lstStyle` arrives through `primary` in the `BodyCascade { primary: Some(body), layout: None,
-master: None }` built at [`crates/pptx-render/src/layout.rs:570`](https://github.com/dsaad68/betteroffice/blob/df1a57dae7a091ea9ca8176ca013274cced71fdd/crates/pptx-render/src/layout.rs#L570).
+master: None }` built at [`crates/pptx-render/src/layout.rs:570`](https://github.com/dsaad68/betteroffice/blob/a47dbde7498c781ab81b141e834da1950dcf4175/crates/pptx-render/src/layout.rs#L570).
 
 ```rust
 // crates/pptx-parse/src/model.rs
@@ -238,14 +238,14 @@ drop from 7.65% / 5.32% pixel diff to the residue of their other findings (the `
 alpha fill), project20/17 from 4.25% to near zero, project17/01 from 1.56% to near zero.
 "CONVERSATION GUIDES" must wrap to two lines and paint `#24265D`; "THANK YOU" must be centred.
 
-Unit coverage to add in the test module at [`crates/pptx-render/src/layout.rs:2008`](https://github.com/dsaad68/betteroffice/blob/df1a57dae7a091ea9ca8176ca013274cced71fdd/crates/pptx-render/src/layout.rs#L2008), alongside
+Unit coverage to add in the test module at [`crates/pptx-render/src/layout.rs:2008`](https://github.com/dsaad68/betteroffice/blob/a47dbde7498c781ab81b141e834da1950dcf4175/crates/pptx-render/src/layout.rs#L2008), alongside
 `placeholder_matching_prefers_indices_and_normalizes_common_types` (`layout.rs:2490`): a synthetic
 deck whose layout placeholder `lstStyle` sets `sz` / `b` / `algn` / `solidFill` while the master
 `bodyStyle` sets different values, asserting the resolved `TextRun` takes the layout's. A parse-side
 assertion that `parse_text_body` populates the new field belongs in `crates/pptx-parse`.
 
 Existing tests most likely to move: `lays_out_demo_with_master_shapes_geometry_and_glyphs`
-([`crates/pptx-render/src/layout.rs:2129`](https://github.com/dsaad68/betteroffice/blob/df1a57dae7a091ea9ca8176ca013274cced71fdd/crates/pptx-render/src/layout.rs#L2129)), `normal_autofit_scales_text_until_the_shape_height_is_respected`
+([`crates/pptx-render/src/layout.rs:2129`](https://github.com/dsaad68/betteroffice/blob/a47dbde7498c781ab81b141e834da1950dcf4175/crates/pptx-render/src/layout.rs#L2129)), `normal_autofit_scales_text_until_the_shape_height_is_respected`
 (`layout.rs:2239`), and the raster goldens in `crates/pptx-raster/tests/golden.rs`, in particular
 `golden_placeholder` (`golden.rs:328`). Any golden whose text sizes change has to be regenerated and
 eyeballed — this change moves type metrics on every placeholder in every deck.
@@ -258,4 +258,17 @@ Related issues found in the same run: `text-run-props-gradfill-not-resolved`
 
 Files most likely involved: `crates/pptx-parse/src/drawing.rs`, `crates/pptx-parse/src/model.rs`, `crates/pptx-render/src/layout.rs`
 
-Found with a comparison harness that renders decks with both engines, pixel-diffs them, and traces each difference back to the OOXML and the code path. Full report with all findings: https://github.com/dsaad68/betteroffice/blob/harness/pptx-render-improvement/render-improvement-harness/issues/text-inheritance-layout-lststyle-ignored/report.md. Methodology: https://gist.github.com/dsaad68/038b63c2977aeca16fc873c2df1152d0. Line numbers link to the exact commit they were checked against.
+**How this was found**
+
+A comparison harness renders each deck twice, once with LibreOffice and once with BetterOffice,
+pixel-diffs the two images slide by slide, and traces every visible difference back to the OOXML
+and to the code path responsible. Reference renders come from LibreOffice through
+[pptx-pdf](https://github.com/dsaad68/pptx-pdf), a single binary with LibreOffice embedded, at 96 dpi. Both engines
+are given the same Liberation, Carlito and Caladea faces under the family names the decks ask for,
+so a difference in text metrics is a real difference and not font substitution.
+
+- Harness, with the per-slide reports and all 35 issues this run produced: https://github.com/dsaad68/betteroffice/tree/harness/pptx-render-improvement/render-improvement-harness
+- Full report behind this issue, with every finding, the evidence table and the proposed fix: https://github.com/dsaad68/betteroffice/blob/harness/pptx-render-improvement/render-improvement-harness/issues/text-inheritance-layout-lststyle-ignored/report.md
+- How the harness works and why it is built this way: https://gist.github.com/dsaad68/038b63c2977aeca16fc873c2df1152d0
+
+Line numbers link to the exact commit they were checked against.

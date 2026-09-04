@@ -71,7 +71,7 @@ ECMA-376 defines it as a fraction of the shape's *shortest side* (`ss`).**
    ([`crates/ooxml-drawingml/src/geometry.rs:199-209`](https://github.com/openooxml/betteroffice/blob/187cebc9ef5d414e4e65ccd96fe68b8f46c7f528/crates/ooxml-drawingml/src/geometry.rs#L199-L209)) builds
    `polygon(&[(0,0), (1-adj,0), (1,0.5), (1-adj,1), (0,1), (adj,0.5)])`. The polygon *topology* is
    exactly the ECMA `chevron` path (`moveTo 0,0 -> x2,0 -> r,vc -> x2,b -> 0,b -> x1,vc`), but the
-   x coordinates emitted here are fractions of the shape's width - [`crates/pptx-raster/src/lib.rs:575`](https://github.com/dsaad68/betteroffice/blob/df1a57dae7a091ea9ca8176ca013274cced71fdd/crates/pptx-raster/src/lib.rs#L575)
+   x coordinates emitted here are fractions of the shape's width - [`crates/pptx-raster/src/lib.rs:575`](https://github.com/dsaad68/betteroffice/blob/a47dbde7498c781ab81b141e834da1950dcf4175/crates/pptx-raster/src/lib.rs#L575)
    and its `px()` helper multiply x by `w`. The spec's `x1` is `*/ ss a 100000`, i.e. `adj` times the
    *shortest side*. For `Arrow: Chevron 47` (`w/h = 3.08`) that alone is a 3.08x overshoot, before
    the default-value error below.
@@ -97,9 +97,9 @@ ECMA-376 defines it as a fraction of the shape's *shortest side* (`ss`).**
    `dx <= w`, for both presets) must be read off the spec before the clamp is rewritten.
 
 6. One fix covers every surface. Both `pptx-render` call sites already pass the aspect ratio
-   ([`crates/pptx-render/src/layout.rs:410-414`](https://github.com/dsaad68/betteroffice/blob/df1a57dae7a091ea9ca8176ca013274cced71fdd/crates/pptx-render/src/layout.rs#L410-L414), [`crates/pptx-render/src/layout.rs:516-520`](https://github.com/dsaad68/betteroffice/blob/df1a57dae7a091ea9ca8176ca013274cced71fdd/crates/pptx-render/src/layout.rs#L516-L520), and the
+   ([`crates/pptx-render/src/layout.rs:410-414`](https://github.com/dsaad68/betteroffice/blob/a47dbde7498c781ab81b141e834da1950dcf4175/crates/pptx-render/src/layout.rs#L410-L414), [`crates/pptx-render/src/layout.rs:516-520`](https://github.com/dsaad68/betteroffice/blob/a47dbde7498c781ab81b141e834da1950dcf4175/crates/pptx-render/src/layout.rs#L516-L520), and the
    composed path at [`crates/pptx-render/src/lib.rs:170`](https://github.com/openooxml/betteroffice/blob/187cebc9ef5d414e4e65ccd96fe68b8f46c7f528/crates/pptx-render/src/lib.rs#L170), all funnelling into the two `geometry_path`
-   helpers at [`crates/pptx-render/src/layout.rs:1946`](https://github.com/dsaad68/betteroffice/blob/df1a57dae7a091ea9ca8176ca013274cced71fdd/crates/pptx-render/src/layout.rs#L1946) and [`crates/pptx-render/src/lib.rs:237`](https://github.com/openooxml/betteroffice/blob/187cebc9ef5d414e4e65ccd96fe68b8f46c7f528/crates/pptx-render/src/lib.rs#L237)), so
+   helpers at [`crates/pptx-render/src/layout.rs:1946`](https://github.com/dsaad68/betteroffice/blob/a47dbde7498c781ab81b141e834da1950dcf4175/crates/pptx-render/src/layout.rs#L1946) and [`crates/pptx-render/src/lib.rs:237`](https://github.com/openooxml/betteroffice/blob/187cebc9ef5d414e4e65ccd96fe68b8f46c7f528/crates/pptx-render/src/lib.rs#L237)), so
    `preset_geometry_to_path` already has the `w/h` it needs and nothing above it has to change.
    There is no second preset table under `packages/` - the web canvas consumes the same command
    list - so raster and canvas are fixed together.
@@ -127,7 +127,7 @@ _(hypothesis, not yet confirmed by a fix)_
 **Suggested fix**
 
 One file: `crates/ooxml-drawingml/src/geometry.rs`. Nothing above it changes - both `pptx-render`
-`geometry_path` helpers ([`crates/pptx-render/src/layout.rs:1946`](https://github.com/dsaad68/betteroffice/blob/df1a57dae7a091ea9ca8176ca013274cced71fdd/crates/pptx-render/src/layout.rs#L1946),
+`geometry_path` helpers ([`crates/pptx-render/src/layout.rs:1946`](https://github.com/dsaad68/betteroffice/blob/a47dbde7498c781ab81b141e834da1950dcf4175/crates/pptx-render/src/layout.rs#L1946),
 [`crates/pptx-render/src/lib.rs:237`](https://github.com/openooxml/betteroffice/blob/187cebc9ef5d414e4e65ccd96fe68b8f46c7f528/crates/pptx-render/src/lib.rs#L237)) and `docx-parse`
 ([`crates/docx-parse/src/drawingml.rs:273`](https://github.com/openooxml/betteroffice/blob/187cebc9ef5d414e4e65ccd96fe68b8f46c7f528/crates/docx-parse/src/drawingml.rs#L273)) already hand `preset_geometry_to_path` the aspect ratio,
 and every consumer below it draws the normalised command list as-is.
@@ -234,4 +234,17 @@ Related issues found in the same run: none.
 
 Files most likely involved: `crates/ooxml-drawingml/src/geometry.rs`, `crates/pptx-render/src/layout.rs`, `crates/pptx-render/src/lib.rs`, `crates/pptx-edit/src/deck.rs`, `crates/docx-parse/src/drawingml.rs`
 
-Found with a comparison harness that renders decks with both engines, pixel-diffs them, and traces each difference back to the OOXML and the code path. Full report with all findings: https://github.com/dsaad68/betteroffice/blob/harness/pptx-render-improvement/render-improvement-harness/issues/geometry-preset-adj-values-wrong/report.md. Methodology: https://gist.github.com/dsaad68/038b63c2977aeca16fc873c2df1152d0. Line numbers link to the exact commit they were checked against.
+**How this was found**
+
+A comparison harness renders each deck twice, once with LibreOffice and once with BetterOffice,
+pixel-diffs the two images slide by slide, and traces every visible difference back to the OOXML
+and to the code path responsible. Reference renders come from LibreOffice through
+[pptx-pdf](https://github.com/dsaad68/pptx-pdf), a single binary with LibreOffice embedded, at 96 dpi. Both engines
+are given the same Liberation, Carlito and Caladea faces under the family names the decks ask for,
+so a difference in text metrics is a real difference and not font substitution.
+
+- Harness, with the per-slide reports and all 35 issues this run produced: https://github.com/dsaad68/betteroffice/tree/harness/pptx-render-improvement/render-improvement-harness
+- Full report behind this issue, with every finding, the evidence table and the proposed fix: https://github.com/dsaad68/betteroffice/blob/harness/pptx-render-improvement/render-improvement-harness/issues/geometry-preset-adj-values-wrong/report.md
+- How the harness works and why it is built this way: https://gist.github.com/dsaad68/038b63c2977aeca16fc873c2df1152d0
+
+Line numbers link to the exact commit they were checked against.

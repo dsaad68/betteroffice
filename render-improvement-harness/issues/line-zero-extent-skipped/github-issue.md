@@ -79,16 +79,16 @@ nothing downstream to skip.
    `pptx-edit` write-fidelity tests.
 
 2. Nothing else in the pipeline is at fault, and in particular there is no zero-extent cull:
-   - `Space::map_transform` ([`crates/pptx-render/src/layout.rs:1613`](https://github.com/dsaad68/betteroffice/blob/df1a57dae7a091ea9ca8176ca013274cced71fdd/crates/pptx-render/src/layout.rs#L1613)) maps a zero `cx`/`cy` to a
+   - `Space::map_transform` ([`crates/pptx-render/src/layout.rs:1613`](https://github.com/dsaad68/betteroffice/blob/a47dbde7498c781ab81b141e834da1950dcf4175/crates/pptx-render/src/layout.rs#L1613)) maps a zero `cx`/`cy` to a
      zero `w`/`h` without dropping anything; the only `width > 0 && height > 0` test nearby is
-     `resolved_transform_value` ([`crates/pptx-render/src/layout.rs:1866`](https://github.com/dsaad68/betteroffice/blob/df1a57dae7a091ea9ca8176ca013274cced71fdd/crates/pptx-render/src/layout.rs#L1866)), which merely decides
+     `resolved_transform_value` ([`crates/pptx-render/src/layout.rs:1866`](https://github.com/dsaad68/betteroffice/blob/a47dbde7498c781ab81b141e834da1950dcf4175/crates/pptx-render/src/layout.rs#L1866)), which merely decides
      whether to fall back to an inherited transform and then keeps the shape's own values.
    - `"line" | "straightConnector1"` is a supported preset and produces the correct corner-to-corner
      path ([`crates/ooxml-drawingml/src/geometry.rs:93-95`](https://github.com/openooxml/betteroffice/blob/187cebc9ef5d414e4e65ccd96fe68b8f46c7f528/crates/ooxml-drawingml/src/geometry.rs#L93-L95)).
-   - `geometry_path` in the rasterizer ([`crates/pptx-raster/src/lib.rs:575`](https://github.com/dsaad68/betteroffice/blob/df1a57dae7a091ea9ca8176ca013274cced71fdd/crates/pptx-raster/src/lib.rs#L575)) builds a two-verb path;
+   - `geometry_path` in the rasterizer ([`crates/pptx-raster/src/lib.rs:575`](https://github.com/dsaad68/betteroffice/blob/a47dbde7498c781ab81b141e834da1950dcf4175/crates/pptx-raster/src/lib.rs#L575)) builds a two-verb path;
      `tiny_skia::Rect::from_ltrb` accepts a degenerate box (`left <= right`), so `finish()` returns
      a real path for a zero-height or zero-width line. `stroke_paint`
-     ([`crates/pptx-raster/src/lib.rs:698`](https://github.com/dsaad68/betteroffice/blob/df1a57dae7a091ea9ca8176ca013274cced71fdd/crates/pptx-raster/src/lib.rs#L698)) only refuses a non-finite or non-positive stroke width.
+     ([`crates/pptx-raster/src/lib.rs:698`](https://github.com/dsaad68/betteroffice/blob/a47dbde7498c781ab81b141e834da1950dcf4175/crates/pptx-raster/src/lib.rs#L698)) only refuses a non-finite or non-positive stroke width.
 
 3. Verified against the running renderer at HEAD (c77daaa) through the Python binding. Taking
    `decks/project20/source.pptx`, textually renaming `<p:cxnSp>`/`<p:nvCxnSpPr>`/`<p:cNvCxnSpPr>` to
@@ -117,7 +117,7 @@ nothing downstream to skip.
    connectors will parse but still stroke nothing. That is a separate gap, not a blocker here.
    Similarly, `headEnd`/`tailEnd` are parsed into `ShapeOutline`
    ([`crates/pptx-parse/src/drawing.rs:641-642`](https://github.com/openooxml/betteroffice/blob/187cebc9ef5d414e4e65ccd96fe68b8f46c7f528/crates/pptx-parse/src/drawing.rs#L641-L642), [`crates/ooxml-drawingml/src/shape.rs:55-57`](https://github.com/openooxml/betteroffice/blob/187cebc9ef5d414e4e65ccd96fe68b8f46c7f528/crates/ooxml-drawingml/src/shape.rs#L55-L57)) but
-   never reach the display-list `Stroke` ([`crates/pptx-render/src/layout.rs:1930-1944`](https://github.com/dsaad68/betteroffice/blob/df1a57dae7a091ea9ca8176ca013274cced71fdd/crates/pptx-render/src/layout.rs#L1930-L1944)), so the 11
+   never reach the display-list `Stroke` ([`crates/pptx-render/src/layout.rs:1930-1944`](https://github.com/dsaad68/betteroffice/blob/a47dbde7498c781ab81b141e834da1950dcf4175/crates/pptx-render/src/layout.rs#L1930-L1944)), so the 11
    arrowheaded connectors in the corpus - including `Straight Arrow Connector 87` on `project20/04`
    - will draw as plain lines.
 
@@ -128,8 +128,8 @@ same `p:spPr` with `a:xfrm`, `a:prstGeom`, `a:ln`, only the non-visual wrapper d
 (`p:nvCxnSpPr` / `p:cNvCxnSpPr` instead of `p:nvSpPr` / `p:cNvSpPr`). Mapping it onto the existing
 variant means nothing downstream has to change: `seed_shape`
 ([`crates/pptx-edit/src/deck.rs:123-138`](https://github.com/openooxml/betteroffice/blob/187cebc9ef5d414e4e65ccd96fe68b8f46c7f528/crates/pptx-edit/src/deck.rs#L123-L138)), `ShapeSnapshot`, `render_snapshot_shape`
-([`crates/pptx-render/src/layout.rs:340`](https://github.com/dsaad68/betteroffice/blob/df1a57dae7a091ea9ca8176ca013274cced71fdd/crates/pptx-render/src/layout.rs#L340)), `render_parsed_shape`
-([`crates/pptx-render/src/layout.rs:480`](https://github.com/dsaad68/betteroffice/blob/df1a57dae7a091ea9ca8176ca013274cced71fdd/crates/pptx-render/src/layout.rs#L480)), the rasterizer and `packages/pptx/src/render/canvas.ts`
+([`crates/pptx-render/src/layout.rs:340`](https://github.com/dsaad68/betteroffice/blob/a47dbde7498c781ab81b141e834da1950dcf4175/crates/pptx-render/src/layout.rs#L340)), `render_parsed_shape`
+([`crates/pptx-render/src/layout.rs:480`](https://github.com/dsaad68/betteroffice/blob/a47dbde7498c781ab81b141e834da1950dcf4175/crates/pptx-render/src/layout.rs#L480)), the rasterizer and `packages/pptx/src/render/canvas.ts`
 all already handle a `prstGeom` shape with an outline and no text.
 
 Two edits:
@@ -228,4 +228,17 @@ Related issues found in the same run: `fill-grpfill-not-resolved`
 
 Files most likely involved: `crates/pptx-parse/src/drawing.rs`, `crates/pptx-parse/src/write.rs`
 
-Found with a comparison harness that renders decks with both engines, pixel-diffs them, and traces each difference back to the OOXML and the code path. Full report with all findings: https://github.com/dsaad68/betteroffice/blob/harness/pptx-render-improvement/render-improvement-harness/issues/line-zero-extent-skipped/report.md. Methodology: https://gist.github.com/dsaad68/038b63c2977aeca16fc873c2df1152d0. Line numbers link to the exact commit they were checked against.
+**How this was found**
+
+A comparison harness renders each deck twice, once with LibreOffice and once with BetterOffice,
+pixel-diffs the two images slide by slide, and traces every visible difference back to the OOXML
+and to the code path responsible. Reference renders come from LibreOffice through
+[pptx-pdf](https://github.com/dsaad68/pptx-pdf), a single binary with LibreOffice embedded, at 96 dpi. Both engines
+are given the same Liberation, Carlito and Caladea faces under the family names the decks ask for,
+so a difference in text metrics is a real difference and not font substitution.
+
+- Harness, with the per-slide reports and all 35 issues this run produced: https://github.com/dsaad68/betteroffice/tree/harness/pptx-render-improvement/render-improvement-harness
+- Full report behind this issue, with every finding, the evidence table and the proposed fix: https://github.com/dsaad68/betteroffice/blob/harness/pptx-render-improvement/render-improvement-harness/issues/line-zero-extent-skipped/report.md
+- How the harness works and why it is built this way: https://gist.github.com/dsaad68/038b63c2977aeca16fc873c2df1152d0
+
+Line numbers link to the exact commit they were checked against.

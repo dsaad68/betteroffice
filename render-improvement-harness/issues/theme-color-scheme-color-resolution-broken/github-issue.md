@@ -70,9 +70,9 @@ and never looks at the sibling `p:style` element; `Shape`
 
 An autoshape's `p:style/a:fontRef` supplies the default text colour for every run in that shape
 that does not set one. With it missing, `resolve_style`
-([`crates/pptx-render/src/layout.rs:1042-1051`](https://github.com/dsaad68/betteroffice/blob/df1a57dae7a091ea9ca8176ca013274cced71fdd/crates/pptx-render/src/layout.rs#L1042-L1051)) falls through to the paragraph cascade, whose base
+([`crates/pptx-render/src/layout.rs:1042-1051`](https://github.com/dsaad68/betteroffice/blob/a47dbde7498c781ab81b141e834da1950dcf4175/crates/pptx-render/src/layout.rs#L1042-L1051)) falls through to the paragraph cascade, whose base
 for a non-placeholder shape is the master's `p:otherStyle`
-([`crates/pptx-render/src/layout.rs:808-812`](https://github.com/dsaad68/betteroffice/blob/df1a57dae7a091ea9ca8176ca013274cced71fdd/crates/pptx-render/src/layout.rs#L808-L812), `:1786-1801`) - and every deck in this cluster sets
+([`crates/pptx-render/src/layout.rs:808-812`](https://github.com/dsaad68/betteroffice/blob/a47dbde7498c781ab81b141e834da1950dcf4175/crates/pptx-render/src/layout.rs#L808-L812), `:1786-1801`) - and every deck in this cluster sets
 that to `schemeClr tx1`.
 
 Confirmed on `cisco-cloud-security` slide 6, id 46:
@@ -100,7 +100,7 @@ Note the master `otherStyle` should not be in this chain at all - for a slide sh
 below `fontRef` is `p:defaultTextStyle` in `presentation.xml`, which is also unparsed. That is a
 separate (and here invisible) inaccuracy; it is only because `otherStyle` is consulted that the
 failure shows up as theme grey rather than as the `#000000` literal at
-[`crates/pptx-render/src/layout.rs:1051`](https://github.com/dsaad68/betteroffice/blob/df1a57dae7a091ea9ca8176ca013274cced71fdd/crates/pptx-render/src/layout.rs#L1051).
+[`crates/pptx-render/src/layout.rs:1051`](https://github.com/dsaad68/betteroffice/blob/a47dbde7498c781ab81b141e834da1950dcf4175/crates/pptx-render/src/layout.rs#L1051).
 
 ### B. `p:clrMap` / `p:clrMapOvr` are never parsed (3 findings)
 
@@ -147,7 +147,7 @@ map-aware lookup turns every mapped colour black.
   is dropped by `text-inheritance-layout-lststyle-ignored`, and the master's `p:titleStyle` uses
   `<a:gradFill>` with two `tx1` stops, dropped by `text-run-props-gradfill-not-resolved`. With no
   colour reaching it at all, `resolve_style` lands on the `"#000000"` literal at
-  [`crates/pptx-render/src/layout.rs:1051`](https://github.com/dsaad68/betteroffice/blob/df1a57dae7a091ea9ca8176ca013274cced71fdd/crates/pptx-render/src/layout.rs#L1051). Fixing the colour map is necessary but not sufficient
+  [`crates/pptx-render/src/layout.rs:1051`](https://github.com/dsaad68/betteroffice/blob/a47dbde7498c781ab81b141e834da1950dcf4175/crates/pptx-render/src/layout.rs#L1051). Fixing the colour map is necessary but not sufficient
   for this slide. `rollout-plan/09/1` has the same `gradFill` construct in its master `titleStyle`,
   though there a `tx1` colour does reach the run.
 - **`project20/03/1`'s claim that an explicit run-level `schemeClr` also fails is wrong.** The
@@ -177,12 +177,12 @@ map-aware lookup turns every mapped colour black.
    is a direct child of `a:fontRef`, so `parse_color_container`
    ([`crates/pptx-parse/src/drawing.rs:654`](https://github.com/openooxml/betteroffice/blob/187cebc9ef5d414e4e65ccd96fe68b8f46c7f528/crates/pptx-parse/src/drawing.rs#L654)) already handles it as-is; no `formatScheme` is needed.
 
-3. [`crates/pptx-render/src/layout.rs:761`](https://github.com/dsaad68/betteroffice/blob/df1a57dae7a091ea9ca8176ca013274cced71fdd/crates/pptx-render/src/layout.rs#L761) - add `font_ref_color: Option<&'a ColorValue>` to
+3. [`crates/pptx-render/src/layout.rs:761`](https://github.com/dsaad68/betteroffice/blob/a47dbde7498c781ab81b141e834da1950dcf4175/crates/pptx-render/src/layout.rs#L761) - add `font_ref_color: Option<&'a ColorValue>` to
    `BodyCascade`, filled at the two construction sites (`:451` and `:571`) from
    `original` / `layout_node` / `master_node` via a `node_font_ref_color` helper written like
-   `node_fill` ([`crates/pptx-render/src/layout.rs:1756`](https://github.com/dsaad68/betteroffice/blob/df1a57dae7a091ea9ca8176ca013274cced71fdd/crates/pptx-render/src/layout.rs#L1756)).
+   `node_fill` ([`crates/pptx-render/src/layout.rs:1756`](https://github.com/dsaad68/betteroffice/blob/a47dbde7498c781ab81b141e834da1950dcf4175/crates/pptx-render/src/layout.rs#L1756)).
 
-4. [`crates/pptx-render/src/layout.rs:808`](https://github.com/dsaad68/betteroffice/blob/df1a57dae7a091ea9ca8176ca013274cced71fdd/crates/pptx-render/src/layout.rs#L808) - in `paragraph_properties`, install it as the base
+4. [`crates/pptx-render/src/layout.rs:808`](https://github.com/dsaad68/betteroffice/blob/a47dbde7498c781ab81b141e834da1950dcf4175/crates/pptx-render/src/layout.rs#L808) - in `paragraph_properties`, install it as the base
    colour *after* the master `txStyles` seed and *before* the master/layout/primary body merge, so
    the run's own `rPr` and any `lstStyle`/`defRPr` still win. Gate it on `self.placeholder.is_none()`:
    for a real placeholder the `titleStyle`/`bodyStyle` seed is the correct list-style chain and must
@@ -219,7 +219,7 @@ map-aware lookup turns every mapped colour black.
    (`:60-68`): `p:clrMap` on the master, `p:clrMapOvr/a:overrideClrMapping` on layout and slide,
    with `<a:masterClrMapping/>` parsing to `None`.
 
-8. [`crates/pptx-render/src/layout.rs:317`](https://github.com/dsaad68/betteroffice/blob/df1a57dae7a091ea9ca8176ca013274cced71fdd/crates/pptx-render/src/layout.rs#L317) - resolve the effective map once per slide
+8. [`crates/pptx-render/src/layout.rs:317`](https://github.com/dsaad68/betteroffice/blob/a47dbde7498c781ab81b141e834da1950dcf4175/crates/pptx-render/src/layout.rs#L317) - resolve the effective map once per slide
    (slide override, else layout override, else master map, else default) into a
    `color_map: ColorMap` field on `SlideRenderer`, and pass it at the six sites that reach a
    resolver: `paint` (`:1897`, used at `:183`, `:388`, `:526`), `stroke` (`:1930`, used at `:393`,
@@ -312,7 +312,7 @@ then `diff.py`.
 
 No test in the tree covers either mechanism. [`crates/ooxml-drawingml/src/color.rs:200-295`](https://github.com/openooxml/betteroffice/blob/187cebc9ef5d414e4e65ccd96fe68b8f46c7f528/crates/ooxml-drawingml/src/color.rs#L200-L295) tests
 `srgbClr`, tint/shade and the HSL modifiers but never a mapped name, and the `pptx-render` tests
-from [`crates/pptx-render/src/layout.rs:2200`](https://github.com/dsaad68/betteroffice/blob/df1a57dae7a091ea9ca8176ca013274cced71fdd/crates/pptx-render/src/layout.rs#L2200) on build `TextStyle` values directly and never
+from [`crates/pptx-render/src/layout.rs:2200`](https://github.com/dsaad68/betteroffice/blob/a47dbde7498c781ab81b141e834da1950dcf4175/crates/pptx-render/src/layout.rs#L2200) on build `TextStyle` values directly and never
 exercise the cascade. Both need new tests rather than extended ones.
 
 **Additional context**
@@ -323,4 +323,17 @@ Related issues found in the same run: `geometry-custom-collapses-to-bbox`, `pict
 
 Files most likely involved: `crates/pptx-parse/src/drawing.rs`, `crates/pptx-parse/src/model.rs`, `crates/pptx-parse/src/package.rs`, `crates/pptx-parse/src/write.rs`, `crates/pptx-render/src/layout.rs`, `crates/ooxml-drawingml/src/theme.rs`, `crates/ooxml-drawingml/src/color.rs`
 
-Found with a comparison harness that renders decks with both engines, pixel-diffs them, and traces each difference back to the OOXML and the code path. Full report with all findings: https://github.com/dsaad68/betteroffice/blob/harness/pptx-render-improvement/render-improvement-harness/issues/theme-color-scheme-color-resolution-broken/report.md. Methodology: https://gist.github.com/dsaad68/038b63c2977aeca16fc873c2df1152d0. Line numbers link to the exact commit they were checked against.
+**How this was found**
+
+A comparison harness renders each deck twice, once with LibreOffice and once with BetterOffice,
+pixel-diffs the two images slide by slide, and traces every visible difference back to the OOXML
+and to the code path responsible. Reference renders come from LibreOffice through
+[pptx-pdf](https://github.com/dsaad68/pptx-pdf), a single binary with LibreOffice embedded, at 96 dpi. Both engines
+are given the same Liberation, Carlito and Caladea faces under the family names the decks ask for,
+so a difference in text metrics is a real difference and not font substitution.
+
+- Harness, with the per-slide reports and all 35 issues this run produced: https://github.com/dsaad68/betteroffice/tree/harness/pptx-render-improvement/render-improvement-harness
+- Full report behind this issue, with every finding, the evidence table and the proposed fix: https://github.com/dsaad68/betteroffice/blob/harness/pptx-render-improvement/render-improvement-harness/issues/theme-color-scheme-color-resolution-broken/report.md
+- How the harness works and why it is built this way: https://gist.github.com/dsaad68/038b63c2977aeca16fc873c2df1152d0
+
+Line numbers link to the exact commit they were checked against.

@@ -69,18 +69,18 @@ Nothing ever reads it. `field_type` and `field_id` are written at those two site
 referenced anywhere else in the workspace — grep for `field_type` across `crates/` returns only
 the definition ([`crates/pptx-parse/src/model.rs:332`](https://github.com/openooxml/betteroffice/blob/187cebc9ef5d414e4e65ccd96fe68b8f46c7f528/crates/pptx-parse/src/model.rs#L332)) and the two assignments. The renderer
 therefore draws the cached `<a:t>` unchanged: `content_from_body` copies `run.text` straight into
-a `ContentRun` ([`crates/pptx-render/src/layout.rs:884`](https://github.com/dsaad68/betteroffice/blob/df1a57dae7a091ea9ca8176ca013274cced71fdd/crates/pptx-render/src/layout.rs#L884), the `text: run.text.clone()` at `:897`),
+a `ContentRun` ([`crates/pptx-render/src/layout.rs:884`](https://github.com/dsaad68/betteroffice/blob/a47dbde7498c781ab81b141e834da1950dcf4175/crates/pptx-render/src/layout.rs#L884), the `text: run.text.clone()` at `:897`),
 dropping the field metadata that would have told it to substitute.
 
 The affected shape reaches that function through the master/layout pass. `layout_slide` renders
-master shapes that are *not* placeholders ([`crates/pptx-render/src/layout.rs:208-218`](https://github.com/dsaad68/betteroffice/blob/df1a57dae7a091ea9ca8176ca013274cced71fdd/crates/pptx-render/src/layout.rs#L208-L218)) and layout
+master shapes that are *not* placeholders ([`crates/pptx-render/src/layout.rs:208-218`](https://github.com/dsaad68/betteroffice/blob/a47dbde7498c781ab81b141e834da1950dcf4175/crates/pptx-render/src/layout.rs#L208-L218)) and layout
 shapes likewise (`:219-229`), each via `render_parsed_shape`, which builds the text with
-`content_from_body` at [`crates/pptx-render/src/layout.rs:564`](https://github.com/dsaad68/betteroffice/blob/df1a57dae7a091ea9ca8176ca013274cced71fdd/crates/pptx-render/src/layout.rs#L564). `Rectangle 7` carries `<p:nvPr/>`
+`content_from_body` at [`crates/pptx-render/src/layout.rs:564`](https://github.com/dsaad68/betteroffice/blob/a47dbde7498c781ab81b141e834da1950dcf4175/crates/pptx-render/src/layout.rs#L564). `Rectangle 7` carries `<p:nvPr/>`
 with no `<p:ph>`, so it passes the `node_placeholder(shape).is_none()` filter and is drawn on
 every slide.
 
 The slide number is available and unused: `layout_slide` already takes `slide_index: usize`
-([`crates/pptx-render/src/layout.rs:132`](https://github.com/dsaad68/betteroffice/blob/df1a57dae7a091ea9ca8176ca013274cced71fdd/crates/pptx-render/src/layout.rs#L132)) but `LayoutBuilder` (`:314-328`) does not carry it, so
+([`crates/pptx-render/src/layout.rs:132`](https://github.com/dsaad68/betteroffice/blob/a47dbde7498c781ab81b141e834da1950dcf4175/crates/pptx-render/src/layout.rs#L132)) but `LayoutBuilder` (`:314-328`) does not carry it, so
 `content_from_body` has nothing to substitute with.
 
 Confirmed by experiment, not by reading alone. Rendering the deck through `bindings/python-pptx`
@@ -102,7 +102,7 @@ drawn at all. The three decks with slide-level `<a:fld type="slidenum">` (`ocp-p
 `project17`, `rollout-plan`) render correctly *by accident*: PowerPoint writes the evaluated value
 into the slide-level cached `<a:t>` (`ppt/slides/slide15.xml` → `<a:t>15</a:t>`, and so on for all
 20 slide-level fields in those decks), and that path goes through `content_from_story`
-([`crates/pptx-render/src/layout.rs:458`](https://github.com/dsaad68/betteroffice/blob/df1a57dae7a091ea9ca8176ca013274cced71fdd/crates/pptx-render/src/layout.rs#L458), `:862`) from a `TextRunSnapshot`
+([`crates/pptx-render/src/layout.rs:458`](https://github.com/dsaad68/betteroffice/blob/a47dbde7498c781ab81b141e834da1950dcf4175/crates/pptx-render/src/layout.rs#L458), `:862`) from a `TextRunSnapshot`
 ([`crates/pptx-edit/src/model.rs:58`](https://github.com/openooxml/betteroffice/blob/187cebc9ef5d414e4e65ccd96fe68b8f46c7f528/crates/pptx-edit/src/model.rs#L58)) that has no field concept at all. `cisco-cloud-security` is
 the only deck whose field lives on a master/layout as a plain shape, where the cached text is the
 `‹#›` placeholder.
@@ -255,4 +255,17 @@ Related issues found in the same run: `fill-alpha-modifier-ignored`
 
 Files most likely involved: `crates/pptx-render/src/layout.rs`, `crates/pptx-parse/src/package.rs`, `crates/pptx-parse/src/model.rs`
 
-Found with a comparison harness that renders decks with both engines, pixel-diffs them, and traces each difference back to the OOXML and the code path. Full report with all findings: https://github.com/dsaad68/betteroffice/blob/harness/pptx-render-improvement/render-improvement-harness/issues/text-slidenum-field-not-evaluated/report.md. Methodology: https://gist.github.com/dsaad68/038b63c2977aeca16fc873c2df1152d0. Line numbers link to the exact commit they were checked against.
+**How this was found**
+
+A comparison harness renders each deck twice, once with LibreOffice and once with BetterOffice,
+pixel-diffs the two images slide by slide, and traces every visible difference back to the OOXML
+and to the code path responsible. Reference renders come from LibreOffice through
+[pptx-pdf](https://github.com/dsaad68/pptx-pdf), a single binary with LibreOffice embedded, at 96 dpi. Both engines
+are given the same Liberation, Carlito and Caladea faces under the family names the decks ask for,
+so a difference in text metrics is a real difference and not font substitution.
+
+- Harness, with the per-slide reports and all 35 issues this run produced: https://github.com/dsaad68/betteroffice/tree/harness/pptx-render-improvement/render-improvement-harness
+- Full report behind this issue, with every finding, the evidence table and the proposed fix: https://github.com/dsaad68/betteroffice/blob/harness/pptx-render-improvement/render-improvement-harness/issues/text-slidenum-field-not-evaluated/report.md
+- How the harness works and why it is built this way: https://gist.github.com/dsaad68/038b63c2977aeca16fc873c2df1152d0
+
+Line numbers link to the exact commit they were checked against.

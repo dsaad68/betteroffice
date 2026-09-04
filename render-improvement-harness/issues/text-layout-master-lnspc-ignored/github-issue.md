@@ -81,10 +81,10 @@ The path it would travel is otherwise intact and reachable, which is what makes 
 job rather than a design one: `parse_text_styles` / `parse_style_levels`
 ([`crates/pptx-parse/src/drawing.rs:67-98`](https://github.com/openooxml/betteroffice/blob/187cebc9ef5d414e4e65ccd96fe68b8f46c7f528/crates/pptx-parse/src/drawing.rs#L67-L98)) already builds the master's nine `titleStyle` levels
 through the same `parse_paragraph_properties`, `master_style`
-([`crates/pptx-render/src/layout.rs:1786-1801`](https://github.com/dsaad68/betteroffice/blob/df1a57dae7a091ea9ca8176ca013274cced71fdd/crates/pptx-render/src/layout.rs#L1786-L1801)) already picks `titleStyle` for a `title`
+([`crates/pptx-render/src/layout.rs:1786-1801`](https://github.com/dsaad68/betteroffice/blob/a47dbde7498c781ab81b141e834da1950dcf4175/crates/pptx-render/src/layout.rs#L1786-L1801)) already picks `titleStyle` for a `title`
 placeholder, and `BodyCascade::paragraph_properties`
-([`crates/pptx-render/src/layout.rs:808-828`](https://github.com/dsaad68/betteroffice/blob/df1a57dae7a091ea9ca8176ca013274cced71fdd/crates/pptx-render/src/layout.rs#L808-L828)) already seeds from it before merging master →
-layout → slide bodies field-wise ([`crates/pptx-render/src/layout.rs:1804-1822`](https://github.com/dsaad68/betteroffice/blob/df1a57dae7a091ea9ca8176ca013274cced71fdd/crates/pptx-render/src/layout.rs#L1804-L1822)). Confirmed on
+([`crates/pptx-render/src/layout.rs:808-828`](https://github.com/dsaad68/betteroffice/blob/a47dbde7498c781ab81b141e834da1950dcf4175/crates/pptx-render/src/layout.rs#L808-L828)) already seeds from it before merging master →
+layout → slide bodies field-wise ([`crates/pptx-render/src/layout.rs:1804-1822`](https://github.com/dsaad68/betteroffice/blob/a47dbde7498c781ab81b141e834da1950dcf4175/crates/pptx-render/src/layout.rs#L1804-L1822)). Confirmed on
 the XML: `decks/cisco-cloud-security/xml/18/master.xml`'s `p:titleStyle/a:lvl1pPr` carries
 `<a:lnSpc><a:spcPct val="80000"/></a:lnSpc>` with `sz="3200"`; the layout's `Title 1` has only
 an `<a:xfrm>` in `spPr` and no `lstStyle`, and the slide's `Title 1` has `<p:spPr/>` plus an
@@ -92,12 +92,12 @@ empty `<a:bodyPr/>` and `<a:lstStyle/>` — so `titleStyle` is the only source a
 does reach it.
 
 It dies on the render side even if it were parsed: `ResolvedParagraph`
-([`crates/pptx-render/src/layout.rs:910-915`](https://github.com/dsaad68/betteroffice/blob/df1a57dae7a091ea9ca8176ca013274cced71fdd/crates/pptx-render/src/layout.rs#L910-L915)) carries exactly one geometry field,
-`margin_left_px`, populated at [`crates/pptx-render/src/layout.rs:994-1004`](https://github.com/dsaad68/betteroffice/blob/df1a57dae7a091ea9ca8176ca013274cced71fdd/crates/pptx-render/src/layout.rs#L994-L1004), and
+([`crates/pptx-render/src/layout.rs:910-915`](https://github.com/dsaad68/betteroffice/blob/a47dbde7498c781ab81b141e834da1950dcf4175/crates/pptx-render/src/layout.rs#L910-L915)) carries exactly one geometry field,
+`margin_left_px`, populated at [`crates/pptx-render/src/layout.rs:994-1004`](https://github.com/dsaad68/betteroffice/blob/a47dbde7498c781ab81b141e834da1950dcf4175/crates/pptx-render/src/layout.rs#L994-L1004), and
 `layout_paragraph` advances by the raw font line box —
-`line_y += line_box.height()` ([`crates/pptx-render/src/layout.rs:1261`](https://github.com/dsaad68/betteroffice/blob/df1a57dae7a091ea9ca8176ca013274cced71fdd/crates/pptx-render/src/layout.rs#L1261)), where `line_box` comes
+`line_y += line_box.height()` ([`crates/pptx-render/src/layout.rs:1261`](https://github.com/dsaad68/betteroffice/blob/a47dbde7498c781ab81b141e834da1950dcf4175/crates/pptx-render/src/layout.rs#L1261)), where `line_box` comes
 from `clusters_line_box` → `style_line_box` → `single_line_box`
-([`crates/pptx-render/src/layout.rs:1525-1562`](https://github.com/dsaad68/betteroffice/blob/df1a57dae7a091ea9ca8176ca013274cced71fdd/crates/pptx-render/src/layout.rs#L1525-L1562)) with no spacing rule applied. `ooxml-text`
+([`crates/pptx-render/src/layout.rs:1525-1562`](https://github.com/dsaad68/betteroffice/blob/a47dbde7498c781ab81b141e834da1950dcf4175/crates/pptx-render/src/layout.rs#L1525-L1562)) with no spacing rule applied. `ooxml-text`
 already has the machinery — `LineSpacingRule` and `apply_spacing_rule`
 ([`crates/ooxml-text/src/word_metrics.rs:121-128`](https://github.com/openooxml/betteroffice/blob/187cebc9ef5d414e4e65ccd96fe68b8f46c7f528/crates/ooxml-text/src/word_metrics.rs#L121-L128), `:259`) — but only `docx` calls it
 ([`crates/ooxml-text/src/measure/line_filler.rs:940`](https://github.com/openooxml/betteroffice/blob/187cebc9ef5d414e4e65ccd96fe68b8f46c7f528/crates/ooxml-text/src/measure/line_filler.rs#L940)).
@@ -113,7 +113,7 @@ this note. Within the 41 px box the reference splits ascent/descent in the font'
 
 **2. The vertical anchor is clamped to zero when the text overflows (confirmed, secondary).**
 
-[`crates/pptx-render/src/layout.rs:710-714`](https://github.com/dsaad68/betteroffice/blob/df1a57dae7a091ea9ca8176ca013274cced71fdd/crates/pptx-render/src/layout.rs#L710-L714) computes
+[`crates/pptx-render/src/layout.rs:710-714`](https://github.com/dsaad68/betteroffice/blob/a47dbde7498c781ab81b141e834da1950dcf4175/crates/pptx-render/src/layout.rs#L710-L714) computes
 `TextAnchor::Center => ((content_rect.h - laid_out.total_height) / 2.0).max(0.0)`. The master's
 title `bodyPr` is `anchor="ctr"` with `tIns="45712"`/`bIns="45712"`, and its box is
 `cy="731837"` EMU, so `content_rect.h` is 67.2 px. A two-line title is 98 px tall today (82 px
@@ -168,14 +168,14 @@ function via `parse_style_levels` ([`crates/pptx-parse/src/drawing.rs:78`](https
 `space_after` here too if the adjacent gap is in scope; the cascade below carries them for free.
 
 **Cascade and apply it.** Extend `merge_paragraph_properties`
-([`crates/pptx-render/src/layout.rs:1804-1822`](https://github.com/dsaad68/betteroffice/blob/df1a57dae7a091ea9ca8176ca013274cced71fdd/crates/pptx-render/src/layout.rs#L1804-L1822)) with the same `is_some()` override the other five
+([`crates/pptx-render/src/layout.rs:1804-1822`](https://github.com/dsaad68/betteroffice/blob/a47dbde7498c781ab81b141e834da1950dcf4175/crates/pptx-render/src/layout.rs#L1804-L1822)) with the same `is_some()` override the other five
 fields use, add `line_spacing: Option<LineSpacing>` to `ResolvedParagraph`
-([`crates/pptx-render/src/layout.rs:910-915`](https://github.com/dsaad68/betteroffice/blob/df1a57dae7a091ea9ca8176ca013274cced71fdd/crates/pptx-render/src/layout.rs#L910-L915)), populate it at
-[`crates/pptx-render/src/layout.rs:994-1004`](https://github.com/dsaad68/betteroffice/blob/df1a57dae7a091ea9ca8176ca013274cced71fdd/crates/pptx-render/src/layout.rs#L994-L1004) next to `margin_left_px`, and consume it in
+([`crates/pptx-render/src/layout.rs:910-915`](https://github.com/dsaad68/betteroffice/blob/a47dbde7498c781ab81b141e834da1950dcf4175/crates/pptx-render/src/layout.rs#L910-L915)), populate it at
+[`crates/pptx-render/src/layout.rs:994-1004`](https://github.com/dsaad68/betteroffice/blob/a47dbde7498c781ab81b141e834da1950dcf4175/crates/pptx-render/src/layout.rs#L994-L1004) next to `margin_left_px`, and consume it in
 `layout_paragraph`: run every `clusters_line_box` / `style_line_box` result
-([`crates/pptx-render/src/layout.rs:1525-1562`](https://github.com/dsaad68/betteroffice/blob/df1a57dae7a091ea9ca8176ca013274cced71fdd/crates/pptx-render/src/layout.rs#L1525-L1562)) through a `spaced_line_box` helper before the
+([`crates/pptx-render/src/layout.rs:1525-1562`](https://github.com/dsaad68/betteroffice/blob/a47dbde7498c781ab81b141e834da1950dcf4175/crates/pptx-render/src/layout.rs#L1525-L1562)) through a `spaced_line_box` helper before the
 line's `height`, `baseline` and the `line_y +=` advance at
-[`crates/pptx-render/src/layout.rs:1261`](https://github.com/dsaad68/betteroffice/blob/df1a57dae7a091ea9ca8176ca013274cced71fdd/crates/pptx-render/src/layout.rs#L1261) are taken from it. The helper does what the measurements
+[`crates/pptx-render/src/layout.rs:1261`](https://github.com/dsaad68/betteroffice/blob/a47dbde7498c781ab81b141e834da1950dcf4175/crates/pptx-render/src/layout.rs#L1261) are taken from it. The helper does what the measurements
 say LibreOffice does:
 
 - `Percent(p)`: target height = `p * 1.2 * font_size_px` — the 1.2 constant is PowerPoint's, not
@@ -195,9 +195,9 @@ Everything downstream already carries per-line geometry: `PositionedTextLine`
 contract does not change.
 
 **Unclamp the anchor.** Drop the `.max(0.0)` from the `Center` and `Bottom` arms at
-[`crates/pptx-render/src/layout.rs:710-714`](https://github.com/dsaad68/betteroffice/blob/df1a57dae7a091ea9ca8176ca013274cced71fdd/crates/pptx-render/src/layout.rs#L710-L714) so an overflowing block centres about the box instead
-of pinning to the top inset. `overflow` ([`crates/pptx-render/src/layout.rs:739`](https://github.com/dsaad68/betteroffice/blob/df1a57dae7a091ea9ca8176ca013274cced71fdd/crates/pptx-render/src/layout.rs#L739)) still reports
-the spill, and `shift_line` ([`crates/pptx-render/src/layout.rs:1565`](https://github.com/dsaad68/betteroffice/blob/df1a57dae7a091ea9ca8176ca013274cced71fdd/crates/pptx-render/src/layout.rs#L1565)) already handles a negative
+[`crates/pptx-render/src/layout.rs:710-714`](https://github.com/dsaad68/betteroffice/blob/a47dbde7498c781ab81b141e834da1950dcf4175/crates/pptx-render/src/layout.rs#L710-L714) so an overflowing block centres about the box instead
+of pinning to the top inset. `overflow` ([`crates/pptx-render/src/layout.rs:739`](https://github.com/dsaad68/betteroffice/blob/a47dbde7498c781ab81b141e834da1950dcf4175/crates/pptx-render/src/layout.rs#L739)) still reports
+the spill, and `shift_line` ([`crates/pptx-render/src/layout.rs:1565`](https://github.com/dsaad68/betteroffice/blob/a47dbde7498c781ab81b141e834da1950dcf4175/crates/pptx-render/src/layout.rs#L1565)) already handles a negative
 `y`.
 
 ```rust
@@ -249,18 +249,18 @@ Risks and tests to add:
 - **`normAutofit lnSpcReduction` becomes reachable.** It is already parsed into
   `TextAutofit::Normal` ([`crates/pptx-parse/src/model.rs:286-292`](https://github.com/openooxml/betteroffice/blob/187cebc9ef5d414e4e65ccd96fe68b8f46c7f528/crates/pptx-parse/src/model.rs#L286-L292),
   [`crates/pptx-parse/src/drawing.rs:802`](https://github.com/openooxml/betteroffice/blob/187cebc9ef5d414e4e65ccd96fe68b8f46c7f528/crates/pptx-parse/src/drawing.rs#L802)) and, like `fontScale`
-  ([`crates/pptx-render/src/layout.rs:681-685`](https://github.com/dsaad68/betteroffice/blob/df1a57dae7a091ea9ca8176ca013274cced71fdd/crates/pptx-render/src/layout.rs#L681-L685)), ignored. Once a line-height knob exists it is a
+  ([`crates/pptx-render/src/layout.rs:681-685`](https://github.com/dsaad68/betteroffice/blob/a47dbde7498c781ab81b141e834da1950dcf4175/crates/pptx-render/src/layout.rs#L681-L685)), ignored. Once a line-height knob exists it is a
   two-line follow-up, but it also interacts with the autofit shrink loop at
-  [`crates/pptx-render/src/layout.rs:687-698`](https://github.com/dsaad68/betteroffice/blob/df1a57dae7a091ea9ca8176ca013274cced71fdd/crates/pptx-render/src/layout.rs#L687-L698), which re-lays out at a smaller `scale` — the
+  [`crates/pptx-render/src/layout.rs:687-698`](https://github.com/dsaad68/betteroffice/blob/a47dbde7498c781ab81b141e834da1950dcf4175/crates/pptx-render/src/layout.rs#L687-L698), which re-lays out at a smaller `scale` — the
   spacing must scale with the font size, not be recomputed from an unscaled one. Feed
   `style.font_size_pt * scale` into `spaced_line_box`, the same value `style_line_box`
-  ([`crates/pptx-render/src/layout.rs:1558-1561`](https://github.com/dsaad68/betteroffice/blob/df1a57dae7a091ea9ca8176ca013274cced71fdd/crates/pptx-render/src/layout.rs#L1558-L1561)) already uses.
+  ([`crates/pptx-render/src/layout.rs:1558-1561`](https://github.com/dsaad68/betteroffice/blob/a47dbde7498c781ab81b141e834da1950dcf4175/crates/pptx-render/src/layout.rs#L1558-L1561)) already uses.
 - **Mixed-size lines** need a rule for which run's size drives `Percent`. PowerPoint uses the
-  largest run on the line; `clusters_line_box` ([`crates/pptx-render/src/layout.rs:1525-1548`](https://github.com/dsaad68/betteroffice/blob/df1a57dae7a091ea9ca8176ca013274cced71fdd/crates/pptx-render/src/layout.rs#L1525-L1548))
+  largest run on the line; `clusters_line_box` ([`crates/pptx-render/src/layout.rs:1525-1548`](https://github.com/dsaad68/betteroffice/blob/a47dbde7498c781ab81b141e834da1950dcf4175/crates/pptx-render/src/layout.rs#L1525-L1548))
   already takes the max ascent/descent/leading, so take the max font size over the same
   deduplicated run set.
 - **Hit testing and caret geometry** read `line.y` / `line.height` / `caret_stops`
-  ([`crates/pptx-render/src/layout.rs:296`](https://github.com/dsaad68/betteroffice/blob/df1a57dae7a091ea9ca8176ca013274cced71fdd/crates/pptx-render/src/layout.rs#L296)), so tighter lines change which line a click lands on
+  ([`crates/pptx-render/src/layout.rs:296`](https://github.com/dsaad68/betteroffice/blob/a47dbde7498c781ab81b141e834da1950dcf4175/crates/pptx-render/src/layout.rs#L296)), so tighter lines change which line a click lands on
   in `packages/pptx-react`. Nothing needs a code change, but
   `packages/pptx-react/src/interactions.test.ts` hard-codes baselines (`:63`, `:77`) and will
   need its fixtures refreshed if they come from a real deck.
@@ -286,7 +286,7 @@ Re-render at least one slide from every other deck as well — all twelve carry 
 `lnSpc` somewhere — and diff against the current output to see what moved.
 
 No existing test covers line spacing or vertical anchoring in `pptx-render`: the module at
-[`crates/pptx-render/src/layout.rs:2008`](https://github.com/dsaad68/betteroffice/blob/df1a57dae7a091ea9ca8176ca013274cced71fdd/crates/pptx-render/src/layout.rs#L2008) has cases for hit testing, master-shape geometry,
+[`crates/pptx-render/src/layout.rs:2008`](https://github.com/dsaad68/betteroffice/blob/a47dbde7498c781ab81b141e834da1950dcf4175/crates/pptx-render/src/layout.rs#L2008) has cases for hit testing, master-shape geometry,
 reflow, `normAutofit` scaling (`:2239`) and charts, none touching `lnSpc` or `anchor`. New unit
 tests belong there. [`crates/ooxml-text/tests/docx_text.rs:681-780`](https://github.com/openooxml/betteroffice/blob/187cebc9ef5d414e4e65ccd96fe68b8f46c7f528/crates/ooxml-text/tests/docx_text.rs#L681-L780) already covers
 `apply_spacing_rule` itself and should not need changing.
@@ -299,4 +299,17 @@ Related issues found in the same run: `text-bullets-char-indent-dropped`
 
 Files most likely involved: `crates/pptx-parse/src/model.rs`, `crates/pptx-parse/src/drawing.rs`, `crates/pptx-render/src/layout.rs`
 
-Found with a comparison harness that renders decks with both engines, pixel-diffs them, and traces each difference back to the OOXML and the code path. Full report with all findings: https://github.com/dsaad68/betteroffice/blob/harness/pptx-render-improvement/render-improvement-harness/issues/text-layout-master-lnspc-ignored/report.md. Methodology: https://gist.github.com/dsaad68/038b63c2977aeca16fc873c2df1152d0. Line numbers link to the exact commit they were checked against.
+**How this was found**
+
+A comparison harness renders each deck twice, once with LibreOffice and once with BetterOffice,
+pixel-diffs the two images slide by slide, and traces every visible difference back to the OOXML
+and to the code path responsible. Reference renders come from LibreOffice through
+[pptx-pdf](https://github.com/dsaad68/pptx-pdf), a single binary with LibreOffice embedded, at 96 dpi. Both engines
+are given the same Liberation, Carlito and Caladea faces under the family names the decks ask for,
+so a difference in text metrics is a real difference and not font substitution.
+
+- Harness, with the per-slide reports and all 35 issues this run produced: https://github.com/dsaad68/betteroffice/tree/harness/pptx-render-improvement/render-improvement-harness
+- Full report behind this issue, with every finding, the evidence table and the proposed fix: https://github.com/dsaad68/betteroffice/blob/harness/pptx-render-improvement/render-improvement-harness/issues/text-layout-master-lnspc-ignored/report.md
+- How the harness works and why it is built this way: https://gist.github.com/dsaad68/038b63c2977aeca16fc873c2df1152d0
+
+Line numbers link to the exact commit they were checked against.
