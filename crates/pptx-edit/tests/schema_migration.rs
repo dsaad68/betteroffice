@@ -23,6 +23,9 @@ const V4_CONNECTORS_UPDATE: &[u8] = include_bytes!("fixtures/deck-schema-v4-conn
 const V4_STYLE_UPDATE: &[u8] = include_bytes!("fixtures/deck-schema-v4-styles.update.bin");
 const V4_NUMBERED_UPDATE: &[u8] =
     include_bytes!("fixtures/deck-schema-v4-slide-number-fields.update.bin");
+const V5_HIDDEN_UPDATE: &[u8] = include_bytes!("fixtures/deck-schema-v5-hidden.update.bin");
+const V5_THEME_HIDDEN_UPDATE: &[u8] =
+    include_bytes!("fixtures/deck-schema-v5-theme-hidden.update.bin");
 const V2_HIDDEN_UPDATE: &[u8] = include_bytes!("fixtures/deck-schema-v2-hidden.update.bin");
 const SHAPES: &str = "pptx:shapes";
 const V2_STORY_ID: &str = "story:shape:4343:0:0";
@@ -555,4 +558,48 @@ fn hidden_keys(update: &[u8]) -> Vec<String> {
         .collect();
     ids.sort();
     ids
+}
+
+#[test]
+fn current_main_v5_snapshots_migrate_and_preserve_theme_formatting() {
+    for update in [V5_HIDDEN_UPDATE, V5_THEME_HIDDEN_UPDATE] {
+        assert_eq!(stamped_version(update), Some(5.0));
+        assert!(hidden_keys(update).is_empty());
+        let session = DeckSession::open_from_update(update, 9410).unwrap();
+        let migrated = session.encode_state_as_update_v1();
+        assert_eq!(stamped_version(&migrated), Some(6.0));
+        assert_eq!(package_json(&migrated), package_json(update));
+        if update == V5_HIDDEN_UPDATE {
+            assert_v2_content(&session);
+            assert_eq!(hidden_keys(&migrated), V2_HIDDEN_SHAPE_IDS);
+        } else {
+            assert_eq!(session.package().presentation.first_slide_num, 10);
+            assert!(!session.package().themes[0].format_scheme.is_empty());
+            assert!(package_json(&migrated).contains("fontColor"));
+            assert_eq!(hidden_keys(&migrated), ["slide:0:256:shape:0"]);
+            assert!(session.snapshot().unwrap().slides[0].shapes[0].hidden);
+        }
+        let reopened = DeckSession::open_from_update(&migrated, 9411).unwrap();
+        assert_eq!(reopened.snapshot().unwrap(), session.snapshot().unwrap());
+        assert_eq!(reopened.encode_state_as_update_v1(), migrated);
+    }
+}
+
+#[test]
+fn future_full_and_differential_updates_are_rejected_atomically() {
+    let session = DeckSession::open_from_update(V5_HIDDEN_UPDATE, 9420).unwrap();
+    let original = session.encode_state_as_update_v1();
+    let future = restamped(&original, Some(7.0));
+    let future_doc = hydrated(&future);
+    let base = hydrated(&original);
+    let diff = future_doc
+        .transact()
+        .encode_state_as_update_v1(&base.transact().state_vector());
+    for update in [&future, &diff] {
+        assert!(matches!(
+            session.apply_update_v1(update),
+            Err(EditError::InvalidState(message)) if message == "unsupported deck schema version"
+        ));
+        assert_eq!(session.encode_state_as_update_v1(), original);
+    }
 }

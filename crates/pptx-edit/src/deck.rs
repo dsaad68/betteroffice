@@ -1494,6 +1494,73 @@ mod tests {
     }
 
     #[test]
+    fn hidden_flags_follow_main_v5_migration() {
+        use std::sync::Mutex;
+        use yrs::Update;
+        use yrs::updates::decoder::Decode;
+
+        const V2: &[u8] = include_bytes!("../tests/fixtures/deck-schema-v2-hidden.update.bin");
+        const V5: &[u8] = include_bytes!("../tests/fixtures/deck-schema-v5-hidden.update.bin");
+        for (update, versions) in [(V2, vec![3.0, 4.0, 5.0, 6.0]), (V5, vec![6.0])] {
+            let doc = crate::doc_with_client_id(9430);
+            doc.transact_mut()
+                .apply_update(Update::decode_v1(update).unwrap())
+                .unwrap();
+            let before = package_from_doc(&doc).unwrap();
+            let observed = Arc::new(Mutex::new(Vec::new()));
+            let events = observed.clone();
+            let _subscription = doc
+                .observe_update_v1(move |txn, _| {
+                    let meta = required_map(txn, META).unwrap();
+                    let shapes = required_map(txn, SHAPES).unwrap();
+                    let mut hidden: Vec<String> = shapes
+                        .iter(txn)
+                        .filter_map(|(id, value)| {
+                            value.cast::<MapRef>().ok().map(|shape| (id, shape))
+                        })
+                        .filter(|(_, shape)| map_bool(shape, txn, "hidden").unwrap_or(false))
+                        .map(|(id, _)| id.to_owned())
+                        .collect();
+                    hidden.sort();
+                    events.lock().unwrap().push((
+                        map_number(&meta, txn, "schemaVersion").unwrap(),
+                        package_from_meta(&meta, txn).unwrap(),
+                        hidden,
+                    ));
+                })
+                .unwrap();
+            migrate_doc(&doc).unwrap();
+            let events = observed.lock().unwrap();
+            assert_eq!(
+                events
+                    .iter()
+                    .map(|(version, _, _)| *version)
+                    .collect::<Vec<_>>(),
+                versions
+            );
+            for (version, package, hidden) in events.iter() {
+                assert_eq!(
+                    serde_json::to_vec(package).unwrap(),
+                    serde_json::to_vec(&before).unwrap()
+                );
+                if *version < 6.0 {
+                    assert!(hidden.is_empty());
+                } else {
+                    assert_eq!(
+                        hidden,
+                        &[
+                            "slide:0:256:shape:0",
+                            "slide:0:256:shape:8",
+                            "slide:0:256:shape:8.13",
+                            "slide:1:257:shape:16",
+                        ]
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
     fn seeding_stores_hidden_only_for_hidden_shapes() {
         assert!(hidden_keys(&DeckSession::open(FIXTURE, 103).unwrap()).is_empty());
 
