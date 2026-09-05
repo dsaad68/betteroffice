@@ -326,4 +326,42 @@ mod tests {
         assert!(!json.contains("transform"));
         assert!(json.contains("contractVersion"));
     }
+
+    #[test]
+    fn an_uncropped_rectangular_image_serializes_as_it_did_before_crops_existed() {
+        let mut image = Primitive::Image {
+            object_id: 90,
+            shape_id: Some("slide:0:256:shape:9".into()),
+            name: "Media fixture".into(),
+            x: 1280.0,
+            y: 720.0,
+            w: 0.5,
+            h: 0.25,
+            asset_id: Some("ppt/media/betteroffice-mark.png".into()),
+            crop: ImageCrop::default(),
+            path: None,
+            stroke: None,
+            transform: Transform::default(),
+        };
+        let before = r#"{"kind":"image","objectId":90,"shapeId":"slide:0:256:shape:9","name":"Media fixture","x":1280.0,"y":720.0,"w":0.5,"h":0.25,"assetId":"ppt/media/betteroffice-mark.png"}"#;
+        assert_eq!(serde_json::to_string(&image).unwrap(), before);
+        assert_eq!(serde_json::from_str::<Primitive>(before).unwrap(), image);
+
+        let Primitive::Image { crop, path, .. } = &mut image else {
+            unreachable!()
+        };
+        *crop = ImageCrop {
+            top: 0.1,
+            bottom: 0.2,
+            ..ImageCrop::default()
+        };
+        *path = Some(vec![
+            GeometryPathCommand::Move { x: 0.0, y: 0.5 },
+            GeometryPathCommand::Close,
+        ]);
+        let json = serde_json::to_string(&image).unwrap();
+        assert!(json.contains(r#""crop":{"top":0.1,"bottom":0.2}"#));
+        assert!(json.contains(r#""path":[{"type":"move","x":0.0,"y":0.5},{"type":"close"}]"#));
+        assert_eq!(serde_json::from_str::<Primitive>(&json).unwrap(), image);
+    }
 }
