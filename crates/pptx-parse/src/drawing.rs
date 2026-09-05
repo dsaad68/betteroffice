@@ -1069,6 +1069,7 @@ mod tests {
     use super::*;
     use crate::ParseLimits;
     use crate::xml::parse_xml;
+    use ooxml_drawingml::GeometryPathCommand;
 
     #[test]
     fn a_custom_geometry_becomes_a_path_normalised_to_the_shape() {

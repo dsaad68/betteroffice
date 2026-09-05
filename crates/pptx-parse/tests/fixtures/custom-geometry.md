@@ -17,15 +17,43 @@ The quarter ellipse uses radii `(80,30)` in a `200 × 100` path space and a 90-d
 
 ![After](../../../pptx-render/tests/fixtures/custom-geometry-after.png)
 
-The before image and version-2 update fixture were generated using `origin/main` at `387f2392`, opening this deck with client ID 285. The update is stored at `crates/pptx-edit/tests/fixtures/deck-custom-schema-v2.update.bin`. It contains the old parsed model without custom paths and exercises migration to version 3. Restoring an old update without source bytes retains its historical fallback geometry; attaching the original deck reparses the custom paths.
+The before image was generated using `origin/main` at `387f2392`.
+The version-2 and version-6 update fixtures were regenerated with current
+`origin/main` at `54fdaa00c8242d58db61418ac3bc3b2ad6d50cb4`, using client ID 285.
+They are stored at `crates/pptx-edit/tests/fixtures/deck-custom-schema-v2.update.bin`
+and `deck-custom-schema-v6.update.bin`. The fixture generator uses main’s legacy
+parser and defaults before stamping v2; its normal writer produces v6.
+Both contain the parsed model without custom paths and exercise migration to
+schema 7. Restoring an old update without source bytes retains its historical
+fallback geometry; attaching the original deck reparses the custom paths.
+See the [generator and compatibility details](../../../pptx-edit/tests/fixtures/README.md).
 
 The parser uses the same normalized command representation and 2,048-command bound as the DOCX custom-geometry parser. PPTX preserves individual path painting and rejects an unsupported path as a whole. It converts DrawingML polar angles to ellipse parameters before producing cubic curves; see [Apache POI's DrawingML angle convention](https://github.com/apache/poi/blob/trunk/poi/src/main/java/org/apache/poi/sl/draw/geom/ArcToCommand.java). Guide formulas still use the rectangle fallback.
 
-Isolation against that main revision covers all four tracked decks: the demo and its OPC copy (three slides each), chart-deck (two slides), and this deck (two slides). Nine display lists are byte-identical. Only the two intended shapes on slide 1 change; their other fields, the control shapes, and the display-list contract are unchanged. All four deck snapshot JSON payloads and all three pre-existing package JSON payloads are byte-identical. All 57 ZIP parts remain identical after both parser and editor no-edit saves, on both revisions.
+Isolation against current main (`54fdaa00`): 14 tracked PPTX fixtures; 40 slides; 39 byte-identical off-target; only the two intended shapes on custom-geometry slide 1 change; 14 snapshot JSON payloads and 13 off-target package JSON payloads byte-identical; 239 no-edit ZIP part payloads byte-identical on both revisions.
 
-Package and deck snapshot JSON deserialize in both directions. Version-1 and version-2 collaboration updates migrate to version 3. The old engine's version check intentionally rejects version-3 updates.
+Current main’s schema-6 documents load and migrate to schema 7. Main rejects
+both fresh and migrated schema-7 documents, including full and differential
+updates, without changing the receiving session. Snapshot JSON remains readable
+by main. Legacy v2 commits migrations 3, 4, 5, 6, and 7 in separate transactions;
+hidden keys first appear at 6 and survive 7. Reopening schema 7 is idempotent.
 
-Mutation verification (each mutation failed a running test, then passed after restoring production code):
+The schema-7 collision checks mutate skipping migration 7, skipping main’s
+migration 6, reverting the schema constant, and accepting schema 8. Each fails
+running migration tests and returns to green after restoring production code.
+
+Demo collaboration seeds were regenerated after diagnosing the CI check:
+
+The schema-6 seed loads through schema 7’s two metadata writes (`packageJson`
+and `schemaVersion`), adding client 2 at clock 2 and growing the loaded state
+vector from 11 to 13 bytes. A fresh schema-7 seed needs no migration and keeps
+an 11-byte state vector. Both retain 5 metadata keys, 1,045 shape-map keys,
+65 shapes, 55 stories, and 3 slides; their snapshots are exactly equal.
+The raw old and fresh PPTX seeds both contain 160,445 bytes and differ only
+at offset 40, where the schema byte changes from 6 to 7. This is the expected
+schema upgrade, with no dropped data.
+
+Original custom-geometry mutation verification at `79dc4056` (each failed a running test, then passed after restoration):
 
 | Mutation | Test filter | Result |
 | --- | --- | --- |

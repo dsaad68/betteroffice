@@ -62,8 +62,8 @@ fn current_main_v2_custom_snapshot_migrates_once_without_losing_shapes() {
     let reopened = DeckSession::open_from_update(&migrated, 911).unwrap();
     assert_eq!(reopened.snapshot().unwrap(), snapshot);
     assert_eq!(
-        reopened.encode_state_vector_v1(),
-        left.encode_state_vector_v1()
+        StateVector::decode_v1(&reopened.encode_state_vector_v1()).unwrap(),
+        StateVector::decode_v1(&left.encode_state_vector_v1()).unwrap()
     );
     right.apply_update_v1(&migrated).unwrap();
     left.apply_update_v1(&right.encode_state_as_update_v1())

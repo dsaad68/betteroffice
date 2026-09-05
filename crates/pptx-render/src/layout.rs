@@ -2443,7 +2443,6 @@ mod tests {
             fill: None,
             outline: None,
             style: None,
-            path: None,
         };
         let rect = PxRect {
             x: 0.0,
