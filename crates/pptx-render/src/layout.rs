@@ -1987,7 +1987,7 @@ fn paint(fill: &ShapeFill, theme: &Theme) -> Option<Paint> {
             "path" => GradientType::Path,
             _ => GradientType::Linear,
         };
-        let stops = gradient
+        let mut stops = gradient
             .stops
             .iter()
             .filter_map(|stop| {
@@ -1997,6 +1997,12 @@ fn paint(fill: &ShapeFill, theme: &Theme) -> Option<Paint> {
                 })
             })
             .collect::<Vec<_>>();
+        // An a:gsLst may list its stops in any order, and decks do: several here put pos=100000
+        // first. The canvas backend sorts on the caller's behalf, but tiny-skia pins positions
+        // monotonically instead, which collapses a reversed pair to a flat colour. Normalising
+        // here is what makes the two backends agree, and it leaves the parsed model faithful to
+        // the document so saving does not reorder the a:gsLst.
+        stops.sort_by(|left, right| left.position.total_cmp(&right.position));
         if !stops.is_empty() {
             return Some(Paint::Gradient {
                 gradient_type,
@@ -2270,6 +2276,36 @@ mod tests {
             assert_eq!(parse_align(Some(alignment)), TextAlign::Justify);
             assert!(!is_full_justification(Some(alignment)));
         }
+    }
+
+    #[test]
+    fn gradient_stops_reach_the_display_list_in_position_order() {
+        use ooxml_drawingml::{ColorValue, GradientFill, GradientStop as ModelStop};
+        let stop = |position: f64, rgb: &str| ModelStop {
+            position,
+            color: ColorValue {
+                rgb: Some(rgb.to_owned()),
+                ..ColorValue::default()
+            },
+        };
+        // Decks do write the far stop first; tiny-skia pins positions monotonically, so an
+        // unsorted pair collapses to a flat colour.
+        let fill = ShapeFill {
+            fill_type: "gradient".to_owned(),
+            color: None,
+            gradient: Some(GradientFill {
+                gradient_type: "radial".to_owned(),
+                angle: None,
+                stops: vec![stop(100_000.0, "262626"), stop(0.0, "404040")],
+            }),
+        };
+        let Some(Paint::Gradient { stops, .. }) = paint(&fill, &Theme::default()) else {
+            panic!("expected a gradient paint");
+        };
+        assert_eq!(stops.len(), 2);
+        assert!(stops[0].position <= stops[1].position);
+        assert_eq!(stops[0].color, "#404040");
+        assert_eq!(stops[1].color, "#262626");
     }
 
     #[test]
