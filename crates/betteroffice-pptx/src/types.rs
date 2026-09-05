@@ -6,8 +6,8 @@ pub use pptx_edit::{
     UpdateOrigin, UpdateSubscription,
 };
 pub use pptx_parse::{
-    Bullet, GraphicFrame, GraphicFrameData, GroupShape, MediaPart, ParagraphProperties,
-    ParseLimits, Picture, PictureCrop, Placeholder, PptxError, PptxPackage,
+    Bullet, GraphicFrame, GraphicFrameData, GroupShape, LineSpacing, MediaPart,
+    ParagraphProperties, ParseLimits, Picture, PictureCrop, Placeholder, PptxError, PptxPackage,
     Presentation as PresentationModel, Relationship, RunProperties, Shape, ShapeBase, ShapeNode,
     ShapeTransform, Slide, SlideLayout, SlideMaster, SlideReference, TargetMode, TextAutofit,
     TextBody, TextParagraph as ModelTextParagraph, TextRun as ModelTextRun, TextStyleSet,

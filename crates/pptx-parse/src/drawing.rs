@@ -779,6 +779,9 @@ pub(crate) fn parse_text_body(
         vertical: body_properties
             .and_then(|value| value.attribute("vert"))
             .map(str::to_owned),
+        compat_line_spacing: body_properties
+            .and_then(|value| value.attribute("compatLnSpc"))
+            .map(parse_bool),
         autofit: body_properties.and_then(parse_text_autofit),
         inset_left: numeric_attribute(body_properties, "lIns"),
         inset_top: numeric_attribute(body_properties, "tIns"),
@@ -874,10 +877,24 @@ fn parse_paragraph_properties(element: Option<&XmlElement>) -> ParagraphProperti
         margin_left: numeric_attribute(Some(element), "marL"),
         indent: numeric_attribute(Some(element), "indent"),
         bullet,
+        line_spacing: element.child("lnSpc").and_then(parse_line_spacing),
         default_run: element
             .child("defRPr")
             .map(|value| parse_run_properties(Some(value))),
     }
+}
+
+fn parse_line_spacing(element: &XmlElement) -> Option<LineSpacing> {
+    if let Some(percent) = element.child("spcPct") {
+        return percentage_attribute(percent, "val")
+            .filter(|value| *value > 0.0)
+            .map(|value| LineSpacing::Percent { value });
+    }
+    numeric_attribute(element.child("spcPts"), "val")
+        .filter(|value| *value > 0)
+        .map(|value| LineSpacing::Points {
+            value: value as f64 / 100.0,
+        })
 }
 
 fn parse_text_run(element: &XmlElement) -> TextRun {
@@ -958,7 +975,7 @@ mod tests {
         let limits = ParseLimits::default();
         let mut budget = ParseBudget::new(&limits);
         let root = parse_xml(
-            br#"<p:sld><p:cSld name="Test"><p:spTree><p:sp><p:nvSpPr><p:cNvPr id="2" name="Title"/><p:nvPr><p:ph type="title"/></p:nvPr></p:nvSpPr><p:spPr><a:xfrm><a:off x="1" y="2"/><a:ext cx="3" cy="4"/></a:xfrm><a:prstGeom prst="roundRect"><a:avLst><a:gd name="adj" fmla="val 20000"/></a:avLst></a:prstGeom><a:solidFill><a:schemeClr val="accent1"/></a:solidFill></p:spPr><p:txBody><a:bodyPr anchor="ctr"><a:normAutofit fontScale="85000" lnSpcReduction="12000"/></a:bodyPr><a:p><a:pPr algn="ctr"/><a:r><a:rPr sz="2400" b="1"><a:solidFill><a:srgbClr val="FFFFFF"/></a:solidFill><a:latin typeface="Aptos"/></a:rPr><a:t>Hello</a:t></a:r></a:p></p:txBody></p:sp></p:spTree></p:cSld></p:sld>"#,
+            br#"<p:sld><p:cSld name="Test"><p:spTree><p:sp><p:nvSpPr><p:cNvPr id="2" name="Title"/><p:nvPr><p:ph type="title"/></p:nvPr></p:nvSpPr><p:spPr><a:xfrm><a:off x="1" y="2"/><a:ext cx="3" cy="4"/></a:xfrm><a:prstGeom prst="roundRect"><a:avLst><a:gd name="adj" fmla="val 20000"/></a:avLst></a:prstGeom><a:solidFill><a:schemeClr val="accent1"/></a:solidFill></p:spPr><p:txBody><a:bodyPr anchor="ctr" compatLnSpc="1"><a:normAutofit fontScale="85000" lnSpcReduction="12000"/></a:bodyPr><a:p><a:pPr algn="ctr"/><a:r><a:rPr sz="2400" b="1"><a:solidFill><a:srgbClr val="FFFFFF"/></a:solidFill><a:latin typeface="Aptos"/></a:rPr><a:t>Hello</a:t></a:r></a:p></p:txBody></p:sp></p:spTree></p:cSld></p:sld>"#,
             "ppt/slides/slide1.xml",
             &mut budget,
         )
@@ -977,6 +994,7 @@ mod tests {
                 line_space_reduction: Some(0.12),
             })
         );
+        assert_eq!(shape.text.as_ref().unwrap().compat_line_spacing, Some(true));
         assert_eq!(
             shape.text.as_ref().unwrap().paragraphs[0].runs[0].text,
             "Hello"
@@ -987,6 +1005,33 @@ mod tests {
                 .font_size_pt,
             Some(24.0)
         );
+    }
+
+    #[test]
+    fn reads_line_spacing_as_a_percentage_or_an_exact_height() {
+        let spacing = |body: &str| {
+            let limits = ParseLimits::default();
+            let mut budget = ParseBudget::new(&limits);
+            let xml = format!("<a:pPr>{body}</a:pPr>");
+            let root = parse_xml(
+                xml.as_bytes(),
+                "ppt/slideMasters/slideMaster1.xml",
+                &mut budget,
+            )
+            .unwrap();
+            parse_paragraph_properties(Some(&root)).line_spacing
+        };
+
+        assert_eq!(
+            spacing(r#"<a:lnSpc><a:spcPct val="80000"/></a:lnSpc>"#),
+            Some(LineSpacing::Percent { value: 0.8 })
+        );
+        assert_eq!(
+            spacing(r#"<a:lnSpc><a:spcPts val="1600"/></a:lnSpc>"#),
+            Some(LineSpacing::Points { value: 16.0 })
+        );
+        assert_eq!(spacing(r#"<a:lnSpc><a:spcPct val="0"/></a:lnSpc>"#), None);
+        assert_eq!(spacing(""), None);
     }
 
     #[test]

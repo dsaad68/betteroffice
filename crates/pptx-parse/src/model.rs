@@ -269,6 +269,9 @@ pub struct GroupShape {
 pub struct TextBody {
     pub anchor: Option<String>,
     pub vertical: Option<String>,
+    /// `compatLnSpc` — line spacing percentages measure a fixed 1.2 em cell, not the font's box.
+    #[serde(default)]
+    pub compat_line_spacing: Option<bool>,
     pub autofit: Option<TextAutofit>,
     pub inset_left: Option<i64>,
     pub inset_top: Option<i64>,
@@ -300,6 +303,18 @@ pub struct TextParagraph {
     pub end_properties: Option<RunProperties>,
 }
 
+/// `a:lnSpc` — percentage of the single line pitch, or an exact height in points.
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(
+    tag = "type",
+    rename_all = "camelCase",
+    rename_all_fields = "camelCase"
+)]
+pub enum LineSpacing {
+    Percent { value: f64 },
+    Points { value: f64 },
+}
+
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ParagraphProperties {
@@ -308,6 +323,8 @@ pub struct ParagraphProperties {
     pub margin_left: Option<i64>,
     pub indent: Option<i64>,
     pub bullet: Option<Bullet>,
+    #[serde(default)]
+    pub line_spacing: Option<LineSpacing>,
     pub default_run: Option<RunProperties>,
 }
 
