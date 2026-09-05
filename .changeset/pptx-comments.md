@@ -32,8 +32,8 @@ Minor rather than patch: `DeckSnapshot` gains `comments` and `commentFlavor`,
 `ParseLimits` gains `max_comments`, `DeckWrite` gains `comments`, and `EditError`
 gains `CommentNotFound` and `InvalidComment` — so anything that _constructs_ a
 `ParseLimits` or `DeckWrite` by literal, or matches `EditError` exhaustively,
-must be updated. This branch moves the deck schema from v4 to v8. Versions v1,
-v2, v3 and v4 load through migration; `open_from_update_with_source` imports source
+must be updated. This branch moves the deck schema from v7 to v8. Versions v1
+through v7 load through migration; `open_from_update_with_source` imports source
 comments deterministically when an older update has no comment model. Opening
 without source bytes defers that import until the original file is attached.
 The import runs once, so subsequent edits and deletions survive reopening.
@@ -42,9 +42,9 @@ upgrade all collaborators before sharing new updates. Saved PPTX files remain
 the file-exchange path for older clients.
 
 The coordinated landing order assigns v4 to #277, v5 to #253, v6 to #269,
-v7 to #285 and v8 to this feature. This branch includes #277; #253, #269 and
-#285 were still pending at integration, so their reserved versions remain
-unreadable until their migrations are integrated.
+v7 to #285 and v8 to this feature. All four are integrated: the schema-8 comment
+step runs after main's schema-7 custom-geometry step, so an older update commits
+versions 3, 4, 5, 6, 7 and then 8 as separate transactions.
 
 Redaction now also scrubs author names, initials and user IDs from the modern
 `ppt/authors.xml` part, which it previously passed through untouched.

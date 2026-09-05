@@ -1,6 +1,9 @@
 use std::collections::BTreeMap;
 
-use ooxml_drawingml::{ColorValue, ShapeFill, ShapeOutline, Theme};
+pub use ooxml_drawingml::ShapeStyle;
+use ooxml_drawingml::{
+    ColorValue, GeometryPathCommand, ShapeFill, ShapeOutline, Theme, ThemeFormatScheme,
+};
 use serde::{Deserialize, Serialize};
 
 use crate::comments::{Comment, CommentAuthor, CommentFlavor};
@@ -162,6 +165,9 @@ pub struct SlideMaster {
 pub struct ThemePart {
     pub part_path: String,
     pub theme: Theme,
+    /// Absent from packages serialized before `a:fmtScheme` was parsed.
+    #[serde(default, skip_serializing_if = "ThemeFormatScheme::is_empty")]
+    pub format_scheme: ThemeFormatScheme,
 }
 
 /// A chart part resolved against one referenced presentation theme.
@@ -247,7 +253,10 @@ pub struct Shape {
     #[serde(flatten)]
     pub base: ShapeBase,
     pub geometry: String,
-    /// `p:style` text defaults.
+    /// Custom paths in shape-relative coordinates.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub paths: Vec<CustomGeometryPath>,
+    /// Theme formatting and text defaults.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub style: Option<Box<ShapeStyle>>,
     #[serde(default)]
@@ -257,13 +266,14 @@ pub struct Shape {
     pub text: Option<TextBody>,
 }
 
-/// Shape text defaults.
-#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
-pub struct ShapeStyle {
-    /// `a:fontRef` colour.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub font_color: Option<ColorValue>,
+pub struct CustomGeometryPath {
+    pub commands: Vec<GeometryPathCommand>,
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub no_fill: bool,
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub no_stroke: bool,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -281,6 +291,8 @@ pub struct Picture {
     pub adjust_values: BTreeMap<String, f64>,
     pub fill: Option<ShapeFill>,
     pub outline: Option<ShapeOutline>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub style: Option<Box<ShapeStyle>>,
 }
 
 fn rect_geometry() -> String {

@@ -5,7 +5,7 @@ use ooxml_drawingml::{
     ColorValue, ShapeFill, ShapeOutline, Theme, preset_geometry_default_adjustments,
     preset_geometry_to_path, resolve_color_value_to_hex, resolve_color_value_to_hex_with_theme,
 };
-use pptx_parse::{PptxPackage, ShapeNode, Slide};
+use pptx_parse::{PptxPackage, ShapeBase, ShapeNode, Slide};
 use serde::de::DeserializeOwned;
 use yrs::{
     Any, Array, ArrayPrelim, ArrayRef, Doc, Map, MapPrelim, MapRef, Out, ReadTxn, TextRef,
@@ -23,7 +23,7 @@ use crate::{
 
 const SCHEMA_VERSION: f64 = 8.0;
 /// Versions [`migrate_doc`] can carry forward. Anything else is unreadable.
-const MIGRATABLE_SCHEMA_VERSIONS: [f64; 5] = [1.0, 2.0, 3.0, 4.0, SCHEMA_VERSION];
+const MIGRATABLE_SCHEMA_VERSIONS: [f64; 8] = [1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, SCHEMA_VERSION];
 const MAX_GEOMETRY: i64 = 1_000_000_000_000_000;
 const MAX_SHAPE_DEPTH: usize = 128;
 const EMU_PER_POINT: f64 = 12_700.0;
@@ -61,8 +61,7 @@ pub(crate) fn seed_doc(doc: &Doc, package: &PptxPackage, fingerprint: &str) -> E
 
     for (slide_index, slide) in package.slides.iter().enumerate() {
         let theme = slide_theme(package, slide);
-        let reference = &package.presentation.slides[slide_index];
-        let slide_id = format!("slide:{slide_index}:{}", reference.id);
+        let slide_id = seeded_slide_id(slide_index, package.presentation.slides[slide_index].id);
         order.push_back(&mut txn, slide_id.as_str());
         let slide_map = slides.insert(&mut txn, slide_id.as_str(), MapPrelim::default());
         slide_map.insert(&mut txn, "id", slide_id.as_str());
@@ -103,14 +102,9 @@ fn seed_shape(
     shape: &ShapeNode,
     theme: Option<&Theme>,
 ) -> EditResult<String> {
-    let shape_id = format!("{slide_id}:shape:{path}");
+    let shape_id = seeded_shape_id(slide_id, path);
     let shape_map = shapes.insert(txn, shape_id.as_str(), MapPrelim::default());
-    let base = match shape {
-        ShapeNode::Shape(shape) => &shape.base,
-        ShapeNode::Picture(shape) => &shape.base,
-        ShapeNode::GraphicFrame(shape) => &shape.base,
-        ShapeNode::Group(shape) => &shape.base,
-    };
+    let base = shape_base(shape);
     shape_map.insert(txn, "id", shape_id.as_str());
     shape_map.insert(txn, "sourceId", base.id as f64);
     shape_map.insert(txn, "name", base.name.as_str());
@@ -121,6 +115,9 @@ fn seed_shape(
     shape_map.insert(txn, "rotationDeg", base.transform.rotation_deg);
     shape_map.insert(txn, "flipH", base.transform.flip_h);
     shape_map.insert(txn, "flipV", base.transform.flip_v);
+    if base.hidden {
+        shape_map.insert(txn, "hidden", true);
+    }
     insert_json(
         &shape_map,
         txn,
@@ -179,7 +176,7 @@ fn seed_shape(
                     stories,
                     txn,
                     slide_id,
-                    &format!("{path}.{child_index}"),
+                    &seeded_child_path(path, child_index),
                     child,
                     theme,
                 )?);
@@ -189,6 +186,27 @@ fn seed_shape(
     shape_map.insert(txn, "textStories", string_array(&text_story_ids));
     shape_map.insert(txn, "children", string_array(&child_ids));
     Ok(shape_id)
+}
+
+fn seeded_slide_id(slide_index: usize, reference_id: u32) -> String {
+    format!("slide:{slide_index}:{reference_id}")
+}
+
+fn seeded_shape_id(slide_id: &str, path: &str) -> String {
+    format!("{slide_id}:shape:{path}")
+}
+
+fn seeded_child_path(path: &str, child_index: usize) -> String {
+    format!("{path}.{child_index}")
+}
+
+fn shape_base(shape: &ShapeNode) -> &ShapeBase {
+    match shape {
+        ShapeNode::Shape(shape) => &shape.base,
+        ShapeNode::Picture(shape) => &shape.base,
+        ShapeNode::GraphicFrame(shape) => &shape.base,
+        ShapeNode::Group(shape) => &shape.base,
+    }
 }
 
 fn slide_theme<'a>(package: &'a PptxPackage, slide: &Slide) -> Option<&'a Theme> {
@@ -724,7 +742,16 @@ pub(crate) fn migrate_doc(doc: &Doc) -> EditResult<()> {
     if version < 4.0 {
         migrate_doc_to_v4(doc)?;
     }
-    if version < SCHEMA_VERSION {
+    if version < 5.0 {
+        migrate_doc_to_v5(doc)?;
+    }
+    if version < 6.0 {
+        migrate_doc_to_v6(doc)?;
+    }
+    if version < 7.0 {
+        migrate_doc_to_v7(doc)?;
+    }
+    if version < 8.0 {
         migrate_doc_to_v8(doc)?;
     }
     Ok(())
@@ -773,6 +800,61 @@ fn migrate_doc_to_v4(doc: &Doc) -> EditResult<()> {
     Ok(())
 }
 
+/// Persists theme formatting in schema 5.
+fn migrate_doc_to_v5(doc: &Doc) -> EditResult<()> {
+    let package = {
+        let txn = doc.transact();
+        let meta = required_map(&txn, META)?;
+        package_from_meta(&meta, &txn)?
+    };
+    let package_json =
+        serde_json::to_vec(&package).map_err(|error| EditError::Json(error.to_string()))?;
+    let mut txn = doc.transact_mut_with(MIGRATE_ORIGIN);
+    let meta = required_map(&txn, META)?;
+    meta.insert(
+        &mut txn,
+        "packageJson",
+        Any::Buffer(Arc::from(package_json)),
+    );
+    meta.insert(&mut txn, "schemaVersion", 5.0);
+    Ok(())
+}
+
+/// Backfills hidden flags in schema 6.
+fn migrate_doc_to_v6(doc: &Doc) -> EditResult<()> {
+    let package = {
+        let txn = doc.transact();
+        let meta = required_map(&txn, META)?;
+        package_from_meta(&meta, &txn)?
+    };
+    let mut txn = doc.transact_mut_with(MIGRATE_ORIGIN);
+    let meta = required_map(&txn, META)?;
+    backfill_hidden(&mut txn, &package)?;
+    meta.insert(&mut txn, "schemaVersion", 6.0);
+    Ok(())
+}
+
+/// Persists custom geometry in schema 7.
+fn migrate_doc_to_v7(doc: &Doc) -> EditResult<()> {
+    let package = {
+        let txn = doc.transact();
+        let meta = required_map(&txn, META)?;
+        package_from_meta(&meta, &txn)?
+    };
+    let package_json =
+        serde_json::to_vec(&package).map_err(|error| EditError::Json(error.to_string()))?;
+    let mut txn = doc.transact_mut_with(MIGRATE_ORIGIN);
+    let meta = required_map(&txn, META)?;
+    meta.insert(
+        &mut txn,
+        "packageJson",
+        Any::Buffer(Arc::from(package_json)),
+    );
+    meta.insert(&mut txn, "schemaVersion", 7.0);
+    Ok(())
+}
+
+/// Records the comment flavour and any pending source import in schema 8.
 fn migrate_doc_to_v8(doc: &Doc) -> EditResult<()> {
     let mut txn = doc.transact_mut_with(MIGRATE_ORIGIN);
     let meta = required_map(&txn, META)?;
@@ -798,6 +880,46 @@ fn migrate_doc_to_v8(doc: &Doc) -> EditResult<()> {
         );
     }
     Ok(())
+}
+
+fn backfill_hidden(txn: &mut TransactionMut<'_>, package: &PptxPackage) -> EditResult<()> {
+    let shapes = required_map(txn, SHAPES)?;
+    for shape_id in seeded_hidden_shape_ids(package) {
+        if let Some(shape) = shapes
+            .get(txn, &shape_id)
+            .and_then(|value| value.cast::<MapRef>().ok())
+        {
+            shape.insert(txn, "hidden", true);
+        }
+    }
+    Ok(())
+}
+
+fn seeded_hidden_shape_ids(package: &PptxPackage) -> Vec<String> {
+    let mut ids = Vec::new();
+    for (slide_index, (slide, reference)) in package
+        .slides
+        .iter()
+        .zip(&package.presentation.slides)
+        .enumerate()
+    {
+        let slide_id = seeded_slide_id(slide_index, reference.id);
+        for (shape_index, shape) in slide.shapes.iter().enumerate() {
+            collect_hidden_shape_ids(&slide_id, &shape_index.to_string(), shape, &mut ids);
+        }
+    }
+    ids
+}
+
+fn collect_hidden_shape_ids(slide_id: &str, path: &str, shape: &ShapeNode, ids: &mut Vec<String>) {
+    if shape_base(shape).hidden {
+        ids.push(seeded_shape_id(slide_id, path));
+    }
+    if let ShapeNode::Group(group) = shape {
+        for (child_index, child) in group.children.iter().enumerate() {
+            collect_hidden_shape_ids(slide_id, &seeded_child_path(path, child_index), child, ids);
+        }
+    }
 }
 
 fn schema_version<T: ReadTxn>(meta: &MapRef, txn: &T) -> EditResult<f64> {
@@ -927,6 +1049,7 @@ fn snapshot_shape<T: ReadTxn>(
         rotation_deg: map_number(&shape, txn, "rotationDeg").unwrap_or_default(),
         flip_h: map_bool(&shape, txn, "flipH").unwrap_or_default(),
         flip_v: map_bool(&shape, txn, "flipV").unwrap_or_default(),
+        hidden: map_bool(&shape, txn, "hidden").unwrap_or_default(),
         geometry: required_string(&shape, txn, "geometry")?,
         adjust_values: optional_json(&shape, txn, "adjustValuesJson")?.unwrap_or_default(),
         placeholder: optional_json(&shape, txn, "placeholderJson")?,
@@ -1272,6 +1395,7 @@ mod tests {
     use crate::TextStyle;
 
     const FIXTURE: &[u8] = include_bytes!("../../../apps/demo/public/betteroffice-demo.pptx");
+    const HIDDEN_FIXTURE: &[u8] = include_bytes!("../tests/fixtures/hidden-shapes.pptx");
 
     #[test]
     fn an_unmigratable_schema_version_is_reported_before_package_json() {
@@ -1308,7 +1432,7 @@ mod tests {
     }
 
     #[test]
-    fn legacy_migrations_commit_v3_then_v4_then_v8() {
+    fn legacy_migrations_commit_v3_then_v4_then_v5_then_v6_then_v7_then_v8() {
         use std::sync::Mutex;
         use yrs::Update;
         use yrs::updates::decoder::Decode;
@@ -1318,9 +1442,9 @@ mod tests {
         const V3: &[u8] =
             include_bytes!("../tests/fixtures/deck-schema-v3-legacy-connectors.update.bin");
         for (update, expected_versions) in [
-            (V1, vec![3.0, 4.0, 8.0]),
-            (V2, vec![3.0, 4.0, 8.0]),
-            (V3, vec![4.0, 8.0]),
+            (V1, vec![3.0, 4.0, 5.0, 6.0, 7.0, 8.0]),
+            (V2, vec![3.0, 4.0, 5.0, 6.0, 7.0, 8.0]),
+            (V3, vec![4.0, 5.0, 6.0, 7.0, 8.0]),
         ] {
             let doc = crate::doc_with_client_id(920);
             crate::hydrate_doc(&doc, update).unwrap();
@@ -1373,6 +1497,205 @@ mod tests {
                 );
             }
         }
+    }
+
+    #[test]
+    fn main_generated_snapshots_commit_each_migration_in_order() {
+        use std::sync::Mutex;
+        use yrs::Update;
+        use yrs::updates::decoder::Decode;
+
+        const V2: &[u8] = include_bytes!("../tests/fixtures/deck-schema-v2.update.bin");
+        const V4_LEGACY: &[u8] =
+            include_bytes!("../tests/fixtures/deck-schema-v4-legacy-styles.update.bin");
+        const V4_STYLES: &[u8] =
+            include_bytes!("../tests/fixtures/deck-schema-v4-styles.update.bin");
+        const V4_NUMBERED: &[u8] =
+            include_bytes!("../tests/fixtures/deck-schema-v4-slide-number-fields.update.bin");
+
+        for (update, oracle, versions, first_slide_num) in [
+            (V2, V4_LEGACY, vec![3.0, 4.0, 5.0, 6.0, 7.0, 8.0], 1),
+            (V4_STYLES, V4_STYLES, vec![5.0, 6.0, 7.0, 8.0], 1),
+            (V4_NUMBERED, V4_NUMBERED, vec![5.0, 6.0, 7.0, 8.0], 10),
+        ] {
+            let doc = crate::doc_with_client_id(9340);
+            crate::hydrate_doc(&doc, update).unwrap();
+            let main = crate::doc_with_client_id(9341);
+            main.transact_mut()
+                .apply_update(Update::decode_v1(oracle).unwrap())
+                .unwrap();
+            let expected = {
+                let txn = main.transact();
+                let meta = required_map(&txn, META).unwrap();
+                assert_eq!(map_number(&meta, &txn, "schemaVersion"), Some(4.0));
+                meta.get(&txn, "packageJson").unwrap()
+            };
+            let before = snapshot_doc(&doc, &package_from_doc(&doc).unwrap()).unwrap();
+            let observed = Arc::new(Mutex::new(Vec::new()));
+            let events = observed.clone();
+            let _subscription = doc
+                .observe_update_v1(move |txn, _| {
+                    let meta = required_map(txn, META).unwrap();
+                    events.lock().unwrap().push((
+                        map_number(&meta, txn, "schemaVersion").unwrap(),
+                        meta.get(txn, "packageJson").unwrap(),
+                    ));
+                })
+                .unwrap();
+
+            migrate_doc(&doc).unwrap();
+
+            let events = observed.lock().unwrap();
+            assert_eq!(
+                events
+                    .iter()
+                    .map(|(version, _)| *version)
+                    .collect::<Vec<_>>(),
+                versions
+            );
+            for (_, package) in events.iter() {
+                assert_eq!(package, &expected);
+            }
+            let package = package_from_doc(&doc).unwrap();
+            assert_eq!(package.presentation.first_slide_num, first_slide_num);
+            assert_eq!(snapshot_doc(&doc, &package).unwrap(), before);
+            assert!(
+                package
+                    .themes
+                    .iter()
+                    .all(|theme| theme.format_scheme.is_empty())
+            );
+        }
+    }
+
+    #[test]
+    fn custom_geometry_follows_main_hidden_migration() {
+        use std::sync::Mutex;
+        use yrs::Update;
+        use yrs::updates::decoder::Decode;
+
+        const V2: &[u8] = include_bytes!("../tests/fixtures/deck-schema-v2-hidden.update.bin");
+        const V5: &[u8] = include_bytes!("../tests/fixtures/deck-schema-v5-hidden.update.bin");
+        const V6: &[u8] = include_bytes!("../tests/fixtures/deck-schema-v6-hidden.update.bin");
+        for (update, versions) in [
+            (V2, vec![3.0, 4.0, 5.0, 6.0, 7.0, 8.0]),
+            (V5, vec![6.0, 7.0, 8.0]),
+            (V6, vec![7.0, 8.0]),
+        ] {
+            let doc = crate::doc_with_client_id(9430);
+            doc.transact_mut()
+                .apply_update(Update::decode_v1(update).unwrap())
+                .unwrap();
+            let before = package_from_doc(&doc).unwrap();
+            let observed = Arc::new(Mutex::new(Vec::new()));
+            let events = observed.clone();
+            let _subscription = doc
+                .observe_update_v1(move |txn, _| {
+                    let meta = required_map(txn, META).unwrap();
+                    let shapes = required_map(txn, SHAPES).unwrap();
+                    let mut hidden: Vec<String> = shapes
+                        .iter(txn)
+                        .filter_map(|(id, value)| {
+                            value.cast::<MapRef>().ok().map(|shape| (id, shape))
+                        })
+                        .filter(|(_, shape)| map_bool(shape, txn, "hidden").unwrap_or(false))
+                        .map(|(id, _)| id.to_owned())
+                        .collect();
+                    hidden.sort();
+                    events.lock().unwrap().push((
+                        map_number(&meta, txn, "schemaVersion").unwrap(),
+                        package_from_meta(&meta, txn).unwrap(),
+                        hidden,
+                    ));
+                })
+                .unwrap();
+            migrate_doc(&doc).unwrap();
+            let events = observed.lock().unwrap();
+            assert_eq!(
+                events
+                    .iter()
+                    .map(|(version, _, _)| *version)
+                    .collect::<Vec<_>>(),
+                versions
+            );
+            for (version, package, hidden) in events.iter() {
+                assert_eq!(
+                    serde_json::to_vec(package).unwrap(),
+                    serde_json::to_vec(&before).unwrap()
+                );
+                if *version < 6.0 {
+                    assert!(hidden.is_empty());
+                } else {
+                    assert_eq!(
+                        hidden,
+                        &[
+                            "slide:0:256:shape:0",
+                            "slide:0:256:shape:8",
+                            "slide:0:256:shape:8.13",
+                            "slide:1:257:shape:16",
+                        ]
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn seeding_stores_hidden_only_for_hidden_shapes() {
+        assert!(hidden_keys(&DeckSession::open(FIXTURE, 103).unwrap()).is_empty());
+
+        let session = DeckSession::open(HIDDEN_FIXTURE, 104).unwrap();
+        assert_eq!(
+            hidden_keys(&session),
+            [
+                "slide:0:256:shape:0",
+                "slide:0:256:shape:8",
+                "slide:0:256:shape:8.13",
+                "slide:1:257:shape:16",
+                "slide:1:257:shape:4",
+            ]
+        );
+        let snapshot = session.snapshot().unwrap();
+        let group = &snapshot.slides[0].shapes[8];
+        assert!(snapshot.slides[0].shapes[0].hidden);
+        assert!(group.hidden);
+        assert_eq!(group.children.len(), 14);
+        assert!(group.children[..13].iter().all(|child| !child.hidden));
+        assert!(group.children[13].hidden);
+    }
+
+    #[test]
+    fn a_snapshot_written_without_hidden_keys_still_loads() {
+        let old_json = include_str!("../tests/fixtures/deck-schema-v5.snapshot.json");
+        let old_snapshot: DeckSnapshot = serde_json::from_str(old_json).unwrap();
+        let demo = DeckSession::open(FIXTURE, 105).unwrap().snapshot().unwrap();
+        assert_eq!(old_snapshot, demo);
+        assert_eq!(serde_json::to_string(&demo).unwrap(), old_json);
+
+        let snapshot = DeckSession::open(HIDDEN_FIXTURE, 106)
+            .unwrap()
+            .snapshot()
+            .unwrap();
+        let json = serde_json::to_string(&snapshot).unwrap();
+        assert_eq!(json.matches("\"hidden\":true").count(), 5);
+        assert!(!json.contains("\"hidden\":false"));
+        assert_eq!(
+            serde_json::from_str::<DeckSnapshot>(&json).unwrap(),
+            snapshot
+        );
+    }
+
+    fn hidden_keys(session: &DeckSession) -> Vec<String> {
+        let txn = session.doc.transact();
+        let shapes = required_map(&txn, SHAPES).unwrap();
+        let mut ids: Vec<String> = shapes
+            .iter(&txn)
+            .filter_map(|(id, value)| value.cast::<MapRef>().ok().map(|shape| (id, shape)))
+            .filter(|(_, shape)| shape.get(&txn, "hidden").is_some())
+            .map(|(id, _)| id.to_owned())
+            .collect();
+        ids.sort();
+        ids
     }
 
     #[test]
@@ -1458,5 +1781,44 @@ mod tests {
 
     fn add_lengths(left: (u32, u32, u32), right: (u32, u32, u32)) -> (u32, u32, u32) {
         (left.0 + right.0, left.1 + right.1, left.2 + right.2)
+    }
+
+    #[test]
+    fn a_current_main_v7_snapshot_commits_only_v8_with_a_pending_comment_import() {
+        use std::sync::Mutex;
+        use yrs::Update;
+        use yrs::updates::decoder::Decode;
+
+        const V7: &[u8] = include_bytes!("../tests/fixtures/deck-schema-v7-comments.update.bin");
+        let doc = crate::doc_with_client_id(9620);
+        doc.transact_mut()
+            .apply_update(Update::decode_v1(V7).unwrap())
+            .unwrap();
+        let before = {
+            let txn = doc.transact();
+            let meta = required_map(&txn, META).unwrap();
+            assert_eq!(map_number(&meta, &txn, "schemaVersion"), Some(7.0));
+            assert!(meta.get(&txn, "commentFlavor").is_none());
+            meta.get(&txn, "packageJson").unwrap()
+        };
+        let observed = Arc::new(Mutex::new(Vec::new()));
+        let events = observed.clone();
+        let _subscription = doc
+            .observe_update_v1(move |txn, _| {
+                let meta = required_map(txn, META).unwrap();
+                events.lock().unwrap().push((
+                    map_number(&meta, txn, "schemaVersion").unwrap(),
+                    meta.get(txn, "packageJson").unwrap(),
+                    map_string(&meta, txn, "commentFlavor"),
+                    map_bool(&meta, txn, "commentsPendingSource"),
+                ));
+            })
+            .unwrap();
+        migrate_doc(&doc).unwrap();
+        let events = observed.lock().unwrap();
+        assert_eq!(
+            *events,
+            [(8.0, before, Some("legacy".to_owned()), Some(true))]
+        );
     }
 }

@@ -3,6 +3,7 @@
 mod chart;
 mod comment_patch;
 mod comments;
+mod custom_geometry;
 mod drawing;
 mod error;
 mod model;

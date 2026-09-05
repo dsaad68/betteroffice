@@ -237,6 +237,48 @@ fn v2_source_migration_imports_comments_once_and_keeps_peer_edits() {
 }
 
 #[test]
+fn v7_source_migration_imports_comments_once_and_saves_every_part_unchanged() {
+    let update = include_bytes!("fixtures/deck-schema-v7-comments.update.bin");
+    let session = DeckSession::open_from_update_with_source(update, MODERN, 741).unwrap();
+    assert_eq!(session.comments().unwrap().len(), 5);
+    assert_eq!(session.comment_flavor().unwrap(), CommentFlavor::Modern);
+    let source = parts(MODERN);
+    assert_eq!(parts(&session.save().unwrap()), source);
+    let root = first_root(&session);
+    session
+        .set_comment_status(&EditCtx::local("test"), &root.id, true)
+        .unwrap();
+    let reopened = DeckSession::open_from_update_with_source(
+        &session.encode_state_as_update_v1(),
+        MODERN,
+        742,
+    )
+    .unwrap();
+    let comments = reopened.comments().unwrap();
+    assert_eq!(comments.len(), 5);
+    assert!(
+        comments
+            .iter()
+            .find(|comment| comment.id == root.id)
+            .unwrap()
+            .resolved
+    );
+    let saved = parts(&reopened.save().unwrap());
+    assert_eq!(
+        saved.keys().collect::<Vec<_>>(),
+        source.keys().collect::<Vec<_>>()
+    );
+    assert_eq!(
+        saved
+            .iter()
+            .filter(|(name, bytes)| &source[*name] != *bytes)
+            .map(|(name, _)| name.as_str())
+            .collect::<Vec<_>>(),
+        [FIRST_PART]
+    );
+}
+
+#[test]
 fn source_extensions_and_custom_prefixes_survive_status_and_new_authors() {
     let mut original = parts(MODERN);
     let xml = String::from_utf8(original[FIRST_PART].clone()).unwrap()

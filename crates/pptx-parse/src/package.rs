@@ -10,7 +10,7 @@ use crate::comments::{
 use crate::drawing::{common_slide_data, parse_text_styles};
 use crate::model::*;
 use crate::relationships::{Relationship, parse_relationships, relationship_types};
-use crate::theme::parse_theme;
+use crate::theme::{parse_format_scheme, parse_theme};
 use crate::xml::{ParseBudget, XmlElement, parse_xml};
 use crate::{ParseLimits, PptxError};
 
@@ -181,6 +181,7 @@ fn parse_package(
         themes.push(ThemePart {
             part_path,
             theme: parse_theme(&root),
+            format_scheme: parse_format_scheme(&root),
         });
     }
 
@@ -966,10 +967,12 @@ mod tests {
             ThemePart {
                 part_path: "ppt/theme/theme1.xml".to_owned(),
                 theme: first_theme,
+                format_scheme: Default::default(),
             },
             ThemePart {
                 part_path: "ppt/theme/theme2.xml".to_owned(),
                 theme: second_theme,
+                format_scheme: Default::default(),
             },
         ];
         let relationships = BTreeMap::from([
