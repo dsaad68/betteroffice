@@ -18,6 +18,7 @@ customer material.
 |---|---|---|
 | `green-solutions` | Unique Way To Showcase Your Green Solutions (PowerPoint School) | [document 4.zip](https://github.com/Suparnapaul393/PowerPoint-Sample/blob/master/document%204.zip) |
 | `swot-analysis` | SWOT Analysis Slide Design Template (PowerPoint School) | [document 4.zip](https://github.com/Suparnapaul393/PowerPoint-Sample/blob/master/document%204.zip) |
+| `stacked-bar` | Stacked Bar Graph That Will Impress Your Clients (PowerPoint School) | [document 4.zip](https://github.com/Suparnapaul393/PowerPoint-Sample/blob/master/document%204.zip) |
 | `tpl-double-exposure-business-templates` | Double Exposure Business | [free-powerpoint-templates-design.com](http://www.free-powerpoint-templates-design.com) |
 | `tpl-innovative-way-create-charts-graphs` | Innovative Way To Create Charts & Graphs (PowerPoint School) | PowerPoint School |
 | `tpl-modern-business-infographic-presentation` | Modern Business Infographic (PowerPoint School) | PowerPoint School |
