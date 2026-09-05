@@ -1498,15 +1498,23 @@ fn positioned_runs(
     scale: f32,
 ) -> Vec<PositionedTextRun> {
     let mut output: Vec<PositionedTextRun> = Vec::new();
+    // The source run that opened `output.last()`. A positioned run is a paint unit, so clusters
+    // may only join one that came from the same run: matching on font id alone merged
+    // neighbouring runs that differ only in colour, weight, underline or size, and the merged run
+    // took all of them from whichever cluster opened it.
+    let mut open_run: Option<usize> = None;
     let mut cursor_x = line_x;
     for (index, cluster) in clusters.iter().enumerate() {
         if cluster.text == "\n" {
             continue;
         }
         let append = output.last().is_some_and(|run| {
-            run.end == cluster.start && run.font_id == cluster.style.face.id.to_u32()
+            run.end == cluster.start
+                && run.font_id == cluster.style.face.id.to_u32()
+                && open_run == Some(cluster.run_index)
         });
         if !append {
+            open_run = Some(cluster.run_index);
             output.push(PositionedTextRun {
                 text: String::new(),
                 start: cluster.start,
@@ -2270,6 +2278,57 @@ mod tests {
             assert_eq!(parse_align(Some(alignment)), TextAlign::Justify);
             assert!(!is_full_justification(Some(alignment)));
         }
+    }
+
+    #[test]
+    fn adjacent_runs_keep_their_own_paint_attributes() {
+        let renderer = renderer();
+        let face = renderer.resolve_face("Arial", false, false).unwrap();
+        let style = |color: &str, bold: bool| ResolvedStyle {
+            face: face.clone(),
+            family: "Arial".to_owned(),
+            font_size_pt: 14.0,
+            bold,
+            italic: false,
+            underline: false,
+            color: color.to_owned(),
+        };
+        // Three runs that differ only in colour and weight: matching on font id alone folded them
+        // into one, which then took its paint from whichever run opened it.
+        let paragraph = ResolvedParagraph {
+            align: TextAlign::Left,
+            justify: false,
+            level: 0,
+            margin_left_px: 0.0,
+            runs: vec![
+                ResolvedRun {
+                    text: "gold ".to_owned(),
+                    start: 0,
+                    style: style("#A99A72", false),
+                },
+                ResolvedRun {
+                    text: "black ".to_owned(),
+                    start: 5,
+                    style: style("#000000", false),
+                },
+                ResolvedRun {
+                    text: "bold".to_owned(),
+                    start: 11,
+                    style: style("#000000", true),
+                },
+            ],
+        };
+        let lines = layout_paragraph(&renderer.fonts, &paragraph, 0.0, 0.0, 10_000.0, 1.0).unwrap();
+        let runs = &lines[0].runs;
+        assert_eq!(
+            runs.len(),
+            3,
+            "each source run must stay its own paint unit"
+        );
+        assert_eq!(runs[0].color, "#A99A72");
+        assert_eq!(runs[1].color, "#000000");
+        assert!(!runs[1].bold);
+        assert!(runs[2].bold);
     }
 
     #[test]
