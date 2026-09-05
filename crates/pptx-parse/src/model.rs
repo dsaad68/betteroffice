@@ -10,6 +10,26 @@ pub use ooxml_drawingml::chart::{
     ChartPointLabel, ChartSeries, ChartSpace, ChartTextProperties,
 };
 
+/// Shape elements counted by source ordinals.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) enum ShapeElements {
+    WithConnectors,
+    #[default]
+    WithoutConnectors,
+}
+
+impl ShapeElements {
+    fn is_legacy(&self) -> bool {
+        *self == Self::WithoutConnectors
+    }
+
+    pub(crate) fn contains(self, local: &str) -> bool {
+        matches!(local, "sp" | "pic" | "graphicFrame" | "grpSp")
+            || (self == Self::WithConnectors && local == "cxnSp")
+    }
+}
+
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct PptxPackage {
@@ -25,6 +45,8 @@ pub struct PptxPackage {
     pub relationships: BTreeMap<String, Vec<Relationship>>,
     #[serde(skip)]
     pub(crate) parts: Vec<PackagePart>,
+    #[serde(default, skip_serializing_if = "ShapeElements::is_legacy")]
+    pub(crate) shape_elements: ShapeElements,
 }
 
 impl PptxPackage {
@@ -39,6 +61,11 @@ impl PptxPackage {
     /// the parsed model but not the raw part bytes.
     pub fn has_parts(&self) -> bool {
         !self.parts.is_empty()
+    }
+
+    /// Whether source ordinals include connectors.
+    pub fn models_connectors(&self) -> bool {
+        self.shape_elements == ShapeElements::WithConnectors
     }
 
     pub fn replace_part(&mut self, path: &str, bytes: Vec<u8>) -> bool {

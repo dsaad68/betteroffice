@@ -44,6 +44,7 @@ pub(crate) fn common_slide_data(
     relationships: &[Relationship],
     part: &str,
     budget: &mut ParseBudget<'_>,
+    elements: ShapeElements,
 ) -> Result<CommonSlideData, PptxError> {
     let common = root.child("cSld");
     let name = common
@@ -53,7 +54,7 @@ pub(crate) fn common_slide_data(
         .and_then(|value| value.child("bg"))
         .and_then(parse_background);
     let mut shapes = if let Some(tree) = common.and_then(|value| value.child("spTree")) {
-        parse_shape_children(tree, relationships, part, budget)?
+        parse_shape_children(tree, relationships, part, budget, elements)?
     } else {
         Vec::new()
     };
@@ -104,11 +105,13 @@ fn parse_shape_children(
     relationships: &[Relationship],
     part: &str,
     budget: &mut ParseBudget<'_>,
+    elements: ShapeElements,
 ) -> Result<Vec<ShapeNode>, PptxError> {
     let mut shapes = Vec::new();
     for child in parent.child_elements() {
         let shape = match child.local_name() {
-            "sp" => Some(ShapeNode::Shape(parse_shape(child, part, budget)?)),
+            "cxnSp" if elements == ShapeElements::WithoutConnectors => None,
+            "sp" | "cxnSp" => Some(ShapeNode::Shape(parse_shape(child, part, budget)?)),
             "pic" => Some(ShapeNode::Picture(parse_picture(
                 child,
                 relationships,
@@ -126,6 +129,7 @@ fn parse_shape_children(
                 relationships,
                 part,
                 budget,
+                elements,
             )?)),
             _ => None,
         };
@@ -145,7 +149,12 @@ fn parse_shape(
     let properties = element.child("spPr");
     let transform = properties.and_then(|value| value.child("xfrm"));
     Ok(Shape {
-        base: parse_base(element.child("nvSpPr"), transform),
+        base: parse_base(
+            element
+                .child("nvSpPr")
+                .or_else(|| element.child("nvCxnSpPr")),
+            transform,
+        ),
         geometry: parse_geometry(properties),
         adjust_values: parse_adjust_values(properties, parse_shape_extent(transform)),
         fill: properties.and_then(parse_fill),
@@ -255,10 +264,11 @@ fn parse_group(
     relationships: &[Relationship],
     part: &str,
     budget: &mut ParseBudget<'_>,
+    elements: ShapeElements,
 ) -> Result<GroupShape, PptxError> {
     budget.charge_shape(part)?;
     let own_fill = element.child("grpSpPr").and_then(parse_fill);
-    let mut children = parse_shape_children(element, relationships, part, budget)?;
+    let mut children = parse_shape_children(element, relationships, part, budget, elements)?;
     if let Some(fill) = own_fill
         .as_ref()
         .filter(|fill| fill.fill_type != GROUP_FILL)
@@ -995,6 +1005,44 @@ mod tests {
     use crate::xml::parse_xml;
 
     #[test]
+    fn a_connector_parses_as_a_shape_and_keeps_its_place_in_the_tree() {
+        let limits = ParseLimits::default();
+        let mut budget = ParseBudget::new(&limits);
+        let root = parse_xml(
+            br#"<p:sld><p:cSld><p:spTree><p:sp><p:nvSpPr><p:cNvPr id="2" name="First"/><p:nvPr/></p:nvSpPr><p:spPr/></p:sp><p:cxnSp><p:nvCxnSpPr><p:cNvPr id="3" name="Straight Connector 2"/><p:cNvCxnSpPr/><p:nvPr/></p:nvCxnSpPr><p:spPr><a:xfrm><a:off x="100" y="200"/><a:ext cx="0" cy="500"/></a:xfrm><a:prstGeom prst="line"><a:avLst/></a:prstGeom><a:ln w="19050"><a:solidFill><a:srgbClr val="FF0000"/></a:solidFill></a:ln></p:spPr></p:cxnSp><p:sp><p:nvSpPr><p:cNvPr id="4" name="Third"/><p:nvPr/></p:nvSpPr><p:spPr/></p:sp></p:spTree></p:cSld></p:sld>"#,
+            "ppt/slides/slide1.xml",
+            &mut budget,
+        )
+        .unwrap();
+        let data = common_slide_data(
+            &root,
+            &[],
+            "ppt/slides/slide1.xml",
+            &mut budget,
+            ShapeElements::WithConnectors,
+        )
+        .unwrap();
+
+        assert_eq!(data.shapes.len(), 3);
+        let ShapeNode::Shape(connector) = &data.shapes[1] else {
+            panic!("expected the connector to parse as a shape");
+        };
+        assert_eq!(connector.base.id, 3);
+        assert_eq!(connector.base.name, "Straight Connector 2");
+        assert_eq!(connector.geometry, "line");
+        assert_eq!(connector.base.transform.width, 0);
+        assert_eq!(connector.base.transform.height, 500);
+        let outline = connector
+            .outline
+            .as_ref()
+            .expect("connector has an outline");
+        assert_eq!(
+            outline.color.as_ref().unwrap().rgb.as_deref(),
+            Some("FF0000")
+        );
+    }
+
+    #[test]
     fn group_fill_reaches_every_shape_that_asks_for_it() {
         let limits = ParseLimits::default();
         let mut budget = ParseBudget::new(&limits);
@@ -1004,7 +1052,14 @@ mod tests {
             &mut budget,
         )
         .unwrap();
-        let data = common_slide_data(&root, &[], "ppt/slides/slide1.xml", &mut budget).unwrap();
+        let data = common_slide_data(
+            &root,
+            &[],
+            "ppt/slides/slide1.xml",
+            &mut budget,
+            ShapeElements::WithConnectors,
+        )
+        .unwrap();
         let ShapeNode::Group(outer) = &data.shapes[0] else {
             panic!("expected a group");
         };
@@ -1052,7 +1107,14 @@ mod tests {
             &mut budget,
         )
         .unwrap();
-        let data = common_slide_data(&root, &[], "ppt/slides/slide1.xml", &mut budget).unwrap();
+        let data = common_slide_data(
+            &root,
+            &[],
+            "ppt/slides/slide1.xml",
+            &mut budget,
+            ShapeElements::WithConnectors,
+        )
+        .unwrap();
 
         assert_eq!(data.background, None);
         let ShapeNode::Shape(placeholder) = &data.shapes[0] else {
@@ -1078,7 +1140,14 @@ mod tests {
             &mut budget,
         )
         .unwrap();
-        let data = common_slide_data(&root, &[], "ppt/slides/slide1.xml", &mut budget).unwrap();
+        let data = common_slide_data(
+            &root,
+            &[],
+            "ppt/slides/slide1.xml",
+            &mut budget,
+            ShapeElements::WithConnectors,
+        )
+        .unwrap();
         let ShapeNode::Shape(shape) = &data.shapes[0] else {
             panic!("expected shape");
         };
@@ -1114,7 +1183,14 @@ mod tests {
             &mut budget,
         )
         .unwrap();
-        let data = common_slide_data(&root, &[], "ppt/slides/slide1.xml", &mut budget).unwrap();
+        let data = common_slide_data(
+            &root,
+            &[],
+            "ppt/slides/slide1.xml",
+            &mut budget,
+            ShapeElements::WithConnectors,
+        )
+        .unwrap();
         let ShapeNode::Picture(picture) = &data.shapes[0] else {
             panic!("expected picture");
         };
@@ -1134,7 +1210,14 @@ mod tests {
             &mut budget,
         )
         .unwrap();
-        let data = common_slide_data(&root, &[], "ppt/slides/slide1.xml", &mut budget).unwrap();
+        let data = common_slide_data(
+            &root,
+            &[],
+            "ppt/slides/slide1.xml",
+            &mut budget,
+            ShapeElements::WithConnectors,
+        )
+        .unwrap();
         let ShapeNode::Picture(picture) = &data.shapes[0] else {
             panic!("expected picture");
         };
@@ -1152,7 +1235,14 @@ mod tests {
             &mut budget,
         )
         .unwrap();
-        let data = common_slide_data(&root, &[], "ppt/slides/slide1.xml", &mut budget).unwrap();
+        let data = common_slide_data(
+            &root,
+            &[],
+            "ppt/slides/slide1.xml",
+            &mut budget,
+            ShapeElements::WithConnectors,
+        )
+        .unwrap();
         let (ShapeNode::Picture(rectangle), ShapeNode::Picture(rounded)) =
             (&data.shapes[0], &data.shapes[1])
         else {

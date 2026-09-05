@@ -628,6 +628,43 @@ fn an_unknown_layout_is_rejected_at_insert_slide() {
 }
 
 #[test]
+fn an_update_seeded_by_a_different_parse_refuses_to_save_through_stale_ordinals() {
+    let source = fixture(256);
+
+    let mut stale = pptx_parse::parse_pptx(&source).unwrap();
+    let slide = stale
+        .slides
+        .iter_mut()
+        .find(|slide| slide.shapes.len() > 1)
+        .expect("the fidelity deck has a slide with several shapes");
+    slide.shapes.remove(0);
+
+    let seeded = DeckSession::from_package_with_source(stale, &source, 21).unwrap();
+    let update = seeded.encode_state_as_update_v1();
+
+    let reattached = DeckSession::open_from_update_with_source(&update, &source, 22).unwrap();
+    let snapshot = reattached.snapshot().unwrap();
+    let (slide_id, shape_id) = snapshot
+        .slides
+        .iter()
+        .find_map(|slide| {
+            slide
+                .shapes
+                .first()
+                .map(|shape| (slide.id.clone(), shape.id.clone()))
+        })
+        .expect("the reattached session has a shape");
+    reattached
+        .move_shape(&context(), &slide_id, &shape_id, 1_000, 2_000)
+        .unwrap();
+
+    assert!(matches!(
+        reattached.save(),
+        Err(EditError::Write(message)) if message.contains("no longer addresses source shape")
+    ));
+}
+
+#[test]
 fn a_session_opened_from_an_update_alone_refuses_to_save() {
     let source = fixture(256);
     let seeded = DeckSession::open(&source, 11).unwrap();
