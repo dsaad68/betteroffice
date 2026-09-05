@@ -20,9 +20,9 @@ use crate::{
     ShapeStrokeReceipt, SlideReceipt, SlideSnapshot, TransformReceipt,
 };
 
-const SCHEMA_VERSION: f64 = 6.0;
+const SCHEMA_VERSION: f64 = 7.0;
 /// Versions [`migrate_doc`] can carry forward. Anything else is unreadable.
-const MIGRATABLE_SCHEMA_VERSIONS: [f64; 6] = [1.0, 2.0, 3.0, 4.0, 5.0, SCHEMA_VERSION];
+const MIGRATABLE_SCHEMA_VERSIONS: [f64; 7] = [1.0, 2.0, 3.0, 4.0, 5.0, 6.0, SCHEMA_VERSION];
 const MAX_GEOMETRY: i64 = 1_000_000_000_000_000;
 const MAX_SHAPE_DEPTH: usize = 128;
 const EMU_PER_POINT: f64 = 12_700.0;
@@ -725,6 +725,9 @@ pub(crate) fn migrate_doc(doc: &Doc) -> EditResult<()> {
     if version < 6.0 {
         migrate_doc_to_v6(doc)?;
     }
+    if version < 7.0 {
+        migrate_doc_to_v7(doc)?;
+    }
     Ok(())
 }
 
@@ -801,6 +804,26 @@ fn migrate_doc_to_v6(doc: &Doc) -> EditResult<()> {
     let mut txn = doc.transact_mut_with(MIGRATE_ORIGIN);
     let meta = required_map(&txn, META)?;
     backfill_hidden(&mut txn, &package)?;
+    meta.insert(&mut txn, "schemaVersion", 6.0);
+    Ok(())
+}
+
+/// Persists custom geometry in schema 7.
+fn migrate_doc_to_v7(doc: &Doc) -> EditResult<()> {
+    let package = {
+        let txn = doc.transact();
+        let meta = required_map(&txn, META)?;
+        package_from_meta(&meta, &txn)?
+    };
+    let package_json =
+        serde_json::to_vec(&package).map_err(|error| EditError::Json(error.to_string()))?;
+    let mut txn = doc.transact_mut_with(MIGRATE_ORIGIN);
+    let meta = required_map(&txn, META)?;
+    meta.insert(
+        &mut txn,
+        "packageJson",
+        Any::Buffer(Arc::from(package_json)),
+    );
     meta.insert(&mut txn, "schemaVersion", SCHEMA_VERSION);
     Ok(())
 }
@@ -1353,7 +1376,7 @@ mod tests {
     }
 
     #[test]
-    fn legacy_migrations_commit_v3_then_v4_then_v5_then_v6() {
+    fn legacy_migrations_commit_v3_then_v4_then_v5_then_v6_then_v7() {
         use std::sync::Mutex;
         use yrs::Update;
         use yrs::updates::decoder::Decode;
@@ -1363,9 +1386,9 @@ mod tests {
         const V3: &[u8] =
             include_bytes!("../tests/fixtures/deck-schema-v3-legacy-connectors.update.bin");
         for (update, expected_versions) in [
-            (V1, vec![3.0, 4.0, 5.0, 6.0]),
-            (V2, vec![3.0, 4.0, 5.0, 6.0]),
-            (V3, vec![4.0, 5.0, 6.0]),
+            (V1, vec![3.0, 4.0, 5.0, 6.0, 7.0]),
+            (V2, vec![3.0, 4.0, 5.0, 6.0, 7.0]),
+            (V3, vec![4.0, 5.0, 6.0, 7.0]),
         ] {
             let doc = crate::doc_with_client_id(920);
             doc.transact_mut()
@@ -1437,9 +1460,9 @@ mod tests {
             include_bytes!("../tests/fixtures/deck-schema-v4-slide-number-fields.update.bin");
 
         for (update, oracle, versions, first_slide_num) in [
-            (V2, V4_LEGACY, vec![3.0, 4.0, 5.0, 6.0], 1),
-            (V4_STYLES, V4_STYLES, vec![5.0, 6.0], 1),
-            (V4_NUMBERED, V4_NUMBERED, vec![5.0, 6.0], 10),
+            (V2, V4_LEGACY, vec![3.0, 4.0, 5.0, 6.0, 7.0], 1),
+            (V4_STYLES, V4_STYLES, vec![5.0, 6.0, 7.0], 1),
+            (V4_NUMBERED, V4_NUMBERED, vec![5.0, 6.0, 7.0], 10),
         ] {
             let doc = crate::doc_with_client_id(9340);
             doc.transact_mut()
@@ -1494,14 +1517,19 @@ mod tests {
     }
 
     #[test]
-    fn hidden_flags_follow_main_v5_migration() {
+    fn custom_geometry_follows_main_hidden_migration() {
         use std::sync::Mutex;
         use yrs::Update;
         use yrs::updates::decoder::Decode;
 
         const V2: &[u8] = include_bytes!("../tests/fixtures/deck-schema-v2-hidden.update.bin");
         const V5: &[u8] = include_bytes!("../tests/fixtures/deck-schema-v5-hidden.update.bin");
-        for (update, versions) in [(V2, vec![3.0, 4.0, 5.0, 6.0]), (V5, vec![6.0])] {
+        const V6: &[u8] = include_bytes!("../tests/fixtures/deck-schema-v6-hidden.update.bin");
+        for (update, versions) in [
+            (V2, vec![3.0, 4.0, 5.0, 6.0, 7.0]),
+            (V5, vec![6.0, 7.0]),
+            (V6, vec![7.0]),
+        ] {
             let doc = crate::doc_with_client_id(9430);
             doc.transact_mut()
                 .apply_update(Update::decode_v1(update).unwrap())

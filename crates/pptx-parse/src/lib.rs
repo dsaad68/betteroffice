@@ -1,6 +1,7 @@
 //! Bounded PresentationML parsing and part-preserving package writes.
 
 mod chart;
+mod custom_geometry;
 mod drawing;
 mod error;
 mod model;

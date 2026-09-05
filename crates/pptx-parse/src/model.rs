@@ -1,7 +1,9 @@
 use std::collections::BTreeMap;
 
 pub use ooxml_drawingml::ShapeStyle;
-use ooxml_drawingml::{ColorValue, GeometryPathCommand, ShapeFill, ShapeOutline, Theme, ThemeFormatScheme};
+use ooxml_drawingml::{
+    ColorValue, GeometryPathCommand, ShapeFill, ShapeOutline, Theme, ThemeFormatScheme,
+};
 use serde::{Deserialize, Serialize};
 
 use crate::relationships::Relationship;
@@ -244,8 +246,9 @@ pub struct Shape {
     #[serde(flatten)]
     pub base: ShapeBase,
     pub geometry: String,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub path: Option<Vec<GeometryPathCommand>>,
+    /// Custom paths in shape-relative coordinates.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub paths: Vec<CustomGeometryPath>,
     /// Theme formatting and text defaults.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub style: Option<Box<ShapeStyle>>,
@@ -254,6 +257,16 @@ pub struct Shape {
     pub fill: Option<ShapeFill>,
     pub outline: Option<ShapeOutline>,
     pub text: Option<TextBody>,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CustomGeometryPath {
+    pub commands: Vec<GeometryPathCommand>,
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub no_fill: bool,
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub no_stroke: bool,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
