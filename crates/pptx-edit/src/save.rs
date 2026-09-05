@@ -11,7 +11,7 @@ use pptx_parse::{
     SlideMaster, SlideWrite, TextTarget, TextWrite,
 };
 
-use crate::comments::derived_guid;
+use crate::comments::{derived_guid, seeded_comment_id};
 use crate::deck::{seed_doc, snapshot_doc};
 use crate::{
     BOOTSTRAP_CLIENT_ID, CommentSnapshot, DeckSession, DeckSnapshot, EditError, EditResult,
@@ -137,11 +137,15 @@ fn deck_write(
     }
     Ok(DeckWrite {
         slides,
-        comments: comments_write(current, baseline),
+        comments: comments_write(current, baseline, package),
     })
 }
 
-fn comments_write(current: &DeckSnapshot, baseline: &DeckSnapshot) -> Option<CommentsWrite> {
+fn comments_write(
+    current: &DeckSnapshot,
+    baseline: &DeckSnapshot,
+    package: &PptxPackage,
+) -> Option<CommentsWrite> {
     if current.comments == baseline.comments && current.comment_flavor == baseline.comment_flavor {
         return None;
     }
@@ -174,7 +178,30 @@ fn comments_write(current: &DeckSnapshot, baseline: &DeckSnapshot) -> Option<Com
         })
         .collect();
 
-    let mut authors: Vec<CommentAuthorWrite> = Vec::new();
+    let source: HashMap<_, _> = package
+        .comments
+        .iter()
+        .enumerate()
+        .filter(|(_, comment)| comment.flavor == flavor)
+        .map(|(index, comment)| (seeded_comment_id(index, &comment.id), comment))
+        .collect();
+    let mut authors: Vec<CommentAuthorWrite> = if live.is_empty() || source.is_empty() {
+        Vec::new()
+    } else {
+        package
+            .comment_authors
+            .iter()
+            .map(|author| CommentAuthorWrite {
+                id: author.id.clone(),
+                name: author.name.clone(),
+                initials: author.initials.clone(),
+                last_index: author.last_index.unwrap_or_default(),
+                color_index: author.color_index.unwrap_or_default(),
+                user_id: author.user_id.clone(),
+                provider_id: author.provider_id.clone(),
+            })
+            .collect()
+    };
     let mut per_slide: Vec<(CommentSlide, Vec<CommentWrite>)> = current
         .slides
         .iter()
@@ -196,7 +223,7 @@ fn comments_write(current: &DeckSnapshot, baseline: &DeckSnapshot) -> Option<Com
         else {
             continue;
         };
-        let mut write = charge_author(&mut authors, flavor, comment);
+        let mut write = preserved_comment(&mut authors, flavor, comment, &source);
         if flavor == CommentFlavor::Modern {
             for reply in live
                 .iter()
@@ -204,7 +231,7 @@ fn comments_write(current: &DeckSnapshot, baseline: &DeckSnapshot) -> Option<Com
             {
                 write
                     .replies
-                    .push(charge_author(&mut authors, flavor, reply));
+                    .push(preserved_comment(&mut authors, flavor, reply, &source));
             }
         }
         if let Some((_, slide_comments)) = per_slide.get_mut(index) {
@@ -215,8 +242,55 @@ fn comments_write(current: &DeckSnapshot, baseline: &DeckSnapshot) -> Option<Com
     Some(CommentsWrite {
         flavor,
         authors,
-        per_slide,
+        per_slide: per_slide
+            .into_iter()
+            .enumerate()
+            .filter_map(|(index, entry)| {
+                let slide_id = &current.slides[index].id;
+                let unchanged = flavor == baseline.comment_flavor
+                    && current
+                        .comments
+                        .iter()
+                        .filter(|comment| &comment.slide_id == slide_id)
+                        .eq(baseline
+                            .comments
+                            .iter()
+                            .filter(|comment| &comment.slide_id == slide_id));
+                (!unchanged).then_some(entry)
+            })
+            .collect(),
     })
+}
+
+fn preserved_comment(
+    authors: &mut Vec<CommentAuthorWrite>,
+    flavor: CommentFlavor,
+    comment: &CommentSnapshot,
+    source: &HashMap<String, &pptx_parse::Comment>,
+) -> CommentWrite {
+    let Some(original) = source.get(&comment.id) else {
+        for author in authors.iter_mut() {
+            author.last_index = source
+                .values()
+                .filter(|item| item.author_id == author.id)
+                .filter_map(|item| item.id.rsplit_once(':')?.1.parse::<u32>().ok())
+                .fold(author.last_index, u32::max);
+        }
+        return charge_author(authors, flavor, comment);
+    };
+    let index = original
+        .id
+        .rsplit_once(':')
+        .and_then(|(_, index)| index.parse().ok())
+        .unwrap_or(0);
+    let mut write = comment_write(comment, original.author_id.clone(), index);
+    write.id = original.id.clone();
+    if comment.resolved == (original.status.as_deref() == Some("resolved")) {
+        write.status = original.status.clone();
+    } else if !comment.resolved {
+        write.status = Some("active".to_owned());
+    }
+    write
 }
 
 fn charge_author(
@@ -232,7 +306,12 @@ fn charge_author(
         None => {
             let slot = authors.len();
             let id = match flavor {
-                CommentFlavor::Legacy => slot.to_string(),
+                CommentFlavor::Legacy => authors
+                    .iter()
+                    .filter_map(|author| author.id.parse::<u32>().ok())
+                    .max()
+                    .map_or(0, |id| id + 1)
+                    .to_string(),
                 CommentFlavor::Modern => {
                     derived_guid(&format!("author:{}:{}", comment.author, comment.initials))
                 }

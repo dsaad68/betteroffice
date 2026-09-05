@@ -602,20 +602,34 @@ fn patch_comment_parts(
             continue;
         }
 
+        let is_existing = existing.is_some();
         let part_path = match existing {
             Some(part_path) => part_path,
             None => mint_comment_part_path(write, &slide_part_path, &mut taken),
         };
         removed_paths.remove(&part_path);
-        sink.store(&part_path, comments_xml(write, comments, slide_id));
-        set_content_type_override(&mut sink, &part_path, write.comments_content_type(), budget)?;
-        set_relationship(
-            &mut sink,
-            &relationships_path,
-            write.comments_relationship_type(),
-            &relative_target(&slide_part_path, &part_path),
-            budget,
-        )?;
+        let bytes = match sink.current(&part_path) {
+            Some(bytes) => crate::comment_patch::patch_comments_xml(
+                &bytes, &part_path, write, comments, slide_id, budget,
+            )?,
+            None => comments_xml(write, comments, slide_id),
+        };
+        sink.store(&part_path, bytes);
+        if !is_existing {
+            set_content_type_override(
+                &mut sink,
+                &part_path,
+                write.comments_content_type(),
+                budget,
+            )?;
+            set_relationship(
+                &mut sink,
+                &relationships_path,
+                write.comments_relationship_type(),
+                &relative_target(&slide_part_path, &part_path),
+                budget,
+            )?;
+        }
     }
 
     let presentation_relationships = slide_relationships_path(&package.presentation.part_path);
@@ -633,23 +647,35 @@ fn patch_comment_parts(
         )?;
     } else {
         removed_paths.remove(&authors_path);
-        sink.store(&authors_path, authors_xml(write));
-        set_content_type_override(
-            &mut sink,
-            &authors_path,
-            write.authors_content_type(),
-            budget,
-        )?;
-        set_relationship(
-            &mut sink,
-            &presentation_relationships,
-            write.authors_relationship_type(),
-            &relative_target(&package.presentation.part_path, &authors_path),
-            budget,
-        )?;
+        let existing = sink.current(&authors_path);
+        let bytes = match &existing {
+            Some(bytes) => {
+                crate::comment_patch::patch_authors_xml(bytes, &authors_path, write, budget)?
+            }
+            None => authors_xml(write),
+        };
+        sink.store(&authors_path, bytes);
+        if existing.is_none() {
+            set_content_type_override(
+                &mut sink,
+                &authors_path,
+                write.authors_content_type(),
+                budget,
+            )?;
+            set_relationship(
+                &mut sink,
+                &presentation_relationships,
+                write.authors_relationship_type(),
+                &relative_target(&package.presentation.part_path, &authors_path),
+                budget,
+            )?;
+        }
     }
 
-    drop_other_flavor(package, write, &mut sink, removed_paths, budget)
+    if package.comment_flavor != Some(write.flavor) {
+        drop_other_flavor(package, write, &mut sink, removed_paths, budget)?;
+    }
+    Ok(())
 }
 
 fn mint_comment_part_path(

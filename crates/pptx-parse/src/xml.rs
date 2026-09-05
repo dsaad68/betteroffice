@@ -257,6 +257,12 @@ pub(crate) fn serialize_xml(root: &XmlElement) -> Vec<u8> {
     output.into_bytes()
 }
 
+pub(crate) fn serialize_xml_fragment(root: &XmlElement) -> Vec<u8> {
+    let mut output = String::new();
+    write_element(root, &mut output);
+    output.into_bytes()
+}
+
 fn write_element(element: &XmlElement, output: &mut String) {
     output.push('<');
     output.push_str(&element.name);

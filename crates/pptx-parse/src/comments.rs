@@ -395,7 +395,7 @@ pub(crate) fn comments_xml(
     serialize_xml(&root)
 }
 
-fn legacy_comment_element(comment: &CommentWrite) -> XmlElement {
+pub(crate) fn legacy_comment_element(comment: &CommentWrite) -> XmlElement {
     let mut element = XmlElement::new("p:cm")
         .with_attribute("authorId", comment.author_id.clone())
         .with_attribute("idx", comment.index.to_string());
@@ -411,7 +411,7 @@ fn legacy_comment_element(comment: &CommentWrite) -> XmlElement {
         .with_child(XmlElement::new("p:text").with_text(comment.text.clone()))
 }
 
-fn modern_comment_element(comment: &CommentWrite, slide_id: u32) -> XmlElement {
+pub(crate) fn modern_comment_element(comment: &CommentWrite, slide_id: u32) -> XmlElement {
     let mut element = modern_body_element("p188:cm", comment)
         .with_child(
             XmlElement::new("pc:sldMkLst")
@@ -437,7 +437,7 @@ fn modern_comment_element(comment: &CommentWrite, slide_id: u32) -> XmlElement {
     element.with_child(text_body(&comment.text))
 }
 
-fn modern_body_element(name: &str, comment: &CommentWrite) -> XmlElement {
+pub(crate) fn modern_body_element(name: &str, comment: &CommentWrite) -> XmlElement {
     let mut element = XmlElement::new(name)
         .with_attribute("id", comment.id.clone())
         .with_attribute("authorId", comment.author_id.clone());
@@ -450,7 +450,7 @@ fn modern_body_element(name: &str, comment: &CommentWrite) -> XmlElement {
     element
 }
 
-fn text_body(text: &str) -> XmlElement {
+pub(crate) fn text_body(text: &str) -> XmlElement {
     let mut body = XmlElement::new("p188:txBody")
         .with_child(XmlElement::new("a:bodyPr"))
         .with_child(XmlElement::new("a:lstStyle"));

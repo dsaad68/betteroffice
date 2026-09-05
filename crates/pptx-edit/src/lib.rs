@@ -157,6 +157,7 @@ impl DeckSession {
             pptx_parse::parse_pptx_without_connectors(source)
         }
         .map_err(|error| EditError::Parse(error.to_string()))?;
+        comments::import_source_comments(&session, &package)?;
         Ok(Self {
             package: Arc::new(package),
             ..session

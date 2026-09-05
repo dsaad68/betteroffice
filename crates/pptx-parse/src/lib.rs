@@ -1,6 +1,7 @@
 //! Bounded PresentationML parsing and part-preserving package writes.
 
 mod chart;
+mod comment_patch;
 mod comments;
 mod drawing;
 mod error;

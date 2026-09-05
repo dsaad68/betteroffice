@@ -9,3 +9,8 @@ The author part includes nonempty `userId` and `providerId` values. Comment part
 use nonconventional names to exercise relationship-based discovery.
 
 Schema reference: [MS-PPTX CT_Comment](https://learn.microsoft.com/en-us/openspecs/office_standards/ms-pptx/161bc2c9-98fc-46b7-852b-ba7ee77e2e54).
+
+`deck-schema-v2-comments.update.bin` was generated from this deck on main commit
+`387f2392c44e31e459264663fafd65581c8346a6` with `DeckSession::open(bytes, 725)` and
+`encode_state_as_update_v1()`. Its package metadata has no comment model. Migration
+must import all five comments from the fingerprint-matched source package.

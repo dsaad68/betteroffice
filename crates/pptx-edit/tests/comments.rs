@@ -1,9 +1,434 @@
 use std::sync::{Arc, Mutex};
 
 use pptx_edit::{CommentFlavor, DeckSession, DeckSnapshot, EditCtx, EditError, TextStyle};
+use yrs::updates::decoder::Decode;
 
 const DEMO: &[u8] = include_bytes!("../../../apps/demo/public/betteroffice-demo.pptx");
 const MODERN: &[u8] = include_bytes!("fixtures/modern-comments.pptx");
+const FIRST_PART: &str = "ppt/comments/modernComment_256_499602D2.xml";
+
+fn parts(bytes: &[u8]) -> std::collections::BTreeMap<String, Vec<u8>> {
+    ooxml_opc::unzip_parts(bytes).unwrap().into_iter().collect()
+}
+
+fn first_root(session: &DeckSession) -> pptx_edit::CommentSnapshot {
+    session
+        .comments()
+        .unwrap()
+        .into_iter()
+        .find(|comment| comment.created.as_deref() == Some("2024-12-30T20:26:06.503Z"))
+        .unwrap()
+}
+
+#[test]
+fn resolving_a_source_comment_changes_only_its_status_bytes() {
+    let session = DeckSession::open(MODERN, 721).unwrap();
+    let original = parts(MODERN);
+    assert_eq!(parts(&session.save().unwrap()), original);
+    let root = first_root(&session);
+    session
+        .set_comment_status(&EditCtx::local("test"), &root.id, true)
+        .unwrap();
+    let mut expected = original.clone();
+    expected.insert(
+        FIRST_PART.to_owned(),
+        String::from_utf8(original[FIRST_PART].clone())
+            .unwrap()
+            .replacen("status=\"active\"", "status=\"resolved\"", 1)
+            .into_bytes(),
+    );
+    assert_eq!(parts(&session.save().unwrap()), expected);
+    assert!(session.undo());
+    assert_eq!(parts(&session.save().unwrap()), original);
+    assert!(session.redo());
+    let update = session.encode_state_as_update_v1();
+    let reopened = DeckSession::open_from_update_with_source(&update, MODERN, 722).unwrap();
+    assert_eq!(parts(&reopened.save().unwrap()), expected);
+}
+
+#[test]
+fn adding_and_removing_a_reply_preserves_source_xml_and_authors() {
+    let session = DeckSession::open(MODERN, 723).unwrap();
+    let context = EditCtx::local("test");
+    let root = first_root(&session);
+    let reply = session
+        .reply_to_comment(
+            &context,
+            &root.id,
+            &root.author,
+            &root.initials,
+            "New reply 😀",
+            "2026-09-05T12:00:00Z",
+        )
+        .unwrap();
+    let saved = parts(&session.save().unwrap());
+    let original = parts(MODERN);
+    for (path, bytes) in &original {
+        if path != FIRST_PART {
+            assert_eq!(&saved[path], bytes, "{path}");
+        }
+    }
+    let xml = String::from_utf8(saved[FIRST_PART].clone()).unwrap();
+    let insertion_end = xml.find("</p188:replyLst>").unwrap();
+    let insertion_start = xml[..insertion_end].rfind("<p188:reply ").unwrap();
+    let restored = format!("{}{}", &xml[..insertion_start], &xml[insertion_end..]);
+    assert_eq!(restored.as_bytes(), original[FIRST_PART]);
+    let reopened = DeckSession::open(&session.save().unwrap(), 724).unwrap();
+    assert_eq!(reopened.comments().unwrap().len(), 6);
+    session.remove_comment(&context, &reply.comment_id).unwrap();
+    assert_eq!(parts(&session.save().unwrap()), original);
+}
+
+#[test]
+fn concurrent_root_deletion_promotes_replies_in_both_update_orders() {
+    let left = DeckSession::open(MODERN, 726).unwrap();
+    let right = DeckSession::open(MODERN, 727).unwrap();
+    let root = first_root(&left);
+    let context = EditCtx::local("test");
+    left.remove_comment(&context, &root.id).unwrap();
+    let reply = right
+        .reply_to_comment(
+            &context,
+            &root.id,
+            "Concurrent",
+            "C",
+            "Keep this reply 😀",
+            "2026-09-05T12:00:00Z",
+        )
+        .unwrap();
+    let deletion = left.encode_state_as_update_v1();
+    let addition = right.encode_state_as_update_v1();
+    left.apply_update_v1(&addition).unwrap();
+    right.apply_update_v1(&deletion).unwrap();
+    assert_eq!(left.snapshot().unwrap(), right.snapshot().unwrap());
+    let expected = left.snapshot().unwrap();
+    assert_eq!(expected.comments.len(), 3);
+    let promoted = expected
+        .comments
+        .iter()
+        .find(|comment| comment.id == reply.comment_id)
+        .unwrap();
+    assert_eq!(promoted.parent_id, None);
+    assert_eq!(promoted.text, "Keep this reply 😀");
+    let saved = left.save().unwrap();
+    assert_eq!(parts(&right.save().unwrap()), parts(&saved));
+    for updates in [[&deletion, &addition], [&addition, &deletion]] {
+        let receiver = DeckSession::open(MODERN, 728).unwrap();
+        for update in updates {
+            receiver.apply_update_v1(update).unwrap();
+        }
+        assert_eq!(receiver.snapshot().unwrap(), expected);
+        assert_eq!(parts(&receiver.save().unwrap()), parts(&saved));
+    }
+    let reopened = DeckSession::open(&saved, 729).unwrap();
+    let comments = reopened.comments().unwrap();
+    assert_eq!(comments.len(), 3);
+    assert!(
+        comments
+            .iter()
+            .any(|comment| comment.text == promoted.text && comment.parent_id.is_none())
+    );
+    let followup = left
+        .reply_to_comment(
+            &context,
+            &reply.comment_id,
+            "Concurrent",
+            "C",
+            "Follow-up",
+            "2026-09-05T12:01:00Z",
+        )
+        .unwrap();
+    assert_eq!(
+        followup.parent_id.as_deref(),
+        Some(reply.comment_id.as_str())
+    );
+    assert_eq!(
+        DeckSession::open(&left.save().unwrap(), 730)
+            .unwrap()
+            .comments()
+            .unwrap()
+            .len(),
+        4
+    );
+}
+
+#[test]
+fn v2_source_migration_imports_comments_once_and_keeps_peer_edits() {
+    let update = include_bytes!("fixtures/deck-schema-v2-comments.update.bin");
+    let source_free = DeckSession::open_from_update(update, 731).unwrap();
+    let left = DeckSession::open_from_update_with_source(
+        &source_free.encode_state_as_update_v1(),
+        MODERN,
+        732,
+    )
+    .unwrap();
+    let right = DeckSession::open_from_update_with_source(update, MODERN, 733).unwrap();
+    assert_eq!(left.comments().unwrap().len(), 5);
+    assert_eq!(left.snapshot().unwrap(), right.snapshot().unwrap());
+    assert_eq!(parts(&left.save().unwrap()), parts(MODERN));
+    let root = first_root(&left);
+    left.set_comment_status(&EditCtx::local("test"), &root.id, true)
+        .unwrap();
+    let reply = right
+        .reply_to_comment(
+            &EditCtx::local("test"),
+            &root.id,
+            "Peer",
+            "P",
+            "Migrated reply",
+            "2026-09-05T12:02:00Z",
+        )
+        .unwrap();
+    let left_update = left.encode_state_as_update_v1();
+    let right_update = right.encode_state_as_update_v1();
+    left.apply_update_v1(&right_update).unwrap();
+    right.apply_update_v1(&left_update).unwrap();
+    assert_eq!(left.snapshot().unwrap(), right.snapshot().unwrap());
+    let comments = left.comments().unwrap();
+    assert_eq!(comments.len(), 6);
+    assert!(
+        comments
+            .iter()
+            .find(|comment| comment.id == root.id)
+            .unwrap()
+            .resolved
+    );
+    assert!(
+        comments
+            .iter()
+            .any(|comment| comment.id == reply.comment_id)
+    );
+    let migrated = left.encode_state_as_update_v1();
+    let reopened = DeckSession::open_from_update_with_source(&migrated, MODERN, 734).unwrap();
+    assert_eq!(
+        yrs::StateVector::decode_v1(&reopened.encode_state_vector_v1()).unwrap(),
+        yrs::StateVector::decode_v1(&left.encode_state_vector_v1()).unwrap()
+    );
+    assert_eq!(reopened.snapshot().unwrap(), left.snapshot().unwrap());
+    assert_eq!(
+        DeckSession::open(&reopened.save().unwrap(), 735)
+            .unwrap()
+            .comments()
+            .unwrap()
+            .len(),
+        6
+    );
+    for comment in reopened
+        .comments()
+        .unwrap()
+        .iter()
+        .filter(|comment| comment.parent_id.is_none())
+    {
+        reopened
+            .remove_comment(&EditCtx::local("test"), &comment.id)
+            .unwrap();
+    }
+    let deleted = DeckSession::open_from_update_with_source(
+        &reopened.encode_state_as_update_v1(),
+        MODERN,
+        736,
+    )
+    .unwrap();
+    assert!(deleted.comments().unwrap().is_empty());
+    assert_eq!(
+        parts(&deleted.save().unwrap()).len(),
+        parts(MODERN).len() - 3
+    );
+}
+
+#[test]
+fn source_extensions_and_custom_prefixes_survive_status_and_new_authors() {
+    let mut original = parts(MODERN);
+    let xml = String::from_utf8(original[FIRST_PART].clone()).unwrap()
+        .replace("p188:", "modern:").replace("xmlns:p188", "xmlns:modern")
+        .replace("status=\"active\"", "status = 'active' xmlns:ext='urn:test' ext:opaque='a &amp; b'")
+        .replace("<modern:pos", "<!--opaque--><?keep value?><ext:opaque xmlns:ext='urn:test'><![CDATA[a < b]]></ext:opaque><modern:pos");
+    original.insert(FIRST_PART.to_owned(), xml.clone().into_bytes());
+    let source = ooxml_opc::rezip_parts(&original.clone().into_iter().collect::<Vec<_>>()).unwrap();
+    let session = DeckSession::open(&source, 737).unwrap();
+    let root = first_root(&session);
+    session
+        .set_comment_status(&EditCtx::local("test"), &root.id, true)
+        .unwrap();
+    let saved = parts(&session.save().unwrap());
+    let mut expected = original.clone();
+    expected.insert(
+        FIRST_PART.to_owned(),
+        xml.replace("status = 'active'", "status = 'resolved'")
+            .into_bytes(),
+    );
+    assert_eq!(saved, expected);
+    session
+        .reply_to_comment(
+            &EditCtx::local("test"),
+            &root.id,
+            "New & author",
+            "N",
+            "New reply",
+            "2026-09-05T13:00:00Z",
+        )
+        .unwrap();
+    let saved = parts(&session.save().unwrap());
+    for (path, bytes) in &expected {
+        if path != FIRST_PART && path != "ppt/authors.xml" {
+            assert_eq!(&saved[path], bytes, "{path}");
+        }
+    }
+    let old_authors = String::from_utf8(original["ppt/authors.xml"].clone()).unwrap();
+    let new_authors = String::from_utf8(saved["ppt/authors.xml"].clone()).unwrap();
+    assert!(new_authors.starts_with(old_authors.strip_suffix("</p188:authorLst>").unwrap()));
+    let reopened = DeckSession::open(&session.save().unwrap(), 738).unwrap();
+    assert_eq!(reopened.comments().unwrap().len(), 6);
+    assert!(
+        reopened
+            .comments()
+            .unwrap()
+            .iter()
+            .any(|comment| comment.author == "New & author")
+    );
+}
+
+#[test]
+fn new_reply_lists_preserve_existing_comments_and_empty_element_forms() {
+    for reply_list in ["", "<p188:replyLst/>", "<p188:replyLst></p188:replyLst>"] {
+        let mut original = parts(MODERN);
+        let second = "ppt/comments/modernComment_257_3ADE68B1.xml";
+        original.insert(
+            second.to_owned(),
+            String::from_utf8(original[second].clone())
+                .unwrap()
+                .replace("<p188:txBody>", &format!("{reply_list}<p188:txBody>"))
+                .into_bytes(),
+        );
+        let source =
+            ooxml_opc::rezip_parts(&original.clone().into_iter().collect::<Vec<_>>()).unwrap();
+        let session = DeckSession::open(&source, 739).unwrap();
+        let root = session
+            .comments()
+            .unwrap()
+            .into_iter()
+            .find(|comment| comment.text == "Slide two comment.")
+            .unwrap();
+        let context = EditCtx::local("test");
+        session
+            .set_comment_status(&context, &root.id, true)
+            .unwrap();
+        session
+            .reply_to_comment(
+                &context,
+                &root.id,
+                &root.author,
+                &root.initials,
+                "Reply",
+                "2026-09-05T13:01:00Z",
+            )
+            .unwrap();
+        let saved = session.save().unwrap();
+        for (path, bytes) in &original {
+            if path != second {
+                assert_eq!(&parts(&saved)[path], bytes, "{path}");
+            }
+        }
+        let reopened = DeckSession::open(&saved, 740).unwrap();
+        assert_eq!(reopened.comments().unwrap().len(), 6);
+        assert!(
+            reopened
+                .comments()
+                .unwrap()
+                .iter()
+                .any(|comment| comment.text == "Slide two comment." && comment.resolved)
+        );
+    }
+}
+
+#[test]
+fn legacy_additions_preserve_source_authors_and_advance_their_index() {
+    let seed = DeckSession::open(DEMO, 741).unwrap();
+    let context = EditCtx::local("test");
+    let slide = seed.snapshot().unwrap().slides[0].id.clone();
+    seed.add_comment(
+        &context,
+        &slide,
+        "Known author",
+        "KA",
+        "Legacy root",
+        "2026-09-05T14:00:00Z",
+        0,
+        0,
+    )
+    .unwrap();
+    let mut original = parts(&seed.save().unwrap());
+    let authors = "ppt/commentAuthors.xml";
+    original.insert(
+        authors.to_owned(),
+        String::from_utf8(original[authors].clone())
+            .unwrap()
+            .replace("id=\"0\"", "id=\"7\"")
+            .replace("lastIdx=\"1\"", "lastIdx=\"9\" custom=\"preserve\"")
+            .into_bytes(),
+    );
+    let comment_part = "ppt/comments/comment1.xml";
+    original.insert(
+        comment_part.to_owned(),
+        String::from_utf8(original[comment_part].clone())
+            .unwrap()
+            .replace("authorId=\"0\"", "authorId=\"7\"")
+            .into_bytes(),
+    );
+    let source = ooxml_opc::rezip_parts(&original.clone().into_iter().collect::<Vec<_>>()).unwrap();
+    let session = DeckSession::open(&source, 742).unwrap();
+    session
+        .add_comment(
+            &context,
+            &slide,
+            "Known author",
+            "KA",
+            "Next legacy",
+            "2026-09-05T14:01:00Z",
+            0,
+            0,
+        )
+        .unwrap();
+    let saved = parts(&session.save().unwrap());
+    assert_eq!(
+        String::from_utf8(saved[authors].clone()).unwrap(),
+        String::from_utf8(original[authors].clone())
+            .unwrap()
+            .replace("lastIdx=\"9\"", "lastIdx=\"10\"")
+    );
+    let xml = String::from_utf8(saved[comment_part].clone()).unwrap();
+    let old_xml = String::from_utf8(original[comment_part].clone()).unwrap();
+    assert!(xml.starts_with(old_xml.strip_suffix("</p:cmLst>").unwrap()));
+    assert!(xml.contains("idx=\"10\""));
+    let reopened = DeckSession::open(&session.save().unwrap(), 743).unwrap();
+    assert_eq!(reopened.comments().unwrap().len(), 2);
+    assert!(
+        reopened
+            .comments()
+            .unwrap()
+            .iter()
+            .all(|comment| comment.author == "Known author")
+    );
+}
+
+#[test]
+fn editing_a_comment_preserves_an_untouched_empty_comment_part() {
+    let mut original = parts(MODERN);
+    let second = "ppt/comments/modernComment_257_3ADE68B1.xml";
+    original.insert(second.to_owned(), br#"<p188:cmLst xmlns:p188="http://schemas.microsoft.com/office/powerpoint/2018/8/main"><unknown:metadata xmlns:unknown="urn:test" value="keep"/></p188:cmLst>"#.to_vec());
+    let source = ooxml_opc::rezip_parts(&original.clone().into_iter().collect::<Vec<_>>()).unwrap();
+    let session = DeckSession::open(&source, 744).unwrap();
+    let root = first_root(&session);
+    session
+        .set_comment_status(&EditCtx::local("test"), &root.id, true)
+        .unwrap();
+    let saved = parts(&session.save().unwrap());
+    for (path, bytes) in &original {
+        if path != FIRST_PART {
+            assert_eq!(saved.get(path), Some(bytes), "{path}");
+        }
+    }
+}
 
 #[test]
 fn comment_operations_are_individually_undoable_and_publish_one_update() {

@@ -21,9 +21,9 @@ use crate::{
     ShapeStrokeReceipt, SlideReceipt, SlideSnapshot, TransformReceipt,
 };
 
-const SCHEMA_VERSION: f64 = 3.0;
+const SCHEMA_VERSION: f64 = 4.0;
 /// Versions [`migrate_doc`] can carry forward. Anything else is unreadable.
-const MIGRATABLE_SCHEMA_VERSIONS: [f64; 3] = [1.0, 2.0, SCHEMA_VERSION];
+const MIGRATABLE_SCHEMA_VERSIONS: [f64; 4] = [1.0, 2.0, 3.0, SCHEMA_VERSION];
 const MAX_GEOMETRY: i64 = 1_000_000_000_000_000;
 const MAX_SHAPE_DEPTH: usize = 128;
 const EMU_PER_POINT: f64 = 12_700.0;
@@ -731,11 +731,25 @@ pub(crate) fn migrate_doc(doc: &Doc) -> EditResult<()> {
         Any::Buffer(Arc::from(package_json)),
     );
     meta.insert(&mut txn, "schemaVersion", SCHEMA_VERSION);
-    meta.insert(
-        &mut txn,
-        "commentFlavor",
-        flavor_key(package.comment_flavor.unwrap_or_default()),
-    );
+    if !meta.contains_key(&txn, "commentFlavor") {
+        if !package.comments.is_empty()
+            || package
+                .relationships
+                .values()
+                .flatten()
+                .any(|relationship| {
+                    relationship.is_type(pptx_parse::relationship_types::COMMENTS)
+                        || relationship.is_type(pptx_parse::relationship_types::MODERN_COMMENTS)
+                })
+        {
+            meta.insert(&mut txn, "commentsPendingSource", true);
+        }
+        meta.insert(
+            &mut txn,
+            "commentFlavor",
+            flavor_key(package.comment_flavor.unwrap_or_default()),
+        );
+    }
     Ok(())
 }
 

@@ -17,20 +17,34 @@ relationships and content-type overrides.
 `addComment` anchors a comment to a slide; `replyToComment` and
 `setCommentStatus` need modern comments, since legacy `p:cm` carries neither a
 reply list nor a status, and are rejected on a legacy deck. `removeComment`
-takes a thread root's replies with it, and dropping a slide's last comment
+takes the replies visible to the deleting client with it. A concurrent reply
+whose root was deleted becomes a root itself on every client and remains in the
+saved file. Dropping a slide's last comment
 removes its part, its relationship and its content-type override. Comment
 positions cross the API in EMU. Legacy comments convert to 1/576-inch master
 units; modern comments store EMU directly. Timestamps are caller-supplied, so the
 engine stays clock-free and two peers replaying the same edits converge byte for
-byte.
+byte. Existing comment XML is patched in place: status edits retain GUIDs,
+author identities, task metadata, formatting, anchors, unknown XML and reply
+order. Untouched comment and author parts retain their exact source bytes.
 
 Minor rather than patch: `DeckSnapshot` gains `comments` and `commentFlavor`,
 `ParseLimits` gains `max_comments`, `DeckWrite` gains `comments`, and `EditError`
 gains `CommentNotFound` and `InvalidComment` — so anything that _constructs_ a
 `ParseLimits` or `DeckWrite` by literal, or matches `EditError` exhaustively,
-must be updated. The deck schema moves to v3; v1 and v2 collaboration updates
-load through the migration path, but restoring their existing comments and
-interoperating with v2 clients remain unresolved.
+must be updated. This branch moves the deck schema from v3 to v4. Versions v1,
+v2 and v3 load through migration; `open_from_update_with_source` imports source
+comments deterministically when an older update has no comment model. Opening
+without source bytes defers that import until the original file is attached.
+The import runs once, so subsequent edits and deletions survive reopening.
+Older clients reject the new schema, including updates for comment-free decks;
+upgrade all collaborators before sharing new updates. Saved PPTX files remain
+the file-exchange path for older clients.
+
+The coordinated landing order reserves v4 for #277, v5 for #253, v6 for #269,
+v7 for #285 and v8 for this feature. Those predecessors were still open when
+this branch was integrated with main's v3; the coordinator must re-version this
+change to v8 after they land.
 
 Redaction now also scrubs author names, initials and user IDs from the modern
 `ppt/authors.xml` part, which it previously passed through untouched.
