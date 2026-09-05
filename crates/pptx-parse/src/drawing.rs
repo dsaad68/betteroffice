@@ -1028,6 +1028,31 @@ mod tests {
     }
 
     #[test]
+    fn a_rectangular_picture_serializes_as_it_did_before_pictures_had_a_geometry() {
+        let limits = ParseLimits::default();
+        let mut budget = ParseBudget::new(&limits);
+        let root = parse_xml(
+            br#"<p:sld><p:cSld><p:spTree><p:pic><p:nvPicPr><p:cNvPr id="8" name="Photo"/><p:nvPr/></p:nvPicPr><p:blipFill><a:blip r:embed="rId3"/></p:blipFill><p:spPr><a:prstGeom prst="rect"><a:avLst/></a:prstGeom></p:spPr></p:pic><p:pic><p:nvPicPr><p:cNvPr id="9" name="Portrait"/><p:nvPr/></p:nvPicPr><p:blipFill><a:blip r:embed="rId3"/></p:blipFill><p:spPr><a:xfrm><a:off x="0" y="0"/><a:ext cx="400" cy="200"/></a:xfrm><a:prstGeom prst="roundRect"><a:avLst><a:gd name="adj" fmla="val 25000"/></a:avLst></a:prstGeom></p:spPr></p:pic></p:spTree></p:cSld></p:sld>"#,
+            "ppt/slides/slide1.xml",
+            &mut budget,
+        )
+        .unwrap();
+        let data = common_slide_data(&root, &[], "ppt/slides/slide1.xml", &mut budget).unwrap();
+        let (ShapeNode::Picture(rectangle), ShapeNode::Picture(rounded)) =
+            (&data.shapes[0], &data.shapes[1])
+        else {
+            panic!("expected two pictures");
+        };
+        let json = serde_json::to_value(rectangle).unwrap();
+        assert!(json.get("geometry").is_none());
+        assert!(json.get("adjustValues").is_none());
+        assert_eq!(serde_json::from_value::<Picture>(json).unwrap(), *rectangle);
+        let json = serde_json::to_value(rounded).unwrap();
+        assert_eq!(json["geometry"], "roundRect");
+        assert_eq!(json["adjustValues"]["adj"], 0.25);
+    }
+
+    #[test]
     fn evaluates_literal_arithmetic_and_reference_adjustment_formulas() {
         let properties = adjustment_properties(
             r#"<a:gd name="adj" fmla="val 20000"/>

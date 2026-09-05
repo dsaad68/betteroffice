@@ -214,14 +214,22 @@ pub struct Picture {
     pub relationship_id: Option<String>,
     pub media_part_path: Option<String>,
     pub crop: PictureCrop,
-    // Pictures gained a geometry after v1 snapshots were persisted; an absent one means the
-    // frame rectangle, which is what every such picture was already drawn as.
-    #[serde(default)]
+    /// The preset the picture is masked to. Absent means the frame rectangle, which is also how
+    /// every picture serialized before it had a geometry.
+    #[serde(default = "rect_geometry", skip_serializing_if = "is_rect")]
     pub geometry: String,
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub adjust_values: BTreeMap<String, f64>,
     pub fill: Option<ShapeFill>,
     pub outline: Option<ShapeOutline>,
+}
+
+fn rect_geometry() -> String {
+    "rect".to_owned()
+}
+
+fn is_rect(geometry: &str) -> bool {
+    geometry == "rect"
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
