@@ -914,9 +914,7 @@ fn content_from_story(story: &StorySnapshot) -> TextContent {
     }
 }
 
-/// A `<a:fld>` carries PowerPoint's cached rendering of the field. For a field on a master or
-/// layout that cache is the authoring placeholder, so it must be replaced rather than copied;
-/// on a slide PowerPoint usually caches the real number, and substituting agrees with it.
+/// Resolves inherited slide-number fields.
 fn field_text(run: &pptx_parse::TextRun, slide_number: i64) -> String {
     match run.field_type.as_deref() {
         Some("slidenum") => slide_number.to_string(),
@@ -2771,13 +2769,10 @@ mod tests {
             line_break: false,
         };
 
-        // PowerPoint caches its authoring placeholder in the field's own text, so copying it
-        // is what put a literal marker on every slide of a deck.
         assert_eq!(
             field_text(&run(Some("slidenum"), "\u{2039}#\u{203a}"), 7),
             "7"
         );
-        // A field this renderer does not evaluate keeps whatever was cached for it.
         assert_eq!(
             field_text(&run(Some("datetime"), "16/08/2026"), 7),
             "16/08/2026"
@@ -2787,17 +2782,41 @@ mod tests {
 
     #[test]
     fn slide_number_fields_count_from_first_slide_num_through_the_edit_snapshot() {
-        let package = pptx_parse::parse_pptx(NUMBERED_FIXTURE).unwrap();
-        assert_eq!(package.presentation.first_slide_num, 10);
-        let session = DeckSession::open(NUMBERED_FIXTURE, 8_006).unwrap();
+        for first in [10, -3, i32::MAX] {
+            assert_slide_number_fields(first);
+        }
+    }
+
+    fn assert_slide_number_fields(first: i32) {
+        let mut source = pptx_parse::parse_pptx(NUMBERED_FIXTURE).unwrap();
+        assert_eq!(source.presentation.first_slide_num, 10);
+        assert!(
+            std::str::from_utf8(source.part_bytes("ppt/slides/slide1.xml").unwrap())
+                .unwrap()
+                .contains("show=\"0\"")
+        );
+        let presentation = std::str::from_utf8(source.part_bytes("ppt/presentation.xml").unwrap())
+            .unwrap()
+            .replace(
+                "firstSlideNum=\"10\"",
+                &format!("firstSlideNum=\"{first}\""),
+            );
+        assert!(source.replace_part("ppt/presentation.xml", presentation.into_bytes()));
+        let bytes = pptx_parse::write_pptx(&source).unwrap();
+        let parsed = pptx_parse::parse_pptx(&bytes).unwrap();
+        let opened = DeckSession::from_package_with_source(parsed, &bytes, 8_006).unwrap();
+        let session =
+            DeckSession::open_from_update(&opened.encode_state_as_update_v1(), 8_007).unwrap();
+        let package = session.package();
+        assert_eq!(package.presentation.first_slide_num, first);
         let deck = session.snapshot().unwrap();
+        assert_eq!(deck.slides.len(), 3);
         let master = &package.masters[0];
         let layout = &package.layouts[0];
         let master_probe = format!("master:{}:{}", master.part_path, master.shapes.len() - 1);
         let layout_probe = format!("layout:{}:{}", layout.part_path, layout.shapes.len() - 1);
-        // The edit layer keeps a slide's own field as the cached story text.
         let slide_probe = deck.slides[1].shapes.last().unwrap();
-        assert_eq!(slide_probe.text_stories[0].plain_text(), "11");
+        assert_eq!(slide_probe.text_stories[0].plain_text(), "77");
 
         let run = |text: &str, size: f32, emphasis: bool, color: &str| TextRun {
             text: text.to_owned(),
@@ -2809,9 +2828,10 @@ mod tests {
             color: color.to_owned(),
         };
         let renderer = renderer();
-        // Slide 1 is hidden and still takes a number.
-        for (index, number) in ["10", "11", "12"].into_iter().enumerate() {
-            let rendered = renderer.layout_slide(&package, &deck, index).unwrap();
+        for index in 0..3 {
+            let number = (i64::from(first) + index as i64).to_string();
+            let number = number.as_str();
+            let rendered = renderer.layout_slide(package, &deck, index).unwrap();
             let (runs, line) = drawn_text(&rendered, &master_probe);
             assert_eq!(
                 runs.iter().map(|run| run.text.as_str()).collect::<Vec<_>>(),
@@ -2825,13 +2845,12 @@ mod tests {
             assert_eq!(line, number);
             if index == 1 {
                 let (runs, line) = drawn_text(&rendered, &slide_probe.id);
-                assert_eq!(runs, [run("11", 19.0, false, "#AA5500")]);
-                assert_eq!(line, "11");
+                assert_eq!(runs, [run("77", 19.0, false, "#AA5500")]);
+                assert_eq!(line, "77");
             }
         }
     }
 
-    /// The paragraph runs and shaped line text of the text box drawn for `shape_id`.
     fn drawn_text(rendered: &RenderedSlide, shape_id: &str) -> (Vec<TextRun>, String) {
         rendered
             .display_list

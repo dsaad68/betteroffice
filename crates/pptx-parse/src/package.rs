@@ -633,35 +633,6 @@ mod tests {
     const NUMBERED_FIXTURE: &[u8] = include_bytes!("../tests/fixtures/slide-number-fields.pptx");
     const CHART_PART: &str = "ppt/charts/chart1.xml";
 
-    fn presentation_from(xml: &str) -> Presentation {
-        let limits = ParseLimits::default();
-        let mut budget = ParseBudget::new(&limits);
-        let root = parse_xml(xml.as_bytes(), "ppt/presentation.xml", &mut budget).unwrap();
-        parse_presentation(&root, "ppt/presentation.xml", &[]).unwrap()
-    }
-
-    #[test]
-    fn first_slide_num_sets_where_slide_numbering_starts() {
-        const NS: &str = "http://schemas.openxmlformats.org/presentationml/2006/main";
-        let deck = |attribute: &str| {
-            format!(r#"<p:presentation xmlns:p="{NS}"{attribute}><p:sldSz cx="12192000" cy="6858000"/></p:presentation>"#)
-        };
-
-        assert_eq!(presentation_from(&deck("")).first_slide_num, 1);
-        assert_eq!(
-            presentation_from(&deck(r#" firstSlideNum="4""#)).first_slide_num,
-            4
-        );
-        assert_eq!(
-            presentation_from(&deck(r#" firstSlideNum="0""#)).first_slide_num,
-            0
-        );
-        assert_eq!(
-            presentation_from(&deck(r#" firstSlideNum="oops""#)).first_slide_num,
-            1
-        );
-    }
-
     #[test]
     fn parses_betteroffice_demo_deck_surface() {
         let package = parse_pptx(FIXTURE).unwrap();
@@ -710,7 +681,16 @@ mod tests {
                 .first_slide_num,
             10
         );
-        for (value, expected) in [("0", 0), ("-3", -3), ("ten", 1), ("", 1)] {
+        for (value, expected) in [
+            ("0", 0),
+            ("-3", -3),
+            ("-2147483648", i32::MIN),
+            ("2147483647", i32::MAX),
+            ("2147483648", 1),
+            ("-2147483649", 1),
+            ("ten", 1),
+            ("", 1),
+        ] {
             let package = parse_pptx(&demo_deck_numbered_from(value)).unwrap();
             assert_eq!(
                 package.presentation.first_slide_num, expected,
@@ -719,7 +699,6 @@ mod tests {
         }
     }
 
-    /// `betteroffice-demo.pptx` with `firstSlideNum` set on its presentation.
     fn demo_deck_numbered_from(value: &str) -> Vec<u8> {
         let mut parts = ooxml_opc::unzip_parts(FIXTURE).unwrap();
         let slot = parts

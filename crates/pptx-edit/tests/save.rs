@@ -84,6 +84,13 @@ fn an_unedited_deck_numbered_from_ten_saves_part_identical() {
     let session = DeckSession::open(NUMBERED_FIXTURE, 7).unwrap();
     assert_eq!(session.package().presentation.first_slide_num, 10);
     assert_eq!(parts(&session.save().unwrap()), parts(NUMBERED_FIXTURE));
+    let restored = DeckSession::open_from_update_with_source(
+        &session.encode_state_as_update_v1(),
+        NUMBERED_FIXTURE,
+        8,
+    )
+    .unwrap();
+    assert_eq!(parts(&restored.save().unwrap()), parts(NUMBERED_FIXTURE));
 }
 
 #[test]
