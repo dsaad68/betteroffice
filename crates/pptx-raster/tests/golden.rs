@@ -296,6 +296,8 @@ fn golden_image() {
             w: 100.0,
             h: 80.0,
             asset_id: Some("ppt/media/image1.png".into()),
+            crop: Default::default(),
+            path: None,
             stroke: Some(Stroke {
                 color: "#111827".into(),
                 width: 2.0,

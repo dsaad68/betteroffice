@@ -52,11 +52,12 @@ pub(crate) fn common_slide_data(
     let background = common
         .and_then(|value| value.child("bg"))
         .and_then(parse_background);
-    let shapes = if let Some(tree) = common.and_then(|value| value.child("spTree")) {
+    let mut shapes = if let Some(tree) = common.and_then(|value| value.child("spTree")) {
         parse_shape_children(tree, relationships, part, budget)?
     } else {
         Vec::new()
     };
+    resolve_group_fill(&mut shapes, None);
     Ok(CommonSlideData {
         name,
         background,
@@ -176,14 +177,14 @@ fn parse_picture(
     let media_part_path = relationship_id
         .as_deref()
         .and_then(|id| relationship_target(relationships, id));
+    let transform = properties.and_then(|value| value.child("xfrm"));
     Ok(Picture {
-        base: parse_base(
-            element.child("nvPicPr"),
-            properties.and_then(|value| value.child("xfrm")),
-        ),
+        base: parse_base(element.child("nvPicPr"), transform),
         relationship_id,
         media_part_path,
         crop: parse_crop(blip_fill.and_then(|value| value.child("srcRect"))),
+        geometry: parse_geometry(properties),
+        adjust_values: parse_adjust_values(properties, parse_shape_extent(transform)),
         fill: properties.and_then(parse_fill),
         outline: properties.and_then(parse_outline),
     })
@@ -256,6 +257,14 @@ fn parse_group(
     budget: &mut ParseBudget<'_>,
 ) -> Result<GroupShape, PptxError> {
     budget.charge_shape(part)?;
+    let own_fill = element.child("grpSpPr").and_then(parse_fill);
+    let mut children = parse_shape_children(element, relationships, part, budget)?;
+    if let Some(fill) = own_fill
+        .as_ref()
+        .filter(|fill| fill.fill_type != GROUP_FILL)
+    {
+        resolve_group_fill(&mut children, Some(fill));
+    }
     Ok(GroupShape {
         base: parse_base(
             element.child("nvGrpSpPr"),
@@ -263,7 +272,7 @@ fn parse_group(
                 .child("grpSpPr")
                 .and_then(|value| value.child("xfrm")),
         ),
-        children: parse_shape_children(element, relationships, part, budget)?,
+        children,
     })
 }
 
@@ -553,7 +562,7 @@ fn guide_operand(token: &str, values: &BTreeMap<String, GuideValue>) -> Option<G
 
 fn parse_background(element: &XmlElement) -> Option<ShapeFill> {
     if let Some(properties) = element.child("bgPr") {
-        return parse_fill(properties);
+        return parse_fill(properties).filter(|fill| fill.fill_type != GROUP_FILL);
     }
     element.child("bgRef").map(|reference| ShapeFill {
         fill_type: "theme".to_owned(),
@@ -579,7 +588,39 @@ fn parse_fill(element: &XmlElement) -> Option<ShapeFill> {
     if element.child("blipFill").is_some() {
         return Some(ShapeFill::named("picture"));
     }
+    if element.child("grpFill").is_some() {
+        return Some(ShapeFill::named(GROUP_FILL));
+    }
     None
+}
+
+/// Marker left by `<a:grpFill/>`, standing until an ancestor group resolves it or the tree
+/// root clears it.
+const GROUP_FILL: &str = "group";
+
+fn fill_slot(node: &mut ShapeNode) -> Option<&mut Option<ShapeFill>> {
+    match node {
+        ShapeNode::Shape(shape) => Some(&mut shape.fill),
+        ShapeNode::Picture(picture) => Some(&mut picture.fill),
+        ShapeNode::GraphicFrame(_) | ShapeNode::Group(_) => None,
+    }
+}
+
+/// Hands `fill` to every descendant still waiting on `<a:grpFill/>`, or clears the marker when
+/// there is no group left to inherit from.
+fn resolve_group_fill(children: &mut [ShapeNode], fill: Option<&ShapeFill>) {
+    for child in children {
+        if let Some(slot) = fill_slot(child)
+            && slot
+                .as_ref()
+                .is_some_and(|current| current.fill_type == GROUP_FILL)
+        {
+            *slot = fill.cloned();
+        }
+        if let ShapeNode::Group(group) = child {
+            resolve_group_fill(&mut group.children, fill);
+        }
+    }
 }
 
 fn parse_gradient_fill(element: &XmlElement) -> ShapeFill {
@@ -954,6 +995,80 @@ mod tests {
     use crate::xml::parse_xml;
 
     #[test]
+    fn group_fill_reaches_every_shape_that_asks_for_it() {
+        let limits = ParseLimits::default();
+        let mut budget = ParseBudget::new(&limits);
+        let root = parse_xml(
+            br#"<p:sld><p:cSld><p:spTree><p:grpSp><p:nvGrpSpPr><p:cNvPr id="10" name="Outer"/></p:nvGrpSpPr><p:grpSpPr><a:solidFill><a:schemeClr val="accent1"/></a:solidFill></p:grpSpPr><p:sp><p:nvSpPr><p:cNvPr id="11" name="Inherits"/><p:nvPr/></p:nvSpPr><p:spPr><a:grpFill/></p:spPr></p:sp><p:sp><p:nvSpPr><p:cNvPr id="12" name="Explicit none"/><p:nvPr/></p:nvSpPr><p:spPr><a:noFill/></p:spPr></p:sp><p:grpSp><p:nvGrpSpPr><p:cNvPr id="13" name="Middle"/></p:nvGrpSpPr><p:grpSpPr><a:grpFill/></p:grpSpPr><p:sp><p:nvSpPr><p:cNvPr id="14" name="Two levels up"/><p:nvPr/></p:nvSpPr><p:spPr><a:grpFill/></p:spPr></p:sp></p:grpSp><p:grpSp><p:nvGrpSpPr><p:cNvPr id="15" name="Own fill"/></p:nvGrpSpPr><p:grpSpPr><a:solidFill><a:srgbClr val="FF0000"/></a:solidFill></p:grpSpPr><p:sp><p:nvSpPr><p:cNvPr id="16" name="Nearest wins"/><p:nvPr/></p:nvSpPr><p:spPr><a:grpFill/></p:spPr></p:sp></p:grpSp></p:grpSp></p:spTree></p:cSld></p:sld>"#,
+            "ppt/slides/slide1.xml",
+            &mut budget,
+        )
+        .unwrap();
+        let data = common_slide_data(&root, &[], "ppt/slides/slide1.xml", &mut budget).unwrap();
+        let ShapeNode::Group(outer) = &data.shapes[0] else {
+            panic!("expected a group");
+        };
+
+        let fill_of = |node: &ShapeNode| match node {
+            ShapeNode::Shape(shape) => shape.fill.clone(),
+            _ => panic!("expected a shape"),
+        };
+
+        // A direct child takes the group's own fill.
+        let inherited = fill_of(&outer.children[0]).expect("the child should have a fill");
+        assert_eq!(inherited.fill_type, "solid");
+        assert_eq!(
+            inherited.color.as_ref().unwrap().theme_color.as_deref(),
+            Some("accent1")
+        );
+
+        // An explicit noFill is left alone.
+        assert_eq!(fill_of(&outer.children[1]).unwrap().fill_type, "none");
+
+        // A group that inherits passes the fill down to its own children.
+        let ShapeNode::Group(middle) = &outer.children[2] else {
+            panic!("expected a nested group");
+        };
+        assert_eq!(fill_of(&middle.children[0]), Some(inherited));
+
+        // The nearest ancestor that declares a fill wins.
+        let ShapeNode::Group(own) = &outer.children[3] else {
+            panic!("expected a nested group");
+        };
+        let nearest = fill_of(&own.children[0]).expect("the child should have a fill");
+        assert_eq!(
+            nearest.color.as_ref().unwrap().rgb.as_deref(),
+            Some("FF0000")
+        );
+    }
+
+    #[test]
+    fn a_group_fill_with_no_group_to_inherit_from_is_no_fill() {
+        let limits = ParseLimits::default();
+        let mut budget = ParseBudget::new(&limits);
+        let root = parse_xml(
+            br#"<p:sld><p:cSld><p:bg><p:bgPr><a:grpFill/></p:bgPr></p:bg><p:spTree><p:sp><p:nvSpPr><p:cNvPr id="2" name="Title"/><p:nvPr><p:ph type="title"/></p:nvPr></p:nvSpPr><p:spPr><a:grpFill/></p:spPr></p:sp><p:grpSp><p:nvGrpSpPr><p:cNvPr id="3" name="Unfilled"/></p:nvGrpSpPr><p:grpSpPr><a:grpFill/></p:grpSpPr><p:pic><p:nvPicPr><p:cNvPr id="4" name="Nested"/></p:nvPicPr><p:spPr><a:grpFill/></p:spPr></p:pic></p:grpSp></p:spTree></p:cSld></p:sld>"#,
+            "ppt/slides/slide1.xml",
+            &mut budget,
+        )
+        .unwrap();
+        let data = common_slide_data(&root, &[], "ppt/slides/slide1.xml", &mut budget).unwrap();
+
+        assert_eq!(data.background, None);
+        let ShapeNode::Shape(placeholder) = &data.shapes[0] else {
+            panic!("expected a shape");
+        };
+        assert_eq!(placeholder.fill, None);
+        let ShapeNode::Group(group) = &data.shapes[1] else {
+            panic!("expected a group");
+        };
+        let ShapeNode::Picture(nested) = &group.children[0] else {
+            panic!("expected a picture");
+        };
+        assert_eq!(nested.fill, None);
+    }
+
+    #[test]
     fn parses_text_formatting_and_nested_shape_types() {
         let limits = ParseLimits::default();
         let mut budget = ParseBudget::new(&limits);
@@ -987,6 +1102,69 @@ mod tests {
                 .font_size_pt,
             Some(24.0)
         );
+    }
+
+    #[test]
+    fn reads_a_picture_source_crop_and_its_own_geometry() {
+        let limits = ParseLimits::default();
+        let mut budget = ParseBudget::new(&limits);
+        let root = parse_xml(
+            br#"<p:sld><p:cSld><p:spTree><p:pic><p:nvPicPr><p:cNvPr id="7" name="Screenshot"/><p:nvPr/></p:nvPicPr><p:blipFill><a:blip r:embed="rId2"/><a:srcRect t="251" b="16720"/></p:blipFill><p:spPr><a:xfrm><a:off x="0" y="0"/><a:ext cx="400" cy="200"/></a:xfrm><a:prstGeom prst="ellipse"><a:avLst/></a:prstGeom></p:spPr></p:pic></p:spTree></p:cSld></p:sld>"#,
+            "ppt/slides/slide1.xml",
+            &mut budget,
+        )
+        .unwrap();
+        let data = common_slide_data(&root, &[], "ppt/slides/slide1.xml", &mut budget).unwrap();
+        let ShapeNode::Picture(picture) = &data.shapes[0] else {
+            panic!("expected picture");
+        };
+        assert_eq!(picture.crop.top, 251);
+        assert_eq!(picture.crop.bottom, 16_720);
+        assert_eq!(picture.crop.left, 0);
+        assert_eq!(picture.geometry, "ellipse");
+    }
+
+    #[test]
+    fn a_picture_without_a_preset_geometry_reads_as_a_rectangle() {
+        let limits = ParseLimits::default();
+        let mut budget = ParseBudget::new(&limits);
+        let root = parse_xml(
+            br#"<p:sld><p:cSld><p:spTree><p:pic><p:nvPicPr><p:cNvPr id="8" name="Photo"/><p:nvPr/></p:nvPicPr><p:blipFill><a:blip r:embed="rId3"/></p:blipFill><p:spPr/></p:pic></p:spTree></p:cSld></p:sld>"#,
+            "ppt/slides/slide1.xml",
+            &mut budget,
+        )
+        .unwrap();
+        let data = common_slide_data(&root, &[], "ppt/slides/slide1.xml", &mut budget).unwrap();
+        let ShapeNode::Picture(picture) = &data.shapes[0] else {
+            panic!("expected picture");
+        };
+        assert_eq!(picture.crop, PictureCrop::default());
+        assert_eq!(picture.geometry, "rect");
+    }
+
+    #[test]
+    fn a_rectangular_picture_serializes_as_it_did_before_pictures_had_a_geometry() {
+        let limits = ParseLimits::default();
+        let mut budget = ParseBudget::new(&limits);
+        let root = parse_xml(
+            br#"<p:sld><p:cSld><p:spTree><p:pic><p:nvPicPr><p:cNvPr id="8" name="Photo"/><p:nvPr/></p:nvPicPr><p:blipFill><a:blip r:embed="rId3"/></p:blipFill><p:spPr><a:prstGeom prst="rect"><a:avLst/></a:prstGeom></p:spPr></p:pic><p:pic><p:nvPicPr><p:cNvPr id="9" name="Portrait"/><p:nvPr/></p:nvPicPr><p:blipFill><a:blip r:embed="rId3"/></p:blipFill><p:spPr><a:xfrm><a:off x="0" y="0"/><a:ext cx="400" cy="200"/></a:xfrm><a:prstGeom prst="roundRect"><a:avLst><a:gd name="adj" fmla="val 25000"/></a:avLst></a:prstGeom></p:spPr></p:pic></p:spTree></p:cSld></p:sld>"#,
+            "ppt/slides/slide1.xml",
+            &mut budget,
+        )
+        .unwrap();
+        let data = common_slide_data(&root, &[], "ppt/slides/slide1.xml", &mut budget).unwrap();
+        let (ShapeNode::Picture(rectangle), ShapeNode::Picture(rounded)) =
+            (&data.shapes[0], &data.shapes[1])
+        else {
+            panic!("expected two pictures");
+        };
+        let json = serde_json::to_value(rectangle).unwrap();
+        assert!(json.get("geometry").is_none());
+        assert!(json.get("adjustValues").is_none());
+        assert_eq!(serde_json::from_value::<Picture>(json).unwrap(), *rectangle);
+        let json = serde_json::to_value(rounded).unwrap();
+        assert_eq!(json["geometry"], "roundRect");
+        assert_eq!(json["adjustValues"]["adj"], 0.25);
     }
 
     #[test]

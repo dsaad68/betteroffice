@@ -42,6 +42,7 @@ export type {
   GeometryPathCommand,
   HistoryResult,
   HitTestResult,
+  ImageCrop,
   ImagePrimitive,
   Paint,
   ParagraphAlignment,
