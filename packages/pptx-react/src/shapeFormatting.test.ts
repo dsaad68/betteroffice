@@ -61,7 +61,6 @@ const shape: ShapeSnapshot = {
   rotationDeg: 0,
   flipH: false,
   flipV: false,
-  hidden: false,
   geometry: 'rect',
   adjustValues: {},
   placeholder: null,

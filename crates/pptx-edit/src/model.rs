@@ -108,7 +108,8 @@ pub struct ShapeSnapshot {
     pub rotation_deg: f64,
     pub flip_h: bool,
     pub flip_v: bool,
-    /// `p:cNvPr/@hidden`. A hidden shape is not painted and takes its subtree with it.
+    /// Hides this shape and its descendants.
+    #[serde(default, skip_serializing_if = "is_false")]
     pub hidden: bool,
     pub geometry: String,
     pub adjust_values: BTreeMap<String, f64>,
@@ -121,6 +122,10 @@ pub struct ShapeSnapshot {
     pub graphic: Option<GraphicFrameData>,
     pub text_stories: Vec<StorySnapshot>,
     pub children: Vec<ShapeSnapshot>,
+}
+
+fn is_false(value: &bool) -> bool {
+    !value
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]

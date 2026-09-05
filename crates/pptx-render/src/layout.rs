@@ -2317,6 +2317,8 @@ fn utf16_len(value: &str) -> u32 {
 
 #[cfg(test)]
 mod tests {
+    use std::collections::BTreeSet;
+
     use pptx_edit::{DeckSession, EditCtx};
     use pptx_parse::ShapeBase;
 
@@ -2327,6 +2329,10 @@ mod tests {
     const NUMBERED_FIXTURE: &[u8] =
         include_bytes!("../../pptx-parse/tests/fixtures/slide-number-fields.pptx");
     const STYLE_FIXTURE: &[u8] = include_bytes!("../../pptx-parse/tests/fixtures/shape-style.pptx");
+    const HIDDEN_FIXTURE: &[u8] =
+        include_bytes!("../../pptx-edit/tests/fixtures/hidden-shapes.pptx");
+    const V2_UPDATE: &[u8] =
+        include_bytes!("../../pptx-edit/tests/fixtures/deck-schema-v2-hidden.update.bin");
     const FONT: &[u8] = include_bytes!("../../ooxml-text/tests/fonts/LiberationSans-Regular.ttf");
     const BOLD_FONT: &[u8] =
         include_bytes!("../../../packages/fonts/assets/LiberationSans-Bold.ttf");
@@ -2977,59 +2983,131 @@ mod tests {
     }
 
     #[test]
-    fn a_hidden_slide_shape_is_not_painted() {
-        let package = pptx_parse::parse_pptx(FIXTURE).unwrap();
-        let session = DeckSession::open(FIXTURE, 8_101).unwrap();
-        let mut snapshot = session.snapshot().unwrap();
+    fn seeded_hidden_shapes_are_neither_painted_nor_hit_testable() {
+        let package = pptx_parse::parse_pptx(HIDDEN_FIXTURE).unwrap();
+        let session = DeckSession::open(HIDDEN_FIXTURE, 8_103).unwrap();
+        let snapshot = session.snapshot().unwrap();
+        let shapes = &snapshot.slides[0].shapes;
+        assert!(shapes[0].hidden);
+        assert!(shapes[8].hidden);
+        assert_eq!(shapes[8].children.len(), 14);
+        assert!(shapes[8].children[..13].iter().all(|child| !child.hidden));
+        assert!(shapes[8].children[13].hidden);
+        assert!(
+            shapes
+                .iter()
+                .enumerate()
+                .all(|(index, shape)| shape.hidden == (index == 0 || index == 8))
+        );
 
-        let before = renderer().layout_slide(&package, &snapshot, 0).unwrap();
-        let index = snapshot.slides[0]
-            .shapes
-            .iter()
-            .position(|shape| shape.children.is_empty())
-            .expect("the fixture has a leaf shape on its first slide");
-        let hidden_id = snapshot.slides[0].shapes[index].id.clone();
-        assert!(before.hit_regions.iter().any(|region| region.shape_id == hidden_id));
-
-        snapshot.slides[0].shapes[index].hidden = true;
+        let mut visible = snapshot.clone();
+        clear_hidden(&mut visible.slides[0].shapes);
+        let before = renderer().layout_slide(&package, &visible, 0).unwrap();
         let after = renderer().layout_slide(&package, &snapshot, 0).unwrap();
 
-        assert!(after.display_list.primitives.len() < before.display_list.primitives.len());
-        assert!(!after.hit_regions.iter().any(|region| region.shape_id == hidden_id));
+        let hidden_ids: BTreeSet<String> = std::iter::once("slide:0:256:shape:0".to_owned())
+            .chain((0..14).map(|child| format!("slide:0:256:shape:8.{child}")))
+            .collect();
+        let removed: BTreeSet<String> = painted_shape_ids(&before)
+            .difference(&painted_shape_ids(&after))
+            .cloned()
+            .collect();
+        assert_eq!(removed, hidden_ids);
+        assert_eq!(before.display_list.primitives.len(), 41);
+        assert_eq!(after.display_list.primitives.len(), 20);
+        let expected: Vec<Primitive> = before
+            .display_list
+            .primitives
+            .iter()
+            .filter(|primitive| {
+                !primitive_shape_id(primitive).is_some_and(|id| hidden_ids.contains(id))
+            })
+            .cloned()
+            .collect();
+        assert_eq!(after.display_list.primitives, expected);
+
+        assert_eq!(
+            before.hit_test(12.0, 200.0),
+            Some(HitTestResult::Shape {
+                shape_id: "slide:0:256:shape:0".to_owned()
+            })
+        );
+        assert_eq!(after.hit_test(12.0, 200.0), None);
+        let child = match before.hit_test(760.0, 100.0) {
+            Some(HitTestResult::Shape { shape_id } | HitTestResult::Text { shape_id, .. }) => {
+                shape_id
+            }
+            None => panic!("a child of the visible group is painted"),
+        };
+        assert!(child.starts_with("slide:0:256:shape:8."));
+        assert_eq!(after.hit_test(760.0, 100.0), None);
     }
 
     #[test]
-    fn a_hidden_group_takes_its_children_with_it() {
-        let package = pptx_parse::parse_pptx(FIXTURE).unwrap();
-        let session = DeckSession::open(FIXTURE, 8_102).unwrap();
-        let mut snapshot = session.snapshot().unwrap();
+    fn a_v2_deck_renders_its_hidden_shapes_hidden_after_migration() {
+        let fresh = DeckSession::open(HIDDEN_FIXTURE, 8_104).unwrap();
+        let mut visible = fresh.snapshot().unwrap();
+        let expected = renderer()
+            .layout_slide(fresh.package(), &visible, 0)
+            .unwrap();
+        clear_hidden(&mut visible.slides[1].shapes);
+        let painted_when_visible = painted_shape_ids(
+            &renderer()
+                .layout_slide(fresh.package(), &visible, 1)
+                .unwrap(),
+        );
+        assert!(painted_when_visible.contains("slide:1:257:shape:16"));
 
-        let group = snapshot
-            .slides
-            .iter()
-            .enumerate()
-            .find_map(|(slide, snap)| {
-                snap.shapes
-                    .iter()
-                    .position(|shape| !shape.children.is_empty())
-                    .map(|index| (slide, index))
-            });
-        let (slide, index) = group.expect("the fixture has a grouped shape");
-        let child_ids: Vec<String> = snapshot.slides[slide].shapes[index]
-            .children
-            .iter()
-            .map(|child| child.id.clone())
-            .collect();
+        let session = DeckSession::open_from_update(V2_UPDATE, 8_105).unwrap();
+        let snapshot = session.snapshot().unwrap();
+        let slide = |id: &str| {
+            snapshot
+                .slides
+                .iter()
+                .position(|slide| slide.id == id)
+                .unwrap()
+        };
+        let migrated = renderer()
+            .layout_slide(session.package(), &snapshot, slide("slide:0:256"))
+            .unwrap();
+        assert_eq!(migrated.display_list, expected.display_list);
+        assert_eq!(migrated.hit_test(12.0, 200.0), None);
+        assert_eq!(migrated.hit_test(760.0, 100.0), None);
 
-        snapshot.slides[slide].shapes[index].hidden = true;
-        let after = renderer().layout_slide(&package, &snapshot, slide).unwrap();
+        let painted = painted_shape_ids(
+            &renderer()
+                .layout_slide(session.package(), &snapshot, slide("slide:1:257"))
+                .unwrap(),
+        );
+        assert!(!painted.contains("slide:1:257:shape:16"));
+        assert!(painted.contains("shape:4343:0"));
+    }
 
-        for child in &child_ids {
-            assert!(
-                !after.hit_regions.iter().any(|region| &region.shape_id == child),
-                "child {child} of a hidden group was still drawn"
-            );
+    fn clear_hidden(shapes: &mut [ShapeSnapshot]) {
+        for shape in shapes {
+            shape.hidden = false;
+            clear_hidden(&mut shape.children);
         }
+    }
+
+    fn primitive_shape_id(primitive: &Primitive) -> Option<&str> {
+        match primitive {
+            Primitive::Shape { shape_id, .. }
+            | Primitive::Image { shape_id, .. }
+            | Primitive::TextBox { shape_id, .. }
+            | Primitive::Placeholder { shape_id, .. }
+            | Primitive::Chart { shape_id, .. } => shape_id.as_deref(),
+        }
+    }
+
+    fn painted_shape_ids(slide: &RenderedSlide) -> BTreeSet<String> {
+        slide
+            .display_list
+            .primitives
+            .iter()
+            .filter_map(primitive_shape_id)
+            .map(str::to_owned)
+            .collect()
     }
 
     #[test]

@@ -75,8 +75,8 @@ export interface ShapeSnapshot {
   rotationDeg: number;
   flipH: boolean;
   flipV: boolean;
-  /** `p:cNvPr/@hidden`: the shape is not painted and takes its subtree with it. */
-  hidden: boolean;
+  /** Hides this shape and its descendants; omitted when false. */
+  hidden?: boolean;
   geometry: string;
   adjustValues: Record<string, number>;
   placeholder: unknown | null;
