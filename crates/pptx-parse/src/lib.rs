@@ -17,7 +17,7 @@ pub use comments::{
 };
 pub use error::PptxError;
 pub use model::*;
-pub use package::{parse_pptx, parse_pptx_with_limits, write_pptx};
+pub use package::{parse_pptx, parse_pptx_with_limits, parse_pptx_without_connectors, write_pptx};
 pub use relationships::{Relationship, TargetMode, relationship_types};
 pub use write::{
     DeckWrite, InheritedTransform, ParagraphWrite, RunWrite, ShapeAdd, ShapePatch, ShapeWrite,

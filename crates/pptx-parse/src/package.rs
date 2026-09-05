@@ -19,6 +19,23 @@ pub fn parse_pptx(data: &[u8]) -> Result<PptxPackage, PptxError> {
 }
 
 pub fn parse_pptx_with_limits(data: &[u8], limits: &ParseLimits) -> Result<PptxPackage, PptxError> {
+    parse_package(data, limits, ShapeElements::WithConnectors)
+}
+
+/// Preserves pre-connector source ordinals.
+pub fn parse_pptx_without_connectors(data: &[u8]) -> Result<PptxPackage, PptxError> {
+    parse_package(
+        data,
+        &ParseLimits::default(),
+        ShapeElements::WithoutConnectors,
+    )
+}
+
+fn parse_package(
+    data: &[u8],
+    limits: &ParseLimits,
+    shape_elements: ShapeElements,
+) -> Result<PptxPackage, PptxError> {
     let source_parts = ooxml_opc::unzip_parts(data).map_err(PptxError::Container)?;
     let parts: HashMap<&str, &[u8]> = source_parts
         .iter()
@@ -46,6 +63,7 @@ pub fn parse_pptx_with_limits(data: &[u8], limits: &ParseLimits) -> Result<PptxP
         presentation_relationships,
     )?;
 
+    let mut has_connectors = false;
     let mut slides = Vec::with_capacity(presentation.slides.len());
     for reference in &presentation.slides {
         let root = parse_part(&parts, &reference.part_path, &mut budget)?;
@@ -53,11 +71,13 @@ pub fn parse_pptx_with_limits(data: &[u8], limits: &ParseLimits) -> Result<PptxP
             .get(&reference.part_path)
             .map(Vec::as_slice)
             .unwrap_or_default();
+        has_connectors |= !root.descendants_named("cxnSp").is_empty();
         let data = common_slide_data(
             &root,
             slide_relationships,
             &reference.part_path,
             &mut budget,
+            shape_elements,
         )?;
         slides.push(Slide {
             part_path: reference.part_path.clone(),
@@ -84,7 +104,14 @@ pub fn parse_pptx_with_limits(data: &[u8], limits: &ParseLimits) -> Result<PptxP
             .get(part_path)
             .map(Vec::as_slice)
             .unwrap_or_default();
-        let data = common_slide_data(&root, master_relationships, part_path, &mut budget)?;
+        has_connectors |= !root.descendants_named("cxnSp").is_empty();
+        let data = common_slide_data(
+            &root,
+            master_relationships,
+            part_path,
+            &mut budget,
+            shape_elements,
+        )?;
         masters.push(SlideMaster {
             part_path: part_path.clone(),
             name: data.name,
@@ -115,7 +142,14 @@ pub fn parse_pptx_with_limits(data: &[u8], limits: &ParseLimits) -> Result<PptxP
             .get(part_path)
             .map(Vec::as_slice)
             .unwrap_or_default();
-        let data = common_slide_data(&root, layout_relationships, part_path, &mut budget)?;
+        has_connectors |= !root.descendants_named("cxnSp").is_empty();
+        let data = common_slide_data(
+            &root,
+            layout_relationships,
+            part_path,
+            &mut budget,
+            shape_elements,
+        )?;
         layouts.push(SlideLayout {
             part_path: part_path.clone(),
             name: root
@@ -197,6 +231,11 @@ pub fn parse_pptx_with_limits(data: &[u8], limits: &ParseLimits) -> Result<PptxP
         comment_flavor: deck_comments.flavor,
         relationships,
         parts,
+        shape_elements: if has_connectors {
+            shape_elements
+        } else {
+            ShapeElements::WithoutConnectors
+        },
     })
 }
 

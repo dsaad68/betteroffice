@@ -11,6 +11,26 @@ pub use ooxml_drawingml::chart::{
     ChartPointLabel, ChartSeries, ChartSpace, ChartTextProperties,
 };
 
+/// Shape elements counted by source ordinals.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) enum ShapeElements {
+    WithConnectors,
+    #[default]
+    WithoutConnectors,
+}
+
+impl ShapeElements {
+    fn is_legacy(&self) -> bool {
+        *self == Self::WithoutConnectors
+    }
+
+    pub(crate) fn contains(self, local: &str) -> bool {
+        matches!(local, "sp" | "pic" | "graphicFrame" | "grpSp")
+            || (self == Self::WithConnectors && local == "cxnSp")
+    }
+}
+
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct PptxPackage {
@@ -32,6 +52,8 @@ pub struct PptxPackage {
     pub relationships: BTreeMap<String, Vec<Relationship>>,
     #[serde(skip)]
     pub(crate) parts: Vec<PackagePart>,
+    #[serde(default, skip_serializing_if = "ShapeElements::is_legacy")]
+    pub(crate) shape_elements: ShapeElements,
 }
 
 impl PptxPackage {
@@ -46,6 +68,11 @@ impl PptxPackage {
     /// the parsed model but not the raw part bytes.
     pub fn has_parts(&self) -> bool {
         !self.parts.is_empty()
+    }
+
+    /// Whether source ordinals include connectors.
+    pub fn models_connectors(&self) -> bool {
+        self.shape_elements == ShapeElements::WithConnectors
     }
 
     pub fn replace_part(&mut self, path: &str, bytes: Vec<u8>) -> bool {
@@ -206,11 +233,23 @@ pub struct Shape {
     #[serde(flatten)]
     pub base: ShapeBase,
     pub geometry: String,
+    /// `p:style` text defaults.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub style: Option<Box<ShapeStyle>>,
     #[serde(default)]
     pub adjust_values: BTreeMap<String, f64>,
     pub fill: Option<ShapeFill>,
     pub outline: Option<ShapeOutline>,
     pub text: Option<TextBody>,
+}
+
+/// Shape text defaults.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ShapeStyle {
+    /// `a:fontRef` colour.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub font_color: Option<ColorValue>,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -221,8 +260,21 @@ pub struct Picture {
     pub relationship_id: Option<String>,
     pub media_part_path: Option<String>,
     pub crop: PictureCrop,
+    /// Preset mask; defaults to the frame rectangle.
+    #[serde(default = "rect_geometry", skip_serializing_if = "is_rect")]
+    pub geometry: String,
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub adjust_values: BTreeMap<String, f64>,
     pub fill: Option<ShapeFill>,
     pub outline: Option<ShapeOutline>,
+}
+
+fn rect_geometry() -> String {
+    "rect".to_owned()
+}
+
+fn is_rect(geometry: &str) -> bool {
+    geometry == "rect"
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]

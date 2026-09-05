@@ -711,7 +711,7 @@ pub(crate) fn fingerprint_from_doc(doc: &Doc) -> EditResult<String> {
         .ok_or_else(|| EditError::InvalidState("missing fingerprint".to_owned()))
 }
 
-/// Migrates a hydrated document to the current schema.
+/// Upgrades metadata while preserving legacy source ordinals.
 pub(crate) fn migrate_doc(doc: &Doc) -> EditResult<()> {
     let package = {
         let txn = doc.transact();
