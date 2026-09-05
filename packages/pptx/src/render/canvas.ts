@@ -9,6 +9,7 @@ import type {
   SlideDisplayList,
   SlidePrimitive,
   Stroke,
+  StrokeEnd,
   TextBoxPrimitive,
 } from '../types';
 
@@ -135,43 +136,81 @@ function pathPoints(shape: ShapePrimitive): Array<[number, number]> {
   return points;
 }
 
+const LINE_END_KINDS = new Set(['triangle', 'stealth', 'arrow', 'diamond', 'oval']);
+
 function paintLineEnds(ctx: CanvasRenderingContext2D, shape: ShapePrimitive): void {
   const stroke = shape.stroke;
   if (!stroke || (!stroke.headEnd && !stroke.tailEnd)) return;
   const points = pathPoints(shape);
   if (points.length < 2) return;
-  const width = Math.max(0.5, stroke.width);
-  const ends: Array<[string | undefined, [number, number], [number, number]]> = [
+  const ends: Array<[StrokeEnd | undefined, [number, number], [number, number]]> = [
     [stroke.headEnd, points[1], points[0]],
     [stroke.tailEnd, points[points.length - 2], points[points.length - 1]],
   ];
   ctx.save();
   ctx.setLineDash([]);
   ctx.fillStyle = stroke.color;
-  for (const [kind, from, tip] of ends) {
-    if (!kind) continue;
+  ctx.strokeStyle = stroke.color;
+  ctx.lineWidth = stroke.width;
+  ctx.lineJoin = 'miter';
+  for (const [end, from, tip] of ends) {
+    if (!end || !LINE_END_KINDS.has(end.kind)) continue;
     const [dx, dy] = [tip[0] - from[0], tip[1] - from[1]];
-    const length = Math.hypot(dx, dy);
-    if (length < 1e-6) continue;
-    const [ux, uy] = [dx / length, dy / length];
-    ctx.beginPath();
-    if (kind === 'oval') {
-      ctx.arc(tip[0], tip[1], width * 1.5, 0, Math.PI * 2);
-    } else if (kind === 'triangle' || kind === 'arrow' || kind === 'stealth' || kind === 'diamond') {
-      const reach = width * 3;
-      const half = width * 1.5;
-      const [bx, by] = [tip[0] - ux * reach, tip[1] - uy * reach];
-      ctx.moveTo(tip[0], tip[1]);
-      ctx.lineTo(bx - uy * half, by + ux * half);
-      if (kind === 'diamond') ctx.lineTo(tip[0] - ux * reach * 2, tip[1] - uy * reach * 2);
-      ctx.lineTo(bx + uy * half, by - ux * half);
-      ctx.closePath();
-    } else {
-      continue;
-    }
-    ctx.fill();
+    const distance = Math.hypot(dx, dy);
+    if (distance < 1e-6) continue;
+    paintLineEnd(ctx, end, tip, dx / distance, dy / distance);
   }
   ctx.restore();
+}
+
+function paintLineEnd(
+  ctx: CanvasRenderingContext2D,
+  end: StrokeEnd,
+  [tx, ty]: [number, number],
+  ux: number,
+  uy: number
+): void {
+  const half = end.width / 2;
+  const [nx, ny] = [-uy * half, ux * half];
+  const [bx, by] = [tx - ux * end.length, ty - uy * end.length];
+  ctx.beginPath();
+  switch (end.kind) {
+    case 'triangle':
+      ctx.moveTo(tx, ty);
+      ctx.lineTo(bx + nx, by + ny);
+      ctx.lineTo(bx - nx, by - ny);
+      ctx.closePath();
+      ctx.fill();
+      break;
+    case 'stealth':
+      ctx.moveTo(tx, ty);
+      ctx.lineTo(bx + nx, by + ny);
+      ctx.lineTo(tx - ux * end.length * 0.6, ty - uy * end.length * 0.6);
+      ctx.lineTo(bx - nx, by - ny);
+      ctx.closePath();
+      ctx.fill();
+      break;
+    case 'arrow':
+      ctx.moveTo(bx + nx, by + ny);
+      ctx.lineTo(tx, ty);
+      ctx.lineTo(bx - nx, by - ny);
+      ctx.stroke();
+      break;
+    case 'diamond': {
+      const [ax, ay] = [(ux * end.length) / 2, (uy * end.length) / 2];
+      ctx.moveTo(tx + ax, ty + ay);
+      ctx.lineTo(tx + nx, ty + ny);
+      ctx.lineTo(tx - ax, ty - ay);
+      ctx.lineTo(tx - nx, ty - ny);
+      ctx.closePath();
+      ctx.fill();
+      break;
+    }
+    case 'oval':
+      ctx.ellipse(tx, ty, end.length / 2, half, Math.atan2(uy, ux), 0, Math.PI * 2);
+      ctx.fill();
+      break;
+  }
 }
 
 function buildPath(

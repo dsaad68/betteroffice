@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'bun:test';
-import type { SlideDisplayList } from '../types';
+import type { ShapePrimitive, SlideDisplayList } from '../types';
 import { paintSlide } from './canvas';
 
 describe('PPTX canvas replay', () => {
@@ -299,6 +299,185 @@ describe('PPTX canvas replay', () => {
     expect(calls).toEqual([
       { text: 'one ', x: 40 },
       { text: 'two', x: 100 },
+    ]);
+  });
+});
+
+type Call = [string, ...number[]];
+
+function recordingContext(calls: Call[]): CanvasRenderingContext2D {
+  const round = (value: number): number => Math.round(value * 1e6) / 1e6 || 0;
+  const target: Record<string, unknown> = {};
+  for (const name of ['beginPath', 'moveTo', 'lineTo', 'closePath', 'fill', 'stroke', 'ellipse', 'rotate']) {
+    target[name] = (...args: unknown[]) =>
+      calls.push([name, ...args.filter((arg): arg is number => typeof arg === 'number').map(round)]);
+  }
+  return new Proxy(target, {
+    get(record, property) {
+      if (property in record) return record[property as string];
+      return () => undefined;
+    },
+    set(record, property, value) {
+      record[property as string] = value;
+      return true;
+    },
+  }) as unknown as CanvasRenderingContext2D;
+}
+
+async function paintLine(
+  line: Pick<ShapePrimitive, 'x' | 'y' | 'w' | 'h' | 'path' | 'stroke' | 'transform'>
+): Promise<Call[]> {
+  const calls: Call[] = [];
+  const list: SlideDisplayList = {
+    contractVersion: 1,
+    width: 640,
+    height: 720,
+    primitives: [{ kind: 'shape', objectId: 1, shapeId: 'shape:1', name: 'Line', geometry: 'line', ...line }],
+  };
+  await paintSlide(recordingContext(calls), list, 1);
+  return calls;
+}
+
+function afterPathStroke(calls: Call[]): Call[] {
+  return calls.slice(calls.findIndex(([name]) => name === 'stroke') + 1);
+}
+
+describe('PPTX canvas line ends', () => {
+  const straight = {
+    x: 10,
+    y: 50,
+    w: 100,
+    h: 0,
+    path: [
+      { type: 'move' as const, x: 0, y: 0 },
+      { type: 'line' as const, x: 1, y: 0 },
+    ],
+  };
+
+  test('draws each kind at the head, sized by the end width and length', async () => {
+    const marks: Record<string, Call[]> = {
+      triangle: [
+        ['beginPath'],
+        ['moveTo', 10, 50],
+        ['lineTo', 19, 47],
+        ['lineTo', 19, 53],
+        ['closePath'],
+        ['fill'],
+      ],
+      stealth: [
+        ['beginPath'],
+        ['moveTo', 10, 50],
+        ['lineTo', 19, 47],
+        ['lineTo', 15.4, 50],
+        ['lineTo', 19, 53],
+        ['closePath'],
+        ['fill'],
+      ],
+      arrow: [['beginPath'], ['moveTo', 19, 47], ['lineTo', 10, 50], ['lineTo', 19, 53], ['stroke']],
+      diamond: [
+        ['beginPath'],
+        ['moveTo', 5.5, 50],
+        ['lineTo', 10, 47],
+        ['lineTo', 14.5, 50],
+        ['lineTo', 10, 53],
+        ['closePath'],
+        ['fill'],
+      ],
+      oval: [['beginPath'], ['ellipse', 10, 50, 4.5, 3, 3.141593, 0, 6.283185], ['fill']],
+    };
+    for (const [kind, expected] of Object.entries(marks)) {
+      const calls = await paintLine({
+        ...straight,
+        stroke: { color: '#ff0000', width: 2, headEnd: { kind, width: 6, length: 9 } },
+      });
+      expect(afterPathStroke(calls)).toEqual(expected);
+    }
+  });
+
+  test('paints nothing for missing or unknown ends', async () => {
+    const plain = await paintLine({ ...straight, stroke: { color: '#ff0000', width: 2 } });
+    expect(afterPathStroke(plain)).toEqual([]);
+    const unknown = await paintLine({
+      ...straight,
+      stroke: {
+        color: '#ff0000',
+        width: 2,
+        headEnd: { kind: 'squiggle', width: 6, length: 9 },
+        tailEnd: { kind: 'none', width: 6, length: 9 },
+      },
+    });
+    expect(afterPathStroke(unknown)).toEqual([]);
+  });
+
+  test('orients both ends along a rotated diagonal line in its own frame', async () => {
+    const calls = await paintLine({
+      x: 0,
+      y: 0,
+      w: 30,
+      h: 40,
+      path: [
+        { type: 'move', x: 0, y: 0 },
+        { type: 'line', x: 1, y: 1 },
+      ],
+      transform: { rotationDeg: 30 },
+      stroke: {
+        color: '#ff0000',
+        width: 2,
+        headEnd: { kind: 'triangle', width: 10, length: 5 },
+        tailEnd: { kind: 'triangle', width: 10, length: 5 },
+      },
+    });
+    const rotation = calls.findIndex(([name]) => name === 'rotate');
+    expect(calls[rotation]).toEqual(['rotate', 0.523599]);
+    expect(rotation).toBeLessThan(calls.findIndex(([name]) => name === 'moveTo'));
+    expect(afterPathStroke(calls)).toEqual([
+      ['beginPath'],
+      ['moveTo', 0, 0],
+      ['lineTo', 7, 1],
+      ['lineTo', -1, 7],
+      ['closePath'],
+      ['fill'],
+      ['beginPath'],
+      ['moveTo', 30, 40],
+      ['lineTo', 23, 39],
+      ['lineTo', 31, 33],
+      ['closePath'],
+      ['fill'],
+    ]);
+  });
+
+  test('follows the first and last segments of a bent connector', async () => {
+    const calls = await paintLine({
+      x: 80,
+      y: 480,
+      w: 320,
+      h: 160,
+      path: [
+        { type: 'move', x: 0, y: 0 },
+        { type: 'line', x: 0.5, y: 0 },
+        { type: 'line', x: 0.5, y: 1 },
+        { type: 'line', x: 1, y: 1 },
+      ],
+      stroke: {
+        color: '#ff0000',
+        width: 2,
+        headEnd: { kind: 'triangle', width: 8, length: 12 },
+        tailEnd: { kind: 'triangle', width: 8, length: 12 },
+      },
+    });
+    expect(afterPathStroke(calls)).toEqual([
+      ['beginPath'],
+      ['moveTo', 80, 480],
+      ['lineTo', 92, 476],
+      ['lineTo', 92, 484],
+      ['closePath'],
+      ['fill'],
+      ['beginPath'],
+      ['moveTo', 400, 640],
+      ['lineTo', 388, 644],
+      ['lineTo', 388, 636],
+      ['closePath'],
+      ['fill'],
     ]);
   });
 });

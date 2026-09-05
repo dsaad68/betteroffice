@@ -57,9 +57,18 @@ pub struct Stroke {
     #[serde(default, skip_serializing_if = "is_false")]
     pub dashed: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub head_end: Option<String>,
+    pub head_end: Option<StrokeEnd>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub tail_end: Option<String>,
+    pub tail_end: Option<StrokeEnd>,
+}
+
+/// Line end mark in CSS px: `width` across the line, `length` along it.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct StrokeEnd {
+    pub kind: String,
+    pub width: f32,
+    pub length: f32,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Default, Serialize, Deserialize)]

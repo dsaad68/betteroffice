@@ -211,12 +211,18 @@ export type Paint =
       stops: Array<{ position: number; color: string }>;
     };
 
+export interface StrokeEnd {
+  kind: string;
+  width: number;
+  length: number;
+}
+
 export interface Stroke {
   color: string;
   width: number;
   dashed?: boolean;
-  headEnd?: string;
-  tailEnd?: string;
+  headEnd?: StrokeEnd;
+  tailEnd?: StrokeEnd;
 }
 
 export interface PrimitiveTransform {

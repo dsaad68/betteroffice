@@ -17,11 +17,12 @@ use thiserror::Error;
 use crate::chart::{ChartFrame, ChartText, chart_primitive};
 use crate::{
     CONTRACT_VERSION, CaretStop, GradientStop, GradientType, Paint, PositionedGlyph,
-    PositionedTextLine, PositionedTextRun, Primitive, Stroke, SurfaceDisplayList, TextAlign,
-    TextAnchor, TextParagraph, TextRun, Transform,
+    PositionedTextLine, PositionedTextRun, Primitive, Stroke, StrokeEnd, SurfaceDisplayList,
+    TextAlign, TextAnchor, TextParagraph, TextRun, Transform,
 };
 
 const EMU_PER_CSS_PIXEL: f32 = 9_525.0;
+const LINE_END_MIN_BASE_PX: f32 = 0.7 / 25.4 * 96.0;
 const DEFAULT_INSET_HORIZONTAL_EMU: i64 = 91_440;
 const DEFAULT_INSET_VERTICAL_EMU: i64 = 45_720;
 const DEFAULT_FONT_SIZE_PT: f32 = 18.0;
@@ -2009,27 +2010,43 @@ fn paint(fill: &ShapeFill, theme: &Theme) -> Option<Paint> {
         .map(|color| Paint::Solid { color })
 }
 
-fn line_end(end: Option<&LineEnd>) -> Option<String> {
-    end.map(|end| end.end_type.as_str())
-        .filter(|kind| *kind != "none")
-        .map(str::to_owned)
+/// Ends scale with the line width (ECMA-376 §20.1.10.32/34); Office keeps
+/// the base at 0.7 mm or more so hairline arrows stay visible.
+fn line_end(end: Option<&LineEnd>, stroke_width: f32) -> Option<StrokeEnd> {
+    let end = end.filter(|end| end.end_type != "none")?;
+    let base = stroke_width.max(LINE_END_MIN_BASE_PX);
+    Some(StrokeEnd {
+        kind: end.end_type.clone(),
+        width: base * line_end_scale(end.width.as_deref()),
+        length: base * line_end_scale(end.length.as_deref()),
+    })
+}
+
+/// `sm`/`med`/`lg` as Office draws them: 2, 3 and 5 line widths.
+fn line_end_scale(size: Option<&str>) -> f32 {
+    match size {
+        Some("sm") => 2.0,
+        Some("lg") => 5.0,
+        _ => 3.0,
+    }
 }
 
 fn stroke(outline: &ShapeOutline, theme: &Theme) -> Option<Stroke> {
     let color = resolve_color_value_to_hex_with_theme(outline.color.as_ref(), Some(theme))?;
+    let width = outline
+        .width
+        .filter(|width| width.is_finite() && *width >= 0.0)
+        .map(|width| width as f32 / EMU_PER_CSS_PIXEL)
+        .unwrap_or(1.0);
     Some(Stroke {
         color,
-        width: outline
-            .width
-            .filter(|width| width.is_finite() && *width >= 0.0)
-            .map(|width| width as f32 / EMU_PER_CSS_PIXEL)
-            .unwrap_or(1.0),
+        width,
         dashed: outline
             .style
             .as_deref()
             .is_some_and(|style| style != "solid"),
-        head_end: line_end(outline.head_end.as_ref()),
-        tail_end: line_end(outline.tail_end.as_ref()),
+        head_end: line_end(outline.head_end.as_ref(), width),
+        tail_end: line_end(outline.tail_end.as_ref(), width),
     })
 }
 
@@ -2823,5 +2840,102 @@ mod tests {
             (resolved.x, resolved.y, resolved.width, resolved.height),
             (100, 200, 300, 400)
         );
+    }
+
+    fn end(kind: &str, width: Option<&str>, length: Option<&str>) -> LineEnd {
+        LineEnd {
+            end_type: kind.to_owned(),
+            width: width.map(str::to_owned),
+            length: length.map(str::to_owned),
+        }
+    }
+
+    fn red_outline(width_emu: f64) -> ShapeOutline {
+        ShapeOutline {
+            width: Some(width_emu),
+            color: Some(ooxml_drawingml::ColorValue {
+                rgb: Some("FF0000".to_owned()),
+                ..Default::default()
+            }),
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn line_ends_carry_their_kind_and_office_sizes() {
+        let package = pptx_parse::parse_pptx(FIXTURE).unwrap();
+        let session = DeckSession::open(FIXTURE, 8_005).unwrap();
+        let mut snapshot = session.snapshot().unwrap();
+        let shape = snapshot.slides[0]
+            .shapes
+            .iter_mut()
+            .find(|shape| shape.kind == ShapeKind::Shape)
+            .unwrap();
+        let shape_id = shape.id.clone();
+        shape.outline = Some(ShapeOutline {
+            head_end: Some(end("triangle", Some("lg"), Some("sm"))),
+            tail_end: Some(end("stealth", None, None)),
+            ..red_outline(38_100.0)
+        });
+        let rendered = renderer().layout_slide(&package, &snapshot, 0).unwrap();
+        let stroke = rendered
+            .display_list
+            .primitives
+            .iter()
+            .find_map(|primitive| match primitive {
+                Primitive::Shape {
+                    shape_id: Some(id),
+                    stroke,
+                    ..
+                } if id == &shape_id => stroke.clone(),
+                _ => None,
+            })
+            .unwrap();
+        assert_eq!(stroke.width, 4.0);
+        assert_eq!(
+            stroke.head_end,
+            Some(StrokeEnd {
+                kind: "triangle".to_owned(),
+                width: 20.0,
+                length: 8.0,
+            })
+        );
+        assert_eq!(
+            stroke.tail_end,
+            Some(StrokeEnd {
+                kind: "stealth".to_owned(),
+                width: 12.0,
+                length: 12.0,
+            })
+        );
+        let json = serde_json::to_string(&rendered.display_list).unwrap();
+        assert!(json.contains(r#""headEnd":{"kind":"triangle","width":20.0,"length":8.0}"#));
+        assert!(json.contains(r#""tailEnd":{"kind":"stealth","width":12.0,"length":12.0}"#));
+    }
+
+    #[test]
+    fn strokes_without_ends_serialise_as_before() {
+        let theme = Theme::default();
+        let plain = stroke(&red_outline(9_525.0), &theme).unwrap();
+        let none = stroke(
+            &ShapeOutline {
+                head_end: Some(end("none", Some("lg"), None)),
+                tail_end: Some(end("none", None, None)),
+                ..red_outline(9_525.0)
+            },
+            &theme,
+        )
+        .unwrap();
+        let expected = format!(r#"{{"color":"{}","width":1.0}}"#, plain.color);
+        assert_eq!(serde_json::to_string(&plain).unwrap(), expected);
+        assert_eq!(serde_json::to_string(&none).unwrap(), expected);
+    }
+
+    #[test]
+    fn thin_lines_keep_a_visible_end() {
+        let end = line_end(Some(&end("oval", Some("sm"), Some("lg"))), 1.0).unwrap();
+        assert!((end.width - 2.0 * LINE_END_MIN_BASE_PX).abs() < 1e-6);
+        assert!((end.length - 5.0 * LINE_END_MIN_BASE_PX).abs() < 1e-6);
+        assert!(end.width > 5.0);
     }
 }
