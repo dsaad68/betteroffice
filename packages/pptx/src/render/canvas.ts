@@ -131,9 +131,17 @@ function pathPoints(shape: ShapePrimitive): Array<[number, number]> {
   const points: Array<[number, number]> = [];
   for (const command of shape.path) {
     if (command.type === 'close') continue;
+    if (command.type === 'quad') {
+      points.push([shape.x + command.cpx * shape.w, shape.y + command.cpy * shape.h]);
+    } else if (command.type === 'cubic') {
+      points.push([shape.x + command.cp1x * shape.w, shape.y + command.cp1y * shape.h]);
+      points.push([shape.x + command.cp2x * shape.w, shape.y + command.cp2y * shape.h]);
+    }
     points.push([shape.x + command.x * shape.w, shape.y + command.y * shape.h]);
   }
-  return points;
+  return points.filter(
+    (point, index) => index === 0 || point[0] !== points[index - 1][0] || point[1] !== points[index - 1][1]
+  );
 }
 
 const LINE_END_KINDS = new Set(['triangle', 'stealth', 'arrow', 'diamond', 'oval']);

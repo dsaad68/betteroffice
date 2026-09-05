@@ -62,7 +62,7 @@ pub struct Stroke {
     pub tail_end: Option<StrokeEnd>,
 }
 
-/// Line end mark in CSS px: `width` across the line, `length` along it.
+/// End dimensions in CSS pixels.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct StrokeEnd {

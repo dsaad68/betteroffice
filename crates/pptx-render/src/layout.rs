@@ -114,6 +114,18 @@ impl SlideRenderer {
         Ok(id.to_u32())
     }
 
+    /// The store holding every registered face, so a raster backend can resolve
+    /// the `font_id`s the display list references.
+    pub fn fonts(&self) -> &FontStore {
+        &self.fonts
+    }
+
+    /// The first face registered, which text falls back to when no family
+    /// matches.
+    pub fn fallback_font(&self) -> Option<FontId> {
+        self.fallback.as_ref().map(|face| face.id)
+    }
+
     pub fn layout_slide(
         &self,
         package: &PptxPackage,
@@ -2010,8 +2022,6 @@ fn paint(fill: &ShapeFill, theme: &Theme) -> Option<Paint> {
         .map(|color| Paint::Solid { color })
 }
 
-/// Ends scale with the line width (ECMA-376 §20.1.10.32/34); Office keeps
-/// the base at 0.7 mm or more so hairline arrows stay visible.
 fn line_end(end: Option<&LineEnd>, stroke_width: f32) -> Option<StrokeEnd> {
     let end = end.filter(|end| end.end_type != "none")?;
     let base = stroke_width.max(LINE_END_MIN_BASE_PX);
@@ -2022,7 +2032,6 @@ fn line_end(end: Option<&LineEnd>, stroke_width: f32) -> Option<StrokeEnd> {
     })
 }
 
-/// `sm`/`med`/`lg` as Office draws them: 2, 3 and 5 line widths.
 fn line_end_scale(size: Option<&str>) -> f32 {
     match size {
         Some("sm") => 2.0,
@@ -2862,55 +2871,67 @@ mod tests {
     }
 
     #[test]
-    fn line_ends_carry_their_kind_and_office_sizes() {
-        let package = pptx_parse::parse_pptx(FIXTURE).unwrap();
-        let session = DeckSession::open(FIXTURE, 8_005).unwrap();
-        let mut snapshot = session.snapshot().unwrap();
-        let shape = snapshot.slides[0]
-            .shapes
-            .iter_mut()
-            .find(|shape| shape.kind == ShapeKind::Shape)
-            .unwrap();
-        let shape_id = shape.id.clone();
-        shape.outline = Some(ShapeOutline {
-            head_end: Some(end("triangle", Some("lg"), Some("sm"))),
-            tail_end: Some(end("stealth", None, None)),
-            ..red_outline(38_100.0)
-        });
+    fn line_ends_carry_their_kind_and_sizes_from_ooxml() {
+        let bytes = include_bytes!("../tests/fixtures/line-ends.pptx");
+        let package = pptx_parse::parse_pptx(bytes).unwrap();
+        let session = DeckSession::open(bytes, 8_005).unwrap();
+        let snapshot = session.snapshot().unwrap();
         let rendered = renderer().layout_slide(&package, &snapshot, 0).unwrap();
-        let stroke = rendered
+        let strokes: BTreeMap<_, _> = rendered
             .display_list
             .primitives
             .iter()
-            .find_map(|primitive| match primitive {
+            .filter_map(|primitive| match primitive {
                 Primitive::Shape {
-                    shape_id: Some(id),
-                    stroke,
+                    name,
+                    stroke: Some(stroke),
                     ..
-                } if id == &shape_id => stroke.clone(),
+                } => Some((name.as_str(), stroke)),
                 _ => None,
             })
-            .unwrap();
-        assert_eq!(stroke.width, 4.0);
+            .collect();
+        for kind in ["triangle", "arrow", "stealth", "diamond", "oval"] {
+            for (size, width, length) in [
+                ("sm-lg", 8.0, 20.0),
+                ("med-sm", 12.0, 8.0),
+                ("lg-med", 20.0, 12.0),
+            ] {
+                let name = format!("{kind}-{size}");
+                let stroke = strokes[name.as_str()];
+                assert_eq!(stroke.color, "#315EFB");
+                assert_eq!(stroke.width, 4.0);
+                assert_eq!(
+                    stroke.head_end,
+                    Some(StrokeEnd {
+                        kind: kind.to_owned(),
+                        width,
+                        length,
+                    }),
+                    "{name} head"
+                );
+                assert_eq!(
+                    stroke.tail_end,
+                    Some(StrokeEnd {
+                        kind: kind.to_owned(),
+                        width: length,
+                        length: width,
+                    }),
+                    "{name} tail"
+                );
+            }
+        }
+        let defaults = serde_json::to_string(strokes["default-medium"]).unwrap();
         assert_eq!(
-            stroke.head_end,
-            Some(StrokeEnd {
-                kind: "triangle".to_owned(),
-                width: 20.0,
-                length: 8.0,
-            })
+            defaults,
+            r##"{"color":"#315EFB","width":4.0,"headEnd":{"kind":"triangle","width":12.0,"length":12.0},"tailEnd":{"kind":"stealth","width":12.0,"length":12.0}}"##
         );
         assert_eq!(
-            stroke.tail_end,
-            Some(StrokeEnd {
-                kind: "stealth".to_owned(),
-                width: 12.0,
-                length: 12.0,
-            })
+            strokes
+                .values()
+                .filter(|stroke| stroke.head_end.is_some())
+                .count(),
+            20
         );
-        let json = serde_json::to_string(&rendered.display_list).unwrap();
-        assert!(json.contains(r#""headEnd":{"kind":"triangle","width":20.0,"length":8.0}"#));
-        assert!(json.contains(r#""tailEnd":{"kind":"stealth","width":12.0,"length":12.0}"#));
     }
 
     #[test]
@@ -2926,7 +2947,8 @@ mod tests {
             &theme,
         )
         .unwrap();
-        let expected = format!(r#"{{"color":"{}","width":1.0}}"#, plain.color);
+        let expected = r##"{"color":"#FF0000","width":1.0}"##;
+        assert_eq!(serde_json::from_str::<Stroke>(expected).unwrap(), plain);
         assert_eq!(serde_json::to_string(&plain).unwrap(), expected);
         assert_eq!(serde_json::to_string(&none).unwrap(), expected);
     }
@@ -2934,8 +2956,7 @@ mod tests {
     #[test]
     fn thin_lines_keep_a_visible_end() {
         let end = line_end(Some(&end("oval", Some("sm"), Some("lg"))), 1.0).unwrap();
-        assert!((end.width - 2.0 * LINE_END_MIN_BASE_PX).abs() < 1e-6);
-        assert!((end.length - 5.0 * LINE_END_MIN_BASE_PX).abs() < 1e-6);
-        assert!(end.width > 5.0);
+        assert!((end.width - 5.291_339).abs() < 1e-6);
+        assert!((end.length - 13.228_347).abs() < 1e-6);
     }
 }

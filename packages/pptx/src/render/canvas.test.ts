@@ -480,4 +480,53 @@ describe('PPTX canvas line ends', () => {
       ['fill'],
     ]);
   });
+  test('uses curve tangents and skips repeated endpoint coordinates', async () => {
+    const paths: ShapePrimitive['path'][] = [
+      [
+        { type: 'move', x: 0, y: 0 },
+        { type: 'quad', cpx: 0, cpy: 1, x: 1, y: 1 },
+      ],
+      [
+        { type: 'move', x: 0, y: 0 },
+        { type: 'cubic', cp1x: 0, cp1y: 1, cp2x: 0, cp2y: 1, x: 1, y: 1 },
+      ],
+      [
+        { type: 'move', x: 0, y: 0 },
+        { type: 'line', x: 0, y: 0 },
+        { type: 'line', x: 0, y: 1 },
+        { type: 'line', x: 1, y: 1 },
+        { type: 'line', x: 1, y: 1 },
+      ],
+    ];
+    for (const path of paths) {
+      const calls = await paintLine({
+        x: 10,
+        y: 50,
+        w: 100,
+        h: 100,
+        path,
+        stroke: {
+          color: '#ff0000',
+          width: 2,
+          headEnd: { kind: 'triangle', width: 8, length: 12 },
+          tailEnd: { kind: 'triangle', width: 8, length: 12 },
+        },
+      });
+      expect(afterPathStroke(calls)).toEqual([
+        ['beginPath'],
+        ['moveTo', 10, 50],
+        ['lineTo', 14, 62],
+        ['lineTo', 6, 62],
+        ['closePath'],
+        ['fill'],
+        ['beginPath'],
+        ['moveTo', 110, 150],
+        ['lineTo', 98, 154],
+        ['lineTo', 98, 146],
+        ['closePath'],
+        ['fill'],
+      ]);
+    }
+  });
+
 });
