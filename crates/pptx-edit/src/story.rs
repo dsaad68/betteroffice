@@ -584,7 +584,7 @@ fn insert_styled_text(
     }
 }
 
-fn style_values(style: &TextStyle) -> [(&'static str, Any); 6] {
+fn style_values(style: &TextStyle) -> [(&'static str, Any); 7] {
     [
         ("bold", style.bold.map(Any::Bool).unwrap_or(Any::Null)),
         ("italic", style.italic.map(Any::Bool).unwrap_or(Any::Null)),
@@ -612,6 +612,10 @@ fn style_values(style: &TextStyle) -> [(&'static str, Any); 6] {
                 .map(Any::from)
                 .unwrap_or(Any::Null),
         ),
+        (
+            "baseline",
+            style.baseline_pct.map(Any::Number).unwrap_or(Any::Null),
+        ),
     ]
 }
 
@@ -631,6 +635,7 @@ fn attrs_from_patch(patch: &TextStylePatch) -> Attrs {
         "underline",
         patch.underline.as_deref().map(Any::from),
     );
+    insert_option(&mut attrs, "baseline", patch.baseline_pct.map(Any::Number));
     attrs
 }
 
@@ -648,6 +653,7 @@ fn style_from_run_properties(properties: &RunProperties, theme: Option<&Theme>) 
         color: resolve_color_value_to_hex_with_theme(properties.color.as_ref(), theme),
         font_family: properties.font_family.clone(),
         underline: properties.underline.clone(),
+        baseline_pct: properties.baseline_pct,
     }
 }
 
@@ -659,6 +665,7 @@ fn style_from_attrs(attrs: Option<&Attrs>) -> TextStyle {
         color: attrs.and_then(|attrs| any_string(attrs.get("color"))),
         font_family: attrs.and_then(|attrs| any_string(attrs.get("fontFamily"))),
         underline: attrs.and_then(|attrs| any_string(attrs.get("underline"))),
+        baseline_pct: attrs.and_then(|attrs| any_number(attrs.get("baseline"))),
     }
 }
 

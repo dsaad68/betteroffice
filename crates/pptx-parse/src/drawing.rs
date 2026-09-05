@@ -966,6 +966,11 @@ pub(crate) fn parse_run_properties(element: Option<&XmlElement>) -> RunPropertie
             .and_then(|value| value.parse::<f64>().ok())
             .filter(|value| value.is_finite())
             .map(|value| value / 100.0),
+        baseline_pct: element
+            .attribute("baseline")
+            .and_then(|value| value.parse::<f64>().ok())
+            .filter(|value| value.is_finite() && value.abs() <= 100_000.0)
+            .map(|value| value / 1000.0),
         bold: element.attribute("b").map(parse_bool),
         italic: element.attribute("i").map(parse_bool),
         underline: element.attribute("u").map(str::to_owned),
@@ -1238,6 +1243,45 @@ mod tests {
                 .properties
                 .font_size_pt,
             Some(24.0)
+        );
+    }
+
+    #[test]
+    fn a_run_baseline_reads_as_a_signed_percentage() {
+        let limits = ParseLimits::default();
+        let mut budget = ParseBudget::new(&limits);
+        let root = parse_xml(
+            br#"<p:sld><p:cSld><p:spTree><p:sp><p:nvSpPr><p:cNvPr id="2" name="Body"/><p:nvPr/></p:nvSpPr><p:spPr/><p:txBody><a:bodyPr/><a:lstStyle/><a:p><a:pPr><a:defRPr baseline="0"/></a:pPr><a:r><a:rPr sz="1200"/><a:t>base</a:t></a:r><a:r><a:rPr sz="1200" baseline="30000"/><a:t>up</a:t></a:r><a:r><a:rPr sz="1200" baseline="-25000"/><a:t>down</a:t></a:r><a:r><a:rPr sz="1200" baseline="nonsense"/><a:t>junk</a:t></a:r></a:p></p:txBody></p:sp></p:spTree></p:cSld></p:sld>"#,
+            "ppt/slides/slide1.xml",
+            &mut budget,
+        )
+        .unwrap();
+        let data = common_slide_data(
+            &root,
+            &[],
+            "ppt/slides/slide1.xml",
+            &mut budget,
+            ShapeElements::WithConnectors,
+        )
+        .unwrap();
+        let ShapeNode::Shape(shape) = &data.shapes[0] else {
+            panic!("expected shape");
+        };
+        let text = shape.text.as_ref().unwrap();
+        let baselines: Vec<Option<f64>> = text.paragraphs[0]
+            .runs
+            .iter()
+            .map(|run| run.properties.baseline_pct)
+            .collect();
+        assert_eq!(baselines, [None, Some(30.0), Some(-25.0), None]);
+        assert_eq!(
+            text.paragraphs[0]
+                .properties
+                .default_run
+                .as_ref()
+                .unwrap()
+                .baseline_pct,
+            Some(0.0)
         );
     }
 

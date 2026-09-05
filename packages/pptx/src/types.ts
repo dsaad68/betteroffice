@@ -296,6 +296,7 @@ export interface PositionedTextRun {
   italic: boolean;
   underline: boolean;
   color: string;
+  baselineOffsetPx?: number;
   glyphs: PositionedGlyph[];
 }
 

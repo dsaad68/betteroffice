@@ -40,6 +40,8 @@ pub struct TextStyle {
     pub color: Option<String>,
     pub font_family: Option<String>,
     pub underline: Option<String>,
+    #[serde(default)]
+    pub baseline_pct: Option<f64>,
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
@@ -51,6 +53,8 @@ pub struct TextStylePatch {
     pub color: Option<String>,
     pub font_family: Option<String>,
     pub underline: Option<String>,
+    #[serde(default)]
+    pub baseline_pct: Option<f64>,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
