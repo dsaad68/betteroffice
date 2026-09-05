@@ -136,9 +136,7 @@ fn parse_shape_children(
 }
 
 fn parse_shape_style(element: Option<&XmlElement>) -> Option<ShapeStyle> {
-    let font_color = element?
-        .child("fontRef")
-        .and_then(parse_color_container);
+    let font_color = element?.child("fontRef").and_then(parse_color_container);
     font_color.map(|color| ShapeStyle {
         font_color: Some(color),
     })
