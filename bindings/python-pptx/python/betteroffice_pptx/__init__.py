@@ -17,6 +17,7 @@ from ._betteroffice_pptx import (
     NotCollaborativeError,
     Paragraph,
     ParseError,
+    Png,
     RangeError,
     Rect,
     RenderError,
@@ -49,6 +50,7 @@ __all__ = [
     "NotCollaborativeError",
     "Paragraph",
     "ParseError",
+    "Png",
     "PptxError",
     "Presentation",
     "RangeError",
@@ -383,6 +385,16 @@ class Presentation:
     def render_slide(self, slide: SlideKey) -> DisplayList:
         """Lay a slide out into the renderer's display list."""
         return self._inner.render_slide(slide)
+
+    def render_png(
+        self,
+        slide: SlideKey,
+        *,
+        scale: float = 1.0,
+        background: str = "slide",
+    ) -> Png:
+        """Rasterize a slide to PNG bytes. Register a font first."""
+        return self._inner.render_png(slide, scale=scale, background=background)
 
     def save(self) -> bytes:
         """Serialize back to PPTX bytes, edits included."""
