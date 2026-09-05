@@ -1144,6 +1144,8 @@ mod tests {
                     color: "#ff00ff".to_owned(),
                     width: 2.0,
                     dashed: false,
+                    head_end: None,
+                    tail_end: None,
                 }),
                 transform: Transform::default(),
             }],

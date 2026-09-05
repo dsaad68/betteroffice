@@ -72,6 +72,7 @@ export type {
   SlideSnapshot,
   StorySnapshot,
   Stroke,
+  StrokeEnd,
   TextBoxPrimitive,
   TextReceipt,
   TextRunSnapshot,
