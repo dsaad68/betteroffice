@@ -2,7 +2,7 @@ use std::collections::{BTreeMap, HashMap, HashSet};
 
 use ooxml_drawingml::chart::PlotRect;
 use ooxml_drawingml::{
-    ColorValue, ShapeFill, ShapeOutline, Theme, preset_geometry_to_path,
+    ColorValue, LineEnd, ShapeFill, ShapeOutline, Theme, preset_geometry_to_path,
     resolve_color_value_to_hex_with_theme, resolve_color_value_to_rgba_hex, resolve_theme_font_ref,
 };
 use ooxml_text::{CompatFlags, FontId, FontStore, break_opportunities, shape, single_line_box};
@@ -18,11 +18,12 @@ use thiserror::Error;
 use crate::chart::{ChartFrame, ChartText, chart_primitive};
 use crate::{
     CONTRACT_VERSION, CaretStop, GradientStop, GradientType, ImageCrop, Paint, PositionedGlyph,
-    PositionedTextLine, PositionedTextRun, Primitive, Stroke, SurfaceDisplayList, TextAlign,
-    TextAnchor, TextParagraph, TextRun, Transform,
+    PositionedTextLine, PositionedTextRun, Primitive, Stroke, StrokeEnd, SurfaceDisplayList,
+    TextAlign, TextAnchor, TextParagraph, TextRun, Transform,
 };
 
 const EMU_PER_CSS_PIXEL: f32 = 9_525.0;
+const LINE_END_MIN_BASE_PX: f32 = 0.7 / 25.4 * 96.0;
 const DEFAULT_INSET_HORIZONTAL_EMU: i64 = 91_440;
 const DEFAULT_INSET_VERTICAL_EMU: i64 = 45_720;
 const DEFAULT_FONT_SIZE_PT: f32 = 18.0;
@@ -59,6 +60,8 @@ pub struct SlideRenderer {
     fonts: FontStore,
     faces: HashMap<(String, bool, bool), FontFace>,
     fallback: Option<FontFace>,
+    /// Normalized fallback family.
+    fallback_family: Option<String>,
     font_count: usize,
 }
 
@@ -74,6 +77,7 @@ impl SlideRenderer {
             fonts: FontStore::new(),
             faces: HashMap::new(),
             fallback: None,
+            fallback_family: None,
             font_count: 0,
         }
     }
@@ -110,6 +114,8 @@ impl SlideRenderer {
         self.faces
             .insert((normalize_family(family), bold, italic), face.clone());
         self.fallback.get_or_insert(face);
+        self.fallback_family
+            .get_or_insert_with(|| normalize_family(family));
         self.font_count += 1;
         Ok(id.to_u32())
     }
@@ -120,8 +126,7 @@ impl SlideRenderer {
         &self.fonts
     }
 
-    /// The first face registered, which text falls back to when no family
-    /// matches.
+    /// First registered face for placeholder labels.
     pub fn fallback_font(&self) -> Option<FontId> {
         self.fallback.as_ref().map(|face| face.id)
     }
@@ -249,12 +254,29 @@ impl SlideRenderer {
         bold: bool,
         italic: bool,
     ) -> Result<FontFace, RenderError> {
-        let normalized = normalize_family(family);
+        let requested = normalize_family(family);
+        let styles = [
+            (bold, italic),
+            (bold, false),
+            (false, italic),
+            (false, false),
+        ];
+        for (bold, italic) in styles {
+            if let Some(face) = self.faces.get(&(requested.clone(), bold, italic)) {
+                return Ok(face.clone());
+            }
+        }
         self.faces
-            .get(&(normalized.clone(), bold, italic))
-            .or_else(|| self.faces.get(&(normalized, false, false)))
-            .or(self.fallback.as_ref())
-            .cloned()
+            .iter()
+            .filter(|((name, _, _), _)| Some(name) == self.fallback_family.as_ref())
+            .min_by_key(|((_, face_bold, face_italic), _)| {
+                (
+                    2 * u8::from(*face_bold != bold) + u8::from(*face_italic != italic),
+                    *face_bold,
+                    *face_italic,
+                )
+            })
+            .map(|(_, face)| face.clone())
             .ok_or(RenderError::NoFont)
     }
 }
@@ -2053,19 +2075,40 @@ fn shape_style_color(shape: Option<&ShapeNode>) -> Option<&ColorValue> {
     }
 }
 
+fn line_end(end: Option<&LineEnd>, stroke_width: f32) -> Option<StrokeEnd> {
+    let end = end.filter(|end| end.end_type != "none")?;
+    let base = stroke_width.max(LINE_END_MIN_BASE_PX);
+    Some(StrokeEnd {
+        kind: end.end_type.clone(),
+        width: base * line_end_scale(end.width.as_deref()),
+        length: base * line_end_scale(end.length.as_deref()),
+    })
+}
+
+fn line_end_scale(size: Option<&str>) -> f32 {
+    match size {
+        Some("sm") => 2.0,
+        Some("lg") => 5.0,
+        _ => 3.0,
+    }
+}
+
 fn stroke(outline: &ShapeOutline, theme: &Theme) -> Option<Stroke> {
     let color = resolve_paint_color(outline.color.as_ref(), theme)?;
+    let width = outline
+        .width
+        .filter(|width| width.is_finite() && *width >= 0.0)
+        .map(|width| width as f32 / EMU_PER_CSS_PIXEL)
+        .unwrap_or(1.0);
     Some(Stroke {
         color,
-        width: outline
-            .width
-            .filter(|width| width.is_finite() && *width >= 0.0)
-            .map(|width| width as f32 / EMU_PER_CSS_PIXEL)
-            .unwrap_or(1.0),
+        width,
         dashed: outline
             .style
             .as_deref()
             .is_some_and(|style| style != "solid"),
+        head_end: line_end(outline.head_end.as_ref(), width),
+        tail_end: line_end(outline.tail_end.as_ref(), width),
     })
 }
 
@@ -2186,6 +2229,12 @@ mod tests {
     const CHART_FIXTURE: &[u8] = include_bytes!("../../pptx-parse/tests/fixtures/chart-deck.pptx");
     const STYLE_FIXTURE: &[u8] = include_bytes!("../../pptx-parse/tests/fixtures/shape-style.pptx");
     const FONT: &[u8] = include_bytes!("../../ooxml-text/tests/fonts/LiberationSans-Regular.ttf");
+    const BOLD_FONT: &[u8] =
+        include_bytes!("../../../packages/fonts/assets/LiberationSans-Bold.ttf");
+    const ITALIC_FONT: &[u8] =
+        include_bytes!("../../../packages/fonts/assets/LiberationSans-Italic.ttf");
+    const BOLD_ITALIC_FONT: &[u8] =
+        include_bytes!("../../../packages/fonts/assets/LiberationSans-BoldItalic.ttf");
 
     #[test]
     fn a_source_crop_converts_to_fractions_and_refuses_what_cannot_be_drawn() {
@@ -2491,6 +2540,135 @@ mod tests {
         for alignment in ["justLow", "dist", "thaiDist"] {
             assert_eq!(parse_align(Some(alignment)), TextAlign::Justify);
             assert!(!is_full_justification(Some(alignment)));
+        }
+    }
+
+    #[test]
+    fn an_unregistered_family_keeps_its_weight_through_the_fallback() {
+        let mut renderer = SlideRenderer::new();
+        renderer.register_font("Arial", false, false, FONT).unwrap();
+        let bold = renderer
+            .register_font("Arial", true, false, BOLD_FONT)
+            .unwrap();
+
+        let resolved = renderer.resolve_face("Segoe UI", true, false).unwrap();
+        assert_eq!(resolved.id.to_u32(), bold);
+        assert_eq!(renderer.fonts.font_bytes(resolved.id).unwrap(), BOLD_FONT);
+    }
+
+    #[test]
+    fn an_unregistered_family_keeps_its_slant_through_the_fallback() {
+        let mut renderer = SlideRenderer::new();
+        renderer.register_font("Arial", false, false, FONT).unwrap();
+        let italic = renderer
+            .register_font("Arial", false, true, ITALIC_FONT)
+            .unwrap();
+
+        let resolved = renderer.resolve_face("Segoe UI", false, true).unwrap();
+        assert_eq!(resolved.id.to_u32(), italic);
+        assert_eq!(renderer.fonts.font_bytes(resolved.id).unwrap(), ITALIC_FONT);
+    }
+
+    #[test]
+    fn fallback_keeps_combined_style_and_prefers_a_registered_family() {
+        let mut renderer = SlideRenderer::new();
+        let regular = renderer.register_font("Arial", false, false, FONT).unwrap();
+        renderer
+            .register_font("ARIAL", true, false, BOLD_FONT)
+            .unwrap();
+        renderer
+            .register_font("Arial", false, true, ITALIC_FONT)
+            .unwrap();
+        let bold_italic = renderer
+            .register_font(" arial ", true, true, BOLD_ITALIC_FONT)
+            .unwrap();
+        let georgia = renderer
+            .register_font("Georgia", false, false, FONT)
+            .unwrap();
+
+        let resolved = renderer.resolve_face(" geORGia ", true, true).unwrap();
+        assert_eq!(resolved.id.to_u32(), georgia);
+        let resolved = renderer.resolve_face("Segoe UI", true, true).unwrap();
+        assert_eq!(resolved.id.to_u32(), bold_italic);
+        assert_eq!(renderer.fallback_font().unwrap().to_u32(), regular);
+    }
+
+    #[test]
+    fn fallback_with_only_bold_and_italic_is_independent_of_registration_order() {
+        fn substitute_family(shapes: &mut [ShapeSnapshot]) {
+            for shape in shapes {
+                for story in &mut shape.text_stories {
+                    for paragraph in &mut story.paragraphs {
+                        for run in &mut paragraph.runs {
+                            run.style.font_family = Some("Segoe UI".to_owned());
+                        }
+                    }
+                }
+                substitute_family(&mut shape.children);
+            }
+        }
+
+        fn normalize_font_ids(primitives: &mut [Primitive], bold_id: u32) {
+            for primitive in primitives {
+                match primitive {
+                    Primitive::TextBox { lines, .. } => {
+                        for run in lines.iter_mut().flat_map(|line| &mut line.runs) {
+                            run.font_id = u32::from(run.font_id != bold_id);
+                        }
+                    }
+                    Primitive::Chart { primitives, .. } => normalize_font_ids(primitives, bold_id),
+                    _ => {}
+                }
+            }
+        }
+
+        assert!(matches!(
+            SlideRenderer::new().resolve_face("Segoe UI", false, false),
+            Err(RenderError::NoFont)
+        ));
+        let package = pptx_parse::parse_pptx(FIXTURE).unwrap();
+        let session = DeckSession::open(FIXTURE, 8_010).unwrap();
+        let mut snapshot = session.snapshot().unwrap();
+        for slide in &mut snapshot.slides {
+            substitute_family(&mut slide.shapes);
+        }
+        let mut outputs = Vec::new();
+        let mut renderers = Vec::new();
+        for reverse in [false, true] {
+            let mut renderer = SlideRenderer::new();
+            let mut faces = [(true, false, BOLD_FONT), (false, true, ITALIC_FONT)];
+            if reverse {
+                faces.reverse();
+            }
+            for (bold, italic, bytes) in faces {
+                renderer
+                    .register_font("Arial", bold, italic, bytes)
+                    .unwrap();
+            }
+            let bold_id = renderer.resolve_face("Arial", true, false).unwrap().id;
+            let mut slides = Vec::new();
+            for index in 0..snapshot.slides.len() {
+                let mut rendered = renderer.layout_slide(&package, &snapshot, index).unwrap();
+                normalize_font_ids(&mut rendered.display_list.primitives, bold_id.to_u32());
+                slides.push(rendered.display_list);
+            }
+            outputs.push(serde_json::to_vec(&slides).unwrap());
+            renderers.push(renderer);
+        }
+        assert!(outputs[0] == outputs[1], "fallback display lists differ");
+        for renderer in renderers {
+            for (bold, italic, expected) in [
+                (false, false, ITALIC_FONT),
+                (true, false, BOLD_FONT),
+                (false, true, ITALIC_FONT),
+                (true, true, BOLD_FONT),
+            ] {
+                let resolved = renderer.resolve_face("Segoe UI", bold, italic).unwrap();
+                assert!(
+                    renderer.fonts.font_bytes(resolved.id).unwrap() == expected,
+                    "wrong fallback for bold={bold}, italic={italic}"
+                );
+            }
         }
     }
 
@@ -3248,5 +3426,114 @@ mod tests {
         ] {
             assert_style_colours(&second_theme, prefix, &[expected]);
         }
+    }
+
+    fn end(kind: &str, width: Option<&str>, length: Option<&str>) -> LineEnd {
+        LineEnd {
+            end_type: kind.to_owned(),
+            width: width.map(str::to_owned),
+            length: length.map(str::to_owned),
+        }
+    }
+
+    fn red_outline(width_emu: f64) -> ShapeOutline {
+        ShapeOutline {
+            width: Some(width_emu),
+            color: Some(ooxml_drawingml::ColorValue {
+                rgb: Some("FF0000".to_owned()),
+                ..Default::default()
+            }),
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn line_ends_carry_their_kind_and_sizes_from_ooxml() {
+        let bytes = include_bytes!("../tests/fixtures/line-ends.pptx");
+        let package = pptx_parse::parse_pptx(bytes).unwrap();
+        let session = DeckSession::open(bytes, 8_005).unwrap();
+        let snapshot = session.snapshot().unwrap();
+        let rendered = renderer().layout_slide(&package, &snapshot, 0).unwrap();
+        let strokes: BTreeMap<_, _> = rendered
+            .display_list
+            .primitives
+            .iter()
+            .filter_map(|primitive| match primitive {
+                Primitive::Shape {
+                    name,
+                    stroke: Some(stroke),
+                    ..
+                } => Some((name.as_str(), stroke)),
+                _ => None,
+            })
+            .collect();
+        for kind in ["triangle", "arrow", "stealth", "diamond", "oval"] {
+            for (size, width, length) in [
+                ("sm-lg", 8.0, 20.0),
+                ("med-sm", 12.0, 8.0),
+                ("lg-med", 20.0, 12.0),
+            ] {
+                let name = format!("{kind}-{size}");
+                let stroke = strokes[name.as_str()];
+                assert_eq!(stroke.color, "#315EFB");
+                assert_eq!(stroke.width, 4.0);
+                assert_eq!(
+                    stroke.head_end,
+                    Some(StrokeEnd {
+                        kind: kind.to_owned(),
+                        width,
+                        length,
+                    }),
+                    "{name} head"
+                );
+                assert_eq!(
+                    stroke.tail_end,
+                    Some(StrokeEnd {
+                        kind: kind.to_owned(),
+                        width: length,
+                        length: width,
+                    }),
+                    "{name} tail"
+                );
+            }
+        }
+        let defaults = serde_json::to_string(strokes["default-medium"]).unwrap();
+        assert_eq!(
+            defaults,
+            r##"{"color":"#315EFB","width":4.0,"headEnd":{"kind":"triangle","width":12.0,"length":12.0},"tailEnd":{"kind":"stealth","width":12.0,"length":12.0}}"##
+        );
+        assert_eq!(
+            strokes
+                .values()
+                .filter(|stroke| stroke.head_end.is_some())
+                .count(),
+            20
+        );
+    }
+
+    #[test]
+    fn strokes_without_ends_serialise_as_before() {
+        let theme = Theme::default();
+        let plain = stroke(&red_outline(9_525.0), &theme).unwrap();
+        let none = stroke(
+            &ShapeOutline {
+                head_end: Some(end("none", Some("lg"), None)),
+                tail_end: Some(end("none", None, None)),
+                ..red_outline(9_525.0)
+            },
+            &theme,
+        )
+        .unwrap();
+        let expected = r##"{"color":"#FF0000","width":1.0}"##;
+        assert_eq!(serde_json::from_str::<Stroke>(expected).unwrap(), plain);
+        assert_eq!(serde_json::to_string(&plain).unwrap(), expected);
+        assert_eq!(serde_json::to_string(&none).unwrap(), expected);
+    }
+
+    #[test]
+    fn thin_lines_keep_a_visible_end() {
+        let end = line_end(Some(&end("oval", Some("sm"), Some("lg"))), 1.0).unwrap();
+        assert!((end.width - 5.291_339).abs() < 1e-6);
+        assert!((end.length - 13.228_347).abs() < 1e-6);
     }
 }

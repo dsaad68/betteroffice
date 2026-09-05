@@ -7,19 +7,23 @@ use yrs::updates::decoder::Decode;
 use yrs::{Any, Doc, Map, MapRef, Out, ReadTxn, StateVector, Transact, Update};
 
 const V1_UPDATE: &[u8] = include_bytes!("fixtures/deck-schema-v1.update.bin");
+const V2_SOURCE: &[u8] = include_bytes!("fixtures/deck-schema-v2-connectors.pptx");
+const V2_UPDATE: &[u8] = include_bytes!("fixtures/deck-schema-v2-connectors.update.bin");
+const V2_MOVED_UPDATE: &[u8] =
+    include_bytes!("fixtures/deck-schema-v2-connectors-moved.update.bin");
 const META: &str = "pptx:meta";
 const SHAPE_ID: &str = "shape:4242:0";
 const STORY_ID: &str = "story:shape:4242:0:0";
 
 #[test]
-fn released_v1_snapshot_migrates_and_round_trips_as_v2() {
+fn released_v1_snapshot_migrates_and_round_trips_as_v3() {
     assert_eq!(stamped_version(V1_UPDATE), Some(1.0));
 
     let session = DeckSession::open_from_update(V1_UPDATE, 901).unwrap();
     assert_v1_content(&session);
 
     let migrated = session.encode_state_as_update_v1();
-    assert_eq!(stamped_version(&migrated), Some(2.0));
+    assert_eq!(stamped_version(&migrated), Some(3.0));
     assert!(
         package_json(&migrated).contains("\"charts\""),
         "the migrated package must carry the v2 chart field"
@@ -34,7 +38,7 @@ fn released_v1_snapshot_migrates_and_round_trips_as_v2() {
     assert_eq!(
         reopened.encode_state_as_update_v1().len(),
         migrated.len(),
-        "reopening a v2 snapshot must not migrate again"
+        "reopening a v3 snapshot must not migrate again"
     );
 }
 
@@ -76,7 +80,7 @@ fn two_clients_migrating_the_same_v1_snapshot_converge() {
     assert_eq!(left.snapshot().unwrap(), right.snapshot().unwrap());
     assert_eq!(
         stamped_version(&left.encode_state_as_update_v1()),
-        Some(2.0)
+        Some(3.0)
     );
     assert_eq!(
         package_json(&left.encode_state_as_update_v1()),
@@ -85,8 +89,71 @@ fn two_clients_migrating_the_same_v1_snapshot_converge() {
 }
 
 #[test]
+fn a_fresh_seed_persists_the_connector_filter_in_schema_v3() {
+    let session = DeckSession::open(V2_SOURCE, 909).unwrap();
+    let update = session.encode_state_as_update_v1();
+    assert_eq!(stamped_version(&update), Some(3.0));
+    assert!(package_json(&update).contains("\"shapeElements\":\"withConnectors\""));
+    let reopened = DeckSession::open_from_update_with_source(&update, V2_SOURCE, 910).unwrap();
+    assert!(reopened.package().models_connectors());
+    assert_eq!(reopened.snapshot().unwrap(), session.snapshot().unwrap());
+    assert_eq!(reopened.save().unwrap(), session.save().unwrap());
+}
+
+#[test]
+fn a_v2_snapshot_migrates_without_changing_its_package_or_shape_ids() {
+    assert_eq!(stamped_version(V2_UPDATE), Some(2.0));
+    let session = DeckSession::open_from_update(V2_UPDATE, 911).unwrap();
+    let migrated = session.encode_state_as_update_v1();
+    assert_eq!(stamped_version(&migrated), Some(3.0));
+    assert_eq!(package_json(&migrated), package_json(V2_UPDATE));
+    assert!(!session.package().models_connectors());
+    let snapshot = session.snapshot().unwrap();
+    assert_eq!(
+        snapshot_shape_ids(&snapshot),
+        ["slide:0:256:shape:0", "slide:0:256:shape:1"]
+    );
+    assert_eq!(snapshot.slides[0].shapes[1].source_id, 4);
+    let reopened = DeckSession::open_from_update_with_source(&migrated, V2_SOURCE, 912).unwrap();
+    assert_eq!(reopened.snapshot().unwrap(), snapshot);
+    assert_eq!(reopened.encode_state_as_update_v1(), migrated);
+    let cloned =
+        DeckSession::from_package_with_source(session.package().clone(), V2_SOURCE, 913).unwrap();
+    let reattached = DeckSession::open_from_update_with_source(
+        &cloned.encode_state_as_update_v1(),
+        V2_SOURCE,
+        914,
+    )
+    .unwrap();
+    assert_eq!(reattached.save().unwrap(), reopened.save().unwrap());
+}
+
+#[test]
+fn v2_migration_converges_and_accepts_an_existing_peer_edit() {
+    let left = DeckSession::open_from_update_with_source(V2_UPDATE, V2_SOURCE, 915).unwrap();
+    let right = DeckSession::open_from_update_with_source(V2_UPDATE, V2_SOURCE, 916).unwrap();
+    left.apply_update_v1(&right.encode_state_as_update_v1())
+        .unwrap();
+    right
+        .apply_update_v1(&left.encode_state_as_update_v1())
+        .unwrap();
+    left.apply_update_v1(V2_MOVED_UPDATE).unwrap();
+    right
+        .apply_update_v1(&left.encode_state_as_update_v1())
+        .unwrap();
+    assert_eq!(left.snapshot().unwrap(), right.snapshot().unwrap());
+    assert_eq!(left.snapshot().unwrap().slides[0].shapes[1].x, 952_500);
+    assert_eq!(
+        stamped_version(&left.encode_state_as_update_v1()),
+        Some(3.0)
+    );
+    assert_eq!(left.save().unwrap(), right.save().unwrap());
+    assert!(!left.package().models_connectors());
+}
+
+#[test]
 fn unmigratable_schema_versions_stay_rejected() {
-    for version in [0.0, 1.5, 3.0] {
+    for version in [0.0, 1.5, 4.0] {
         assert!(
             matches!(
                 DeckSession::open_from_update(&restamped(V1_UPDATE, Some(version)), 905),

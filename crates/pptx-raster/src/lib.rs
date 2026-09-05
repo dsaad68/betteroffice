@@ -919,6 +919,8 @@ mod tests {
                         color: "#ff00ff".into(),
                         width: 2.0,
                         dashed: false,
+                        head_end: None,
+                        tail_end: None,
                     }),
                     transform: SlideTransform {
                         flip_h,
