@@ -551,6 +551,30 @@ mod tests {
         for shape in ["chevron", "homePlate"] {
             assert_close(leading_edge(shape, Some(6.0), 4.0), 0.0);
             assert_close(leading_edge(shape, Some(2.0), 0.25), 0.0);
+            assert_close(leading_edge(shape, Some(-0.25), 4.0), 1.0);
+        }
+    }
+
+    #[test]
+    fn normalized_adjustments_do_not_guess_raw_guide_units() {
+        for shape in [
+            "roundRect",
+            "triangle",
+            "parallelogram",
+            "trapezoid",
+            "hexagon",
+            "octagon",
+            "rightArrow",
+            "star5",
+            "bentConnector3",
+        ] {
+            let path = |value| {
+                let adjustments = ["adj", "adj1", "adj2"]
+                    .map(|name| (name.to_owned(), value))
+                    .into();
+                preset_geometry_to_path(shape, &adjustments, 1.0).unwrap()
+            };
+            assert_eq!(path(2.0), path(1.0), "{shape}");
         }
     }
 

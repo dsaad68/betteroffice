@@ -742,21 +742,24 @@ mod tests {
     }
 
     #[test]
-    fn preset_adjust_values_are_fractions_of_the_shortest_side() {
-        let square = root(
-            "<wps:spPr><a:prstGeom prst=\"homePlate\"><a:avLst><a:gd name=\"adj\" fmla=\"val 75000\"/></a:avLst></a:prstGeom></wps:spPr>",
-        );
-        assert_eq!(
-            parse_preset_geometry_path(Some(&square), 1.0).unwrap()[1],
-            GeometryPathCommand::Line { x: 0.25, y: 0.0 }
-        );
-        let wide = root(
-            "<wps:spPr><a:prstGeom prst=\"chevron\"><a:avLst><a:gd name=\"adj\" fmla=\"val 200000\"/></a:avLst></a:prstGeom></wps:spPr>",
-        );
-        assert_eq!(
-            parse_preset_geometry_path(Some(&wide), 4.0).unwrap()[1],
-            GeometryPathCommand::Line { x: 0.5, y: 0.0 }
-        );
+    fn preset_adjust_values_use_normalized_guide_units() {
+        for shape in ["chevron", "homePlate"] {
+            for (guide, aspect, x) in [
+                (75_000, 1.0, 0.25),
+                (200_000, 4.0, 0.5),
+                (600_000, 4.0, 0.0),
+                (1, 1.0, 0.999_99),
+            ] {
+                let properties = root(&format!(
+                    "<wps:spPr><a:prstGeom prst=\"{shape}\"><a:avLst><a:gd name=\"adj\" fmla=\"val {guide}\"/></a:avLst></a:prstGeom></wps:spPr>"
+                ));
+                assert_eq!(
+                    parse_preset_geometry_path(Some(&properties), aspect).unwrap()[1],
+                    GeometryPathCommand::Line { x, y: 0.0 },
+                    "{shape}, adj={guide}, aspect={aspect}"
+                );
+            }
+        }
     }
 
     #[test]
