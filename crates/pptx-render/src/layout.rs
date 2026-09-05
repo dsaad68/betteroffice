@@ -2771,7 +2771,10 @@ mod tests {
 
         // PowerPoint caches its authoring placeholder in the field's own text, so copying it
         // is what put a literal marker on every slide of a deck.
-        assert_eq!(field_text(&run(Some("slidenum"), "\u{2039}#\u{203a}"), 7), "7");
+        assert_eq!(
+            field_text(&run(Some("slidenum"), "\u{2039}#\u{203a}"), 7),
+            "7"
+        );
         // A field this renderer does not evaluate keeps whatever was cached for it.
         assert_eq!(
             field_text(&run(Some("datetime"), "16/08/2026"), 7),
