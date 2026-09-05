@@ -2,8 +2,8 @@ use std::collections::{BTreeMap, HashMap, HashSet};
 
 use ooxml_drawingml::chart::PlotRect;
 use ooxml_drawingml::{
-    LineEnd, ShapeFill, ShapeOutline, Theme, preset_geometry_to_path, resolve_color_value_to_hex_with_theme,
-    resolve_theme_font_ref,
+    LineEnd, ShapeFill, ShapeOutline, Theme, preset_geometry_to_path,
+    resolve_color_value_to_hex_with_theme, resolve_theme_font_ref,
 };
 use ooxml_text::{CompatFlags, FontId, FontStore, break_opportunities, shape, single_line_box};
 use pptx_edit::{DeckSnapshot, ShapeKind, ShapeSnapshot, StorySnapshot, TextStyle};
