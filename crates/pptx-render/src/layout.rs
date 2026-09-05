@@ -1988,9 +1988,7 @@ fn resolved_transform_value(
     }
 }
 
-/// Resolve a fill or stroke colour, widening to `#RRGGBBAA` only when it is actually
-/// translucent so every opaque colour keeps the six-digit form the display list already
-/// carries and existing output is unchanged.
+/// A fill or stroke colour, widened to `#RRGGBBAA` only when it is actually translucent.
 fn resolve_paint_color(color: Option<&ColorValue>, theme: &Theme) -> Option<String> {
     let rgba = resolve_color_value_to_rgba_hex(color, Some(theme))?;
     match rgba.strip_suffix("FF") {
@@ -2313,8 +2311,6 @@ mod tests {
             })
         );
 
-        // An opaque fill keeps the six-digit form, so nothing that renders correctly today
-        // changes shape.
         let opaque = ShapeFill {
             color: Some(ColorValue {
                 rgb: Some("112233".to_owned()),
@@ -2327,6 +2323,58 @@ mod tests {
             Some(Paint::Solid {
                 color: "#112233".to_owned()
             })
+        );
+    }
+
+    #[test]
+    fn a_translucent_gradient_stop_and_outline_carry_their_alpha() {
+        let theme = Theme::default();
+        let color = |rgb: &str, alpha: Option<f64>| ColorValue {
+            rgb: Some(rgb.to_owned()),
+            alpha,
+            ..ColorValue::default()
+        };
+
+        let gradient = ShapeFill {
+            fill_type: "gradient".to_owned(),
+            color: None,
+            gradient: Some(ooxml_drawingml::GradientFill {
+                gradient_type: "linear".to_owned(),
+                angle: None,
+                stops: vec![
+                    ooxml_drawingml::GradientStop {
+                        position: 0.0,
+                        color: color("112233", Some(0.5)),
+                    },
+                    ooxml_drawingml::GradientStop {
+                        position: 100_000.0,
+                        color: color("445566", None),
+                    },
+                ],
+            }),
+        };
+        let Some(Paint::Gradient { stops, .. }) = paint(&gradient, &theme) else {
+            panic!("expected a gradient paint");
+        };
+        assert_eq!(
+            stops
+                .iter()
+                .map(|stop| stop.color.as_str())
+                .collect::<Vec<_>>(),
+            ["#11223380", "#445566"]
+        );
+
+        let outline = |alpha| ShapeOutline {
+            color: Some(color("112233", alpha)),
+            ..ShapeOutline::default()
+        };
+        assert_eq!(
+            stroke(&outline(Some(0.5)), &theme).map(|stroke| stroke.color),
+            Some("#11223380".to_owned())
+        );
+        assert_eq!(
+            stroke(&outline(None), &theme).map(|stroke| stroke.color),
+            Some("#112233".to_owned())
         );
     }
 
