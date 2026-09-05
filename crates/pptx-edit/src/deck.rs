@@ -21,9 +21,9 @@ use crate::{
     ShapeStrokeReceipt, SlideReceipt, SlideSnapshot, TransformReceipt,
 };
 
-const SCHEMA_VERSION: f64 = 4.0;
+const SCHEMA_VERSION: f64 = 8.0;
 /// Versions [`migrate_doc`] can carry forward. Anything else is unreadable.
-const MIGRATABLE_SCHEMA_VERSIONS: [f64; 4] = [1.0, 2.0, 3.0, SCHEMA_VERSION];
+const MIGRATABLE_SCHEMA_VERSIONS: [f64; 5] = [1.0, 2.0, 3.0, 4.0, SCHEMA_VERSION];
 const MAX_GEOMETRY: i64 = 1_000_000_000_000_000;
 const MAX_SHAPE_DEPTH: usize = 128;
 const EMU_PER_POINT: f64 = 12_700.0;
@@ -711,12 +711,31 @@ pub(crate) fn fingerprint_from_doc(doc: &Doc) -> EditResult<String> {
         .ok_or_else(|| EditError::InvalidState("missing fingerprint".to_owned()))
 }
 
-/// Upgrades metadata while preserving legacy source ordinals.
+/// Applies schema migrations in version order.
 pub(crate) fn migrate_doc(doc: &Doc) -> EditResult<()> {
+    let version = {
+        let txn = doc.transact();
+        let meta = required_map(&txn, META)?;
+        schema_version(&meta, &txn)?
+    };
+    if version < 3.0 {
+        migrate_doc_to_v3(doc)?;
+    }
+    if version < 4.0 {
+        migrate_doc_to_v4(doc)?;
+    }
+    if version < SCHEMA_VERSION {
+        migrate_doc_to_v8(doc)?;
+    }
+    Ok(())
+}
+
+/// Upgrades metadata while preserving legacy source ordinals.
+fn migrate_doc_to_v3(doc: &Doc) -> EditResult<()> {
     let package = {
         let txn = doc.transact();
         let meta = required_map(&txn, META)?;
-        if schema_version(&meta, &txn)? == SCHEMA_VERSION {
+        if schema_version(&meta, &txn)? >= 3.0 {
             return Ok(());
         }
         package_from_meta(&meta, &txn)?
@@ -730,6 +749,34 @@ pub(crate) fn migrate_doc(doc: &Doc) -> EditResult<()> {
         "packageJson",
         Any::Buffer(Arc::from(package_json)),
     );
+    meta.insert(&mut txn, "schemaVersion", 3.0);
+    Ok(())
+}
+
+/// Persists slide numbering in schema 4.
+fn migrate_doc_to_v4(doc: &Doc) -> EditResult<()> {
+    let package = {
+        let txn = doc.transact();
+        let meta = required_map(&txn, META)?;
+        package_from_meta(&meta, &txn)?
+    };
+    let package_json =
+        serde_json::to_vec(&package).map_err(|error| EditError::Json(error.to_string()))?;
+    let mut txn = doc.transact_mut_with(MIGRATE_ORIGIN);
+    let meta = required_map(&txn, META)?;
+    meta.insert(
+        &mut txn,
+        "packageJson",
+        Any::Buffer(Arc::from(package_json)),
+    );
+    meta.insert(&mut txn, "schemaVersion", 4.0);
+    Ok(())
+}
+
+fn migrate_doc_to_v8(doc: &Doc) -> EditResult<()> {
+    let mut txn = doc.transact_mut_with(MIGRATE_ORIGIN);
+    let meta = required_map(&txn, META)?;
+    let package = package_from_meta(&meta, &txn)?;
     meta.insert(&mut txn, "schemaVersion", SCHEMA_VERSION);
     if !meta.contains_key(&txn, "commentFlavor") {
         if !package.comments.is_empty()
@@ -1258,6 +1305,74 @@ mod tests {
         let before = session.encode_state_as_update_v1();
         migrate_doc(&session.doc).unwrap();
         assert_eq!(session.encode_state_as_update_v1(), before);
+    }
+
+    #[test]
+    fn legacy_migrations_commit_v3_before_v4() {
+        use std::sync::Mutex;
+        use yrs::Update;
+        use yrs::updates::decoder::Decode;
+
+        const V1: &[u8] = include_bytes!("../tests/fixtures/deck-schema-v1.update.bin");
+        const V2: &[u8] = include_bytes!("../tests/fixtures/deck-schema-v2-connectors.update.bin");
+        const V3: &[u8] =
+            include_bytes!("../tests/fixtures/deck-schema-v3-legacy-connectors.update.bin");
+        for (update, expected_versions) in
+            [(V1, vec![3.0, 4.0]), (V2, vec![3.0, 4.0]), (V3, vec![4.0])]
+        {
+            let doc = crate::doc_with_client_id(920);
+            doc.transact_mut()
+                .apply_update(Update::decode_v1(update).unwrap())
+                .unwrap();
+            let before = snapshot_doc(&doc, &package_from_doc(&doc).unwrap()).unwrap();
+            let observed = Arc::new(Mutex::new(Vec::new()));
+            let events = observed.clone();
+            let _subscription = doc
+                .observe_update_v1(move |txn, _| {
+                    let meta = required_map(txn, META).unwrap();
+                    let Some(Out::Any(Any::Buffer(package))) = meta.get(txn, "packageJson") else {
+                        panic!("missing package data");
+                    };
+                    events
+                        .lock()
+                        .unwrap()
+                        .push((map_number(&meta, txn, "schemaVersion").unwrap(), package));
+                })
+                .unwrap();
+
+            migrate_doc(&doc).unwrap();
+
+            let events = observed.lock().unwrap();
+            assert_eq!(
+                events
+                    .iter()
+                    .map(|(version, _)| *version)
+                    .collect::<Vec<_>>(),
+                expected_versions
+            );
+            for (_, package) in events.iter() {
+                let json: serde_json::Value = serde_json::from_slice(package).unwrap();
+                assert!(json.get("charts").unwrap().is_array());
+                assert!(json.get("shapeElements").is_none());
+                assert!(json["presentation"].get("firstSlideNum").is_none());
+            }
+            let package = package_from_doc(&doc).unwrap();
+            assert_eq!(snapshot_doc(&doc, &package).unwrap(), before);
+            assert!(!package.models_connectors());
+            assert_eq!(package.presentation.first_slide_num, 1);
+            if update == V2 {
+                let main = Doc::new();
+                main.transact_mut()
+                    .apply_update(Update::decode_v1(V3).unwrap())
+                    .unwrap();
+                let txn = main.transact();
+                let meta = required_map(&txn, META).unwrap();
+                assert_eq!(
+                    meta.get(&txn, "packageJson"),
+                    Some(Out::Any(Any::Buffer(events[0].1.clone())))
+                );
+            }
+        }
     }
 
     #[test]
