@@ -52,11 +52,12 @@ pub(crate) fn common_slide_data(
     let background = common
         .and_then(|value| value.child("bg"))
         .and_then(parse_background);
-    let shapes = if let Some(tree) = common.and_then(|value| value.child("spTree")) {
+    let mut shapes = if let Some(tree) = common.and_then(|value| value.child("spTree")) {
         parse_shape_children(tree, relationships, part, budget)?
     } else {
         Vec::new()
     };
+    resolve_group_fill(&mut shapes, None);
     Ok(CommonSlideData {
         name,
         background,
@@ -263,7 +264,7 @@ fn parse_group(
         .as_ref()
         .filter(|fill| fill.fill_type != GROUP_FILL)
     {
-        resolve_group_fill(&mut children, fill);
+        resolve_group_fill(&mut children, Some(fill));
     }
     Ok(GroupShape {
         base: parse_base(
@@ -562,7 +563,7 @@ fn guide_operand(token: &str, values: &BTreeMap<String, GuideValue>) -> Option<G
 
 fn parse_background(element: &XmlElement) -> Option<ShapeFill> {
     if let Some(properties) = element.child("bgPr") {
-        return parse_fill(properties);
+        return parse_fill(properties).filter(|fill| fill.fill_type != GROUP_FILL);
     }
     element.child("bgRef").map(|reference| ShapeFill {
         fill_type: "theme".to_owned(),
@@ -596,7 +597,7 @@ fn parse_fill(element: &XmlElement) -> Option<ShapeFill> {
 
 /// Marker left by `<a:grpFill/>`: this shape takes the fill of the group that contains it.
 /// It survives until an ancestor group resolves it, so a group nested inside a filled group
-/// needs no second pass.
+/// needs no second pass; the tree root clears whatever is left so no consumer ever sees it.
 const GROUP_FILL: &str = "group";
 
 fn fill_slot(node: &mut ShapeNode) -> Option<&mut Option<ShapeFill>> {
@@ -607,18 +608,18 @@ fn fill_slot(node: &mut ShapeNode) -> Option<&mut Option<ShapeFill>> {
     }
 }
 
-/// Hand `fill` to every descendant still waiting on `<a:grpFill/>`. Groups resolve their own
-/// children first, so a nested group that declares a fill has already claimed its subtree and
-/// only the shapes still carrying the marker are touched here.
-fn resolve_group_fill(children: &mut [ShapeNode], fill: &ShapeFill) {
+/// Hand `fill` to every descendant still waiting on `<a:grpFill/>`, or clear the marker when
+/// there is no group left to inherit from. Groups resolve their own children first, so a nested
+/// group that declares a fill has already claimed its subtree and only the shapes still carrying
+/// the marker are touched here.
+fn resolve_group_fill(children: &mut [ShapeNode], fill: Option<&ShapeFill>) {
     for child in children {
-        if let Some(slot) = fill_slot(child) {
-            if slot
+        if let Some(slot) = fill_slot(child)
+            && slot
                 .as_ref()
                 .is_some_and(|current| current.fill_type == GROUP_FILL)
-            {
-                *slot = Some(fill.clone());
-            }
+        {
+            *slot = fill.cloned();
         }
         if let ShapeNode::Group(group) = child {
             resolve_group_fill(&mut group.children, fill);
@@ -1043,6 +1044,32 @@ mod tests {
             nearest.color.as_ref().unwrap().rgb.as_deref(),
             Some("FF0000")
         );
+    }
+
+    #[test]
+    fn a_group_fill_with_no_group_to_inherit_from_is_no_fill() {
+        let limits = ParseLimits::default();
+        let mut budget = ParseBudget::new(&limits);
+        let root = parse_xml(
+            br#"<p:sld><p:cSld><p:bg><p:bgPr><a:grpFill/></p:bgPr></p:bg><p:spTree><p:sp><p:nvSpPr><p:cNvPr id="2" name="Title"/><p:nvPr><p:ph type="title"/></p:nvPr></p:nvSpPr><p:spPr><a:grpFill/></p:spPr></p:sp><p:grpSp><p:nvGrpSpPr><p:cNvPr id="3" name="Unfilled"/></p:nvGrpSpPr><p:grpSpPr><a:grpFill/></p:grpSpPr><p:pic><p:nvPicPr><p:cNvPr id="4" name="Nested"/></p:nvPicPr><p:spPr><a:grpFill/></p:spPr></p:pic></p:grpSp></p:spTree></p:cSld></p:sld>"#,
+            "ppt/slides/slide1.xml",
+            &mut budget,
+        )
+        .unwrap();
+        let data = common_slide_data(&root, &[], "ppt/slides/slide1.xml", &mut budget).unwrap();
+
+        assert_eq!(data.background, None);
+        let ShapeNode::Shape(placeholder) = &data.shapes[0] else {
+            panic!("expected a shape");
+        };
+        assert_eq!(placeholder.fill, None);
+        let ShapeNode::Group(group) = &data.shapes[1] else {
+            panic!("expected a group");
+        };
+        let ShapeNode::Picture(nested) = &group.children[0] else {
+            panic!("expected a picture");
+        };
+        assert_eq!(nested.fill, None);
     }
 
     #[test]
