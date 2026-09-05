@@ -2,21 +2,22 @@ use std::collections::{BTreeMap, HashMap, HashSet};
 
 use ooxml_drawingml::chart::PlotRect;
 use ooxml_drawingml::{
-    ShapeFill, ShapeOutline, Theme, preset_geometry_to_path, resolve_color_value_to_hex_with_theme,
-    resolve_theme_font_ref,
+    ColorValue, ShapeFill, ShapeOutline, Theme, preset_geometry_to_path,
+    resolve_color_value_to_hex_with_theme, resolve_color_value_to_rgba_hex, resolve_theme_font_ref,
 };
 use ooxml_text::{CompatFlags, FontId, FontStore, break_opportunities, shape, single_line_box};
 use pptx_edit::{DeckSnapshot, ShapeKind, ShapeSnapshot, StorySnapshot, TextStyle};
 use pptx_parse::{
-    ChartSpace, GraphicFrameData, ParagraphProperties, Placeholder, PptxPackage, RunProperties,
-    ShapeNode, ShapeTransform, Slide, SlideLayout, SlideMaster, TextAutofit, TextBody,
+    ChartSpace, GraphicFrameData, ParagraphProperties, Picture, PictureCrop, Placeholder,
+    PptxPackage, RunProperties, ShapeNode, ShapeTransform, Slide, SlideLayout, SlideMaster,
+    TextAutofit, TextBody,
 };
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
 use crate::chart::{ChartFrame, ChartText, chart_primitive};
 use crate::{
-    CONTRACT_VERSION, CaretStop, GradientStop, GradientType, Paint, PositionedGlyph,
+    CONTRACT_VERSION, CaretStop, GradientStop, GradientType, ImageCrop, Paint, PositionedGlyph,
     PositionedTextLine, PositionedTextRun, Primitive, Stroke, SurfaceDisplayList, TextAlign,
     TextAnchor, TextParagraph, TextRun, Transform,
 };
@@ -423,6 +424,7 @@ impl<'a> LayoutBuilder<'a> {
                 });
             }
             ShapeKind::Picture => {
+                let source = picture_source(original);
                 self.primitives.push(Primitive::Image {
                     object_id: shape.source_id,
                     shape_id: Some(stable_id.clone()),
@@ -432,6 +434,10 @@ impl<'a> LayoutBuilder<'a> {
                     w: rect.w,
                     h: rect.h,
                     asset_id: shape.media_part_path.clone(),
+                    crop: source
+                        .map(|value| image_crop(&value.crop))
+                        .unwrap_or_default(),
+                    path: source.and_then(|value| picture_mask(value, rect)),
                     stroke: outline,
                     transform,
                 });
@@ -541,6 +547,8 @@ impl<'a> LayoutBuilder<'a> {
                     w: rect.w,
                     h: rect.h,
                     asset_id: value.media_part_path.clone(),
+                    crop: image_crop(&value.crop),
+                    path: picture_mask(value, rect),
                     stroke: value
                         .outline
                         .as_ref()
@@ -1988,6 +1996,15 @@ fn resolved_transform_value(
     }
 }
 
+/// A fill or stroke colour, widened to `#RRGGBBAA` only when it is actually translucent.
+fn resolve_paint_color(color: Option<&ColorValue>, theme: &Theme) -> Option<String> {
+    let rgba = resolve_color_value_to_rgba_hex(color, Some(theme))?;
+    match rgba.strip_suffix("FF") {
+        Some(opaque) if rgba.len() == 9 => Some(opaque.to_owned()),
+        _ => Some(rgba),
+    }
+}
+
 fn paint(fill: &ShapeFill, theme: &Theme) -> Option<Paint> {
     if fill.fill_type == "none" {
         return None;
@@ -2005,7 +2022,7 @@ fn paint(fill: &ShapeFill, theme: &Theme) -> Option<Paint> {
             .filter_map(|stop| {
                 Some(GradientStop {
                     position: (stop.position as f32 / 100_000.0).clamp(0.0, 1.0),
-                    color: resolve_color_value_to_hex_with_theme(Some(&stop.color), Some(theme))?,
+                    color: resolve_paint_color(Some(&stop.color), theme)?,
                 })
             })
             .collect::<Vec<_>>();
@@ -2017,12 +2034,11 @@ fn paint(fill: &ShapeFill, theme: &Theme) -> Option<Paint> {
             });
         }
     }
-    resolve_color_value_to_hex_with_theme(fill.color.as_ref(), Some(theme))
-        .map(|color| Paint::Solid { color })
+    resolve_paint_color(fill.color.as_ref(), theme).map(|color| Paint::Solid { color })
 }
 
 fn stroke(outline: &ShapeOutline, theme: &Theme) -> Option<Stroke> {
-    let color = resolve_color_value_to_hex_with_theme(outline.color.as_ref(), Some(theme))?;
+    let color = resolve_paint_color(outline.color.as_ref(), theme)?;
     Some(Stroke {
         color,
         width: outline
@@ -2035,6 +2051,47 @@ fn stroke(outline: &ShapeOutline, theme: &Theme) -> Option<Stroke> {
             .as_deref()
             .is_some_and(|style| style != "solid"),
     })
+}
+
+/// Looks up a snapshot picture's parsed source.
+fn picture_source(shape: Option<&ShapeNode>) -> Option<&Picture> {
+    match shape? {
+        ShapeNode::Picture(picture) => Some(picture),
+        _ => None,
+    }
+}
+
+/// Clamps outsets and discards empty crops.
+fn image_crop(crop: &PictureCrop) -> ImageCrop {
+    let fraction = |value: i32| (value as f32 / 100_000.0).clamp(0.0, 1.0);
+    let cropped = ImageCrop {
+        left: fraction(crop.left),
+        top: fraction(crop.top),
+        right: fraction(crop.right),
+        bottom: fraction(crop.bottom),
+    };
+    let (kept_x, kept_y) = cropped.kept();
+    if kept_x <= 0.0 || kept_y <= 0.0 {
+        ImageCrop::default()
+    } else {
+        cropped
+    }
+}
+
+/// Resolves a picture's nonrectangular preset mask.
+fn picture_mask(
+    picture: &Picture,
+    rect: PxRect,
+) -> Option<Vec<ooxml_drawingml::GeometryPathCommand>> {
+    if picture.geometry.is_empty() || picture.geometry == "rect" || rect.h <= 0.0 {
+        return None;
+    }
+    let path = geometry_path(
+        &picture.geometry,
+        &picture.adjust_values,
+        f64::from(rect.w) / f64::from(rect.h),
+    );
+    (!path.is_empty()).then_some(path)
 }
 
 fn geometry_path(
@@ -2105,12 +2162,148 @@ fn utf16_len(value: &str) -> u32 {
 #[cfg(test)]
 mod tests {
     use pptx_edit::{DeckSession, EditCtx};
+    use pptx_parse::ShapeBase;
 
     use super::*;
 
     const FIXTURE: &[u8] = include_bytes!("../../../apps/demo/public/betteroffice-demo.pptx");
     const CHART_FIXTURE: &[u8] = include_bytes!("../../pptx-parse/tests/fixtures/chart-deck.pptx");
     const FONT: &[u8] = include_bytes!("../../ooxml-text/tests/fonts/LiberationSans-Regular.ttf");
+
+    #[test]
+    fn a_source_crop_converts_to_fractions_and_refuses_what_cannot_be_drawn() {
+        assert_eq!(
+            image_crop(&PictureCrop {
+                left: 0,
+                top: 251,
+                right: 0,
+                bottom: 16_720,
+            }),
+            ImageCrop {
+                left: 0.0,
+                top: 0.002_51,
+                right: 0.0,
+                bottom: 0.167_2,
+            }
+        );
+        assert_eq!(
+            image_crop(&PictureCrop {
+                left: -5_000,
+                right: 20_000,
+                ..PictureCrop::default()
+            }),
+            ImageCrop {
+                right: 0.2,
+                ..ImageCrop::default()
+            }
+        );
+        assert_eq!(
+            image_crop(&PictureCrop {
+                left: 60_000,
+                right: 60_000,
+                ..PictureCrop::default()
+            }),
+            ImageCrop::default()
+        );
+    }
+
+    #[test]
+    fn only_a_picture_with_its_own_geometry_gets_a_mask() {
+        let mut picture = Picture {
+            base: ShapeBase {
+                id: 1,
+                name: "Photo".to_owned(),
+                description: None,
+                hidden: false,
+                placeholder: None,
+                transform: ShapeTransform::default(),
+            },
+            relationship_id: None,
+            media_part_path: None,
+            crop: PictureCrop::default(),
+            geometry: "rect".to_owned(),
+            adjust_values: BTreeMap::new(),
+            fill: None,
+            outline: None,
+        };
+        let rect = PxRect {
+            x: 0.0,
+            y: 0.0,
+            w: 100.0,
+            h: 50.0,
+        };
+        assert!(picture_mask(&picture, rect).is_none());
+        picture.geometry = "ellipse".to_owned();
+        let path = picture_mask(&picture, rect).unwrap();
+        assert_eq!(path.len(), 6);
+        assert_eq!(
+            path[0],
+            ooxml_drawingml::GeometryPathCommand::Move { x: 1.0, y: 0.5 }
+        );
+        assert!(
+            path[1..5].iter().all(|command| matches!(
+                command,
+                ooxml_drawingml::GeometryPathCommand::Cubic { .. }
+            ))
+        );
+        assert_eq!(path[5], ooxml_drawingml::GeometryPathCommand::Close);
+    }
+
+    #[test]
+    fn a_fixture_picture_keeps_its_crop_mask_and_outline_through_layout() {
+        let session = DeckSession::open(
+            include_bytes!("../tests/fixtures/picture-crop-mask.pptx"),
+            288,
+        )
+        .unwrap();
+        let rendered = renderer()
+            .layout_slide(session.package(), &session.snapshot().unwrap(), 0)
+            .unwrap();
+        let image = rendered
+            .display_list
+            .primitives
+            .iter()
+            .find(|primitive| matches!(primitive, Primitive::Image { object_id: 90, .. }))
+            .unwrap();
+        let Primitive::Image {
+            x,
+            y,
+            w,
+            h,
+            crop,
+            path,
+            stroke,
+            ..
+        } = image
+        else {
+            unreachable!()
+        };
+        assert_eq!((*x, *y, *w, *h), (100.0, 50.0, 200.0, 100.0));
+        assert_eq!(
+            *crop,
+            ImageCrop {
+                left: 0.1,
+                top: 0.2,
+                right: 0.3,
+                bottom: 0.1
+            }
+        );
+        let path = path.as_ref().unwrap();
+        assert_eq!(path.len(), 6);
+        assert_eq!(
+            path[0],
+            ooxml_drawingml::GeometryPathCommand::Move { x: 1.0, y: 0.5 }
+        );
+        assert!(
+            path[1..5].iter().all(|command| matches!(
+                command,
+                ooxml_drawingml::GeometryPathCommand::Cubic { .. }
+            ))
+        );
+        let stroke = stroke.as_ref().unwrap();
+        assert_eq!(stroke.width, 2.0);
+        assert_eq!(stroke.color, "#FF00FF");
+    }
 
     fn renderer() -> SlideRenderer {
         let mut renderer = SlideRenderer::new();
@@ -2282,6 +2475,92 @@ mod tests {
             assert_eq!(parse_align(Some(alignment)), TextAlign::Justify);
             assert!(!is_full_justification(Some(alignment)));
         }
+    }
+
+    #[test]
+    fn a_translucent_fill_carries_its_alpha_into_the_display_list() {
+        let theme = Theme::default();
+        let translucent = ShapeFill {
+            fill_type: "solid".to_owned(),
+            color: Some(ColorValue {
+                rgb: Some("112233".to_owned()),
+                alpha: Some(0.5),
+                ..ColorValue::default()
+            }),
+            gradient: None,
+        };
+        assert_eq!(
+            paint(&translucent, &theme),
+            Some(Paint::Solid {
+                color: "#11223380".to_owned()
+            })
+        );
+
+        let opaque = ShapeFill {
+            color: Some(ColorValue {
+                rgb: Some("112233".to_owned()),
+                ..ColorValue::default()
+            }),
+            ..translucent
+        };
+        assert_eq!(
+            paint(&opaque, &theme),
+            Some(Paint::Solid {
+                color: "#112233".to_owned()
+            })
+        );
+    }
+
+    #[test]
+    fn a_translucent_gradient_stop_and_outline_carry_their_alpha() {
+        let theme = Theme::default();
+        let color = |rgb: &str, alpha: Option<f64>| ColorValue {
+            rgb: Some(rgb.to_owned()),
+            alpha,
+            ..ColorValue::default()
+        };
+
+        let gradient = ShapeFill {
+            fill_type: "gradient".to_owned(),
+            color: None,
+            gradient: Some(ooxml_drawingml::GradientFill {
+                gradient_type: "linear".to_owned(),
+                angle: None,
+                stops: vec![
+                    ooxml_drawingml::GradientStop {
+                        position: 0.0,
+                        color: color("112233", Some(0.5)),
+                    },
+                    ooxml_drawingml::GradientStop {
+                        position: 100_000.0,
+                        color: color("445566", None),
+                    },
+                ],
+            }),
+        };
+        let Some(Paint::Gradient { stops, .. }) = paint(&gradient, &theme) else {
+            panic!("expected a gradient paint");
+        };
+        assert_eq!(
+            stops
+                .iter()
+                .map(|stop| stop.color.as_str())
+                .collect::<Vec<_>>(),
+            ["#11223380", "#445566"]
+        );
+
+        let outline = |alpha| ShapeOutline {
+            color: Some(color("112233", alpha)),
+            ..ShapeOutline::default()
+        };
+        assert_eq!(
+            stroke(&outline(Some(0.5)), &theme).map(|stroke| stroke.color),
+            Some("#11223380".to_owned())
+        );
+        assert_eq!(
+            stroke(&outline(None), &theme).map(|stroke| stroke.color),
+            Some("#112233".to_owned())
+        );
     }
 
     #[test]
