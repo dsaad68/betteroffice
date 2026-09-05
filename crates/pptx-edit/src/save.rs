@@ -16,8 +16,7 @@ use crate::{
     ShapeKind, ShapeSnapshot, SlideSnapshot, StorySnapshot, TextRunSnapshot, doc_with_client_id,
 };
 
-/// The parsed parts a slide's shapes may inherit geometry from, and the parsed shape tree
-/// their stored ordinals are checked against.
+/// Source shapes and inherited geometry.
 struct SlideContext<'a> {
     layout: Option<&'a SlideLayout>,
     master: Option<&'a SlideMaster>,
@@ -178,10 +177,7 @@ fn shape_writes(
     Ok(writes)
 }
 
-/// A stored id's ordinal, checked against the parsed shape it claims to name. An update seeded
-/// by an earlier parse of the same file can hold ordinals that now address a different element
-/// — a connector the parser once skipped shifts every shape after it — and writing through one
-/// of those would patch the wrong shape with no error.
+/// Checks the source identity before resolving an ordinal.
 fn addressed_source_index(shape: &ShapeSnapshot, source: &[ShapeNode]) -> EditResult<usize> {
     let index = source_index(&shape.id)?;
     match source.get(index) {
@@ -194,7 +190,7 @@ fn addressed_source_index(shape: &ShapeSnapshot, source: &[ShapeNode]) -> EditRe
     }
 }
 
-fn group_children<'a>(source: &'a [ShapeNode], index: usize) -> &'a [ShapeNode] {
+fn group_children(source: &[ShapeNode], index: usize) -> &[ShapeNode] {
     match source.get(index) {
         Some(ShapeNode::Group(group)) => &group.children,
         _ => &[],

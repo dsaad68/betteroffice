@@ -20,9 +20,9 @@ use crate::{
     ShapeStrokeReceipt, SlideReceipt, SlideSnapshot, TransformReceipt,
 };
 
-const SCHEMA_VERSION: f64 = 2.0;
+const SCHEMA_VERSION: f64 = 3.0;
 /// Versions [`migrate_doc`] can carry forward. Anything else is unreadable.
-const MIGRATABLE_SCHEMA_VERSIONS: [f64; 2] = [1.0, SCHEMA_VERSION];
+const MIGRATABLE_SCHEMA_VERSIONS: [f64; 3] = [1.0, 2.0, SCHEMA_VERSION];
 const MAX_GEOMETRY: i64 = 1_000_000_000_000_000;
 const MAX_SHAPE_DEPTH: usize = 128;
 const EMU_PER_POINT: f64 = 12_700.0;
@@ -688,8 +688,7 @@ pub(crate) fn fingerprint_from_doc(doc: &Doc) -> EditResult<String> {
         .ok_or_else(|| EditError::InvalidState("missing fingerprint".to_owned()))
 }
 
-/// Rewrites a hydrated older document into the current schema and stamps it, so
-/// the next snapshot this session writes is a v2 one.
+/// Upgrades metadata while preserving legacy source ordinals.
 pub(crate) fn migrate_doc(doc: &Doc) -> EditResult<()> {
     let package = {
         let txn = doc.transact();

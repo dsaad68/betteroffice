@@ -658,7 +658,10 @@ fn an_update_seeded_by_a_different_parse_refuses_to_save_through_stale_ordinals(
         .move_shape(&context(), &slide_id, &shape_id, 1_000, 2_000)
         .unwrap();
 
-    assert!(matches!(reattached.save(), Err(EditError::Write(_))));
+    assert!(matches!(
+        reattached.save(),
+        Err(EditError::Write(message)) if message.contains("no longer addresses source shape")
+    ));
 }
 
 #[test]
