@@ -207,7 +207,7 @@ impl SlideRenderer {
             shape_count: 0,
             line_count: 0,
             chart_budget: MAX_CHART_PRIMITIVES,
-            slide_number: slide_index + 1,
+            slide_number: i64::from(package.presentation.first_slide_num) + slide_index as i64,
         };
         let root_space = Space::root();
         let show_master = parsed_slide.is_none_or(|slide| slide.show_master_shapes)
@@ -349,7 +349,7 @@ struct LayoutBuilder<'a> {
     line_count: usize,
     chart_budget: usize,
     /// The number a `slidenum` field resolves to on this slide.
-    slide_number: usize,
+    slide_number: i64,
 }
 
 impl<'a> LayoutBuilder<'a> {
@@ -917,7 +917,7 @@ fn content_from_story(story: &StorySnapshot) -> TextContent {
 /// A `<a:fld>` carries PowerPoint's cached rendering of the field. For a field on a master or
 /// layout that cache is the authoring placeholder, so it must be replaced rather than copied;
 /// on a slide PowerPoint usually caches the real number, and substituting agrees with it.
-fn field_text(run: &pptx_parse::TextRun, slide_number: usize) -> String {
+fn field_text(run: &pptx_parse::TextRun, slide_number: i64) -> String {
     match run.field_type.as_deref() {
         Some("slidenum") => slide_number.to_string(),
         _ => run.text.clone(),
@@ -928,7 +928,7 @@ fn content_from_body(
     story_id: &str,
     body: &TextBody,
     theme: &Theme,
-    slide_number: usize,
+    slide_number: i64,
 ) -> TextContent {
     TextContent {
         story_id: format!("inherited:{story_id}"),
@@ -2229,6 +2229,8 @@ mod tests {
 
     const FIXTURE: &[u8] = include_bytes!("../../../apps/demo/public/betteroffice-demo.pptx");
     const CHART_FIXTURE: &[u8] = include_bytes!("../../pptx-parse/tests/fixtures/chart-deck.pptx");
+    const NUMBERED_FIXTURE: &[u8] =
+        include_bytes!("../../pptx-parse/tests/fixtures/slide-number-fields.pptx");
     const FONT: &[u8] = include_bytes!("../../ooxml-text/tests/fonts/LiberationSans-Regular.ttf");
     const BOLD_FONT: &[u8] =
         include_bytes!("../../../packages/fonts/assets/LiberationSans-Bold.ttf");
@@ -2782,6 +2784,79 @@ mod tests {
         );
         // Ordinary text is untouched.
         assert_eq!(field_text(&run(None, "Chapter 3"), 7), "Chapter 3");
+    }
+
+    #[test]
+    fn slide_number_fields_count_from_first_slide_num_through_the_edit_snapshot() {
+        let package = pptx_parse::parse_pptx(NUMBERED_FIXTURE).unwrap();
+        assert_eq!(package.presentation.first_slide_num, 10);
+        let session = DeckSession::open(NUMBERED_FIXTURE, 8_006).unwrap();
+        let deck = session.snapshot().unwrap();
+        let master = &package.masters[0];
+        let layout = &package.layouts[0];
+        let master_probe = format!("master:{}:{}", master.part_path, master.shapes.len() - 1);
+        let layout_probe = format!("layout:{}:{}", layout.part_path, layout.shapes.len() - 1);
+        // The edit layer keeps a slide's own field as the cached story text.
+        let slide_probe = deck.slides[1].shapes.last().unwrap();
+        assert_eq!(slide_probe.text_stories[0].plain_text(), "11");
+
+        let run = |text: &str, size: f32, emphasis: bool, color: &str| TextRun {
+            text: text.to_owned(),
+            font_family: "Arial".to_owned(),
+            font_size_pt: size,
+            bold: emphasis,
+            italic: emphasis,
+            underline: emphasis,
+            color: color.to_owned(),
+        };
+        let renderer = renderer();
+        // Slide 1 is hidden and still takes a number.
+        for (index, number) in ["10", "11", "12"].into_iter().enumerate() {
+            let rendered = renderer.layout_slide(&package, &deck, index).unwrap();
+            let (runs, line) = drawn_text(&rendered, &master_probe);
+            assert_eq!(
+                runs.iter().map(|run| run.text.as_str()).collect::<Vec<_>>(),
+                [number, "|", "CACHED-DATE"]
+            );
+            assert_eq!(runs[0], run(number, 23.0, true, "#FF0066"));
+            assert_eq!(runs[2], run("CACHED-DATE", 13.0, false, "#00AA55"));
+            assert_eq!(line, format!("{number}|CACHED-DATE"));
+            let (runs, line) = drawn_text(&rendered, &layout_probe);
+            assert_eq!(runs, [run(number, 17.0, false, "#1122CC")]);
+            assert_eq!(line, number);
+            if index == 1 {
+                let (runs, line) = drawn_text(&rendered, &slide_probe.id);
+                assert_eq!(runs, [run("11", 19.0, false, "#AA5500")]);
+                assert_eq!(line, "11");
+            }
+        }
+    }
+
+    /// The paragraph runs and shaped line text of the text box drawn for `shape_id`.
+    fn drawn_text(rendered: &RenderedSlide, shape_id: &str) -> (Vec<TextRun>, String) {
+        rendered
+            .display_list
+            .primitives
+            .iter()
+            .find_map(|primitive| match primitive {
+                Primitive::TextBox {
+                    shape_id: Some(id),
+                    paragraphs,
+                    lines,
+                    ..
+                } if id == shape_id => Some((
+                    paragraphs
+                        .iter()
+                        .flat_map(|paragraph| paragraph.runs.iter().cloned())
+                        .collect(),
+                    lines
+                        .iter()
+                        .flat_map(|line| line.runs.iter().map(|run| run.text.as_str()))
+                        .collect(),
+                )),
+                _ => None,
+            })
+            .unwrap_or_else(|| panic!("{shape_id} was not drawn"))
     }
 
     #[test]

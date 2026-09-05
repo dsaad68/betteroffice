@@ -6,6 +6,8 @@ use pptx_edit::{
 };
 
 const FIXTURE: &[u8] = include_bytes!("../../../apps/demo/public/betteroffice-demo.pptx");
+const NUMBERED_FIXTURE: &[u8] =
+    include_bytes!("../../pptx-parse/tests/fixtures/slide-number-fields.pptx");
 
 fn open_fixture() -> DeckSession {
     DeckSession::open(FIXTURE, 7).unwrap()
@@ -75,6 +77,13 @@ fn shape_stories(shape: &ShapeSnapshot) -> Vec<&pptx_edit::StorySnapshot> {
 fn an_unedited_deck_saves_part_identical() {
     let session = open_fixture();
     assert_eq!(parts(&session.save().unwrap()), parts(FIXTURE));
+}
+
+#[test]
+fn an_unedited_deck_numbered_from_ten_saves_part_identical() {
+    let session = DeckSession::open(NUMBERED_FIXTURE, 7).unwrap();
+    assert_eq!(session.package().presentation.first_slide_num, 10);
+    assert_eq!(parts(&session.save().unwrap()), parts(NUMBERED_FIXTURE));
 }
 
 #[test]

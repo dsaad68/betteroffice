@@ -28,6 +28,10 @@ fn released_v1_snapshot_migrates_and_round_trips_as_v3() {
         package_json(&migrated).contains("\"charts\""),
         "the migrated package must carry the v2 chart field"
     );
+    assert!(
+        package_json(&migrated).contains("\"firstSlideNum\":1"),
+        "the migrated package must carry the first slide number"
+    );
 
     let reopened = DeckSession::open_from_update(&migrated, 902).unwrap();
     assert_v1_content(&reopened);
@@ -174,6 +178,7 @@ fn assert_v1_content(session: &DeckSession) {
     let snapshot = session.snapshot().unwrap();
     assert_eq!(snapshot.width_emu, 12_192_000);
     assert_eq!(snapshot.height_emu, 6_858_000);
+    assert_eq!(session.package().presentation.first_slide_num, 1);
     assert_eq!(snapshot.slides.len(), 3);
     assert_eq!(snapshot.slides[0].id, "slide:0:256");
     assert!(

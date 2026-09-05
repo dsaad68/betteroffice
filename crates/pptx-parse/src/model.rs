@@ -89,8 +89,15 @@ pub struct Presentation {
     pub part_path: String,
     pub width_emu: i64,
     pub height_emu: i64,
+    /// `p:presentation/@firstSlideNum`. Absent from packages serialized before it was parsed.
+    #[serde(default = "default_first_slide_num")]
+    pub first_slide_num: i32,
     pub slides: Vec<SlideReference>,
     pub master_part_paths: Vec<String>,
+}
+
+fn default_first_slide_num() -> i32 {
+    1
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
