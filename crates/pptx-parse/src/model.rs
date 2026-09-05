@@ -1,6 +1,7 @@
 use std::collections::BTreeMap;
 
-use ooxml_drawingml::{ColorValue, ShapeFill, ShapeOutline, Theme};
+pub use ooxml_drawingml::ShapeStyle;
+use ooxml_drawingml::{ColorValue, ShapeFill, ShapeOutline, Theme, ThemeFormatScheme};
 use serde::{Deserialize, Serialize};
 
 use crate::relationships::Relationship;
@@ -155,6 +156,9 @@ pub struct SlideMaster {
 pub struct ThemePart {
     pub part_path: String,
     pub theme: Theme,
+    /// Absent from packages serialized before `a:fmtScheme` was parsed.
+    #[serde(default, skip_serializing_if = "ThemeFormatScheme::is_empty")]
+    pub format_scheme: ThemeFormatScheme,
 }
 
 /// A chart part resolved against one referenced presentation theme.
@@ -240,7 +244,7 @@ pub struct Shape {
     #[serde(flatten)]
     pub base: ShapeBase,
     pub geometry: String,
-    /// `p:style` text defaults.
+    /// Theme formatting and text defaults.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub style: Option<Box<ShapeStyle>>,
     #[serde(default)]
@@ -248,15 +252,6 @@ pub struct Shape {
     pub fill: Option<ShapeFill>,
     pub outline: Option<ShapeOutline>,
     pub text: Option<TextBody>,
-}
-
-/// Shape text defaults.
-#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct ShapeStyle {
-    /// `a:fontRef` colour.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub font_color: Option<ColorValue>,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -274,6 +269,8 @@ pub struct Picture {
     pub adjust_values: BTreeMap<String, f64>,
     pub fill: Option<ShapeFill>,
     pub outline: Option<ShapeOutline>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub style: Option<Box<ShapeStyle>>,
 }
 
 fn rect_geometry() -> String {

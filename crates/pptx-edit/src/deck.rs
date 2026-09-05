@@ -20,9 +20,9 @@ use crate::{
     ShapeStrokeReceipt, SlideReceipt, SlideSnapshot, TransformReceipt,
 };
 
-const SCHEMA_VERSION: f64 = 4.0;
+const SCHEMA_VERSION: f64 = 5.0;
 /// Versions [`migrate_doc`] can carry forward. Anything else is unreadable.
-const MIGRATABLE_SCHEMA_VERSIONS: [f64; 4] = [1.0, 2.0, 3.0, SCHEMA_VERSION];
+const MIGRATABLE_SCHEMA_VERSIONS: [f64; 5] = [1.0, 2.0, 3.0, 4.0, SCHEMA_VERSION];
 const MAX_GEOMETRY: i64 = 1_000_000_000_000_000;
 const MAX_SHAPE_DEPTH: usize = 128;
 const EMU_PER_POINT: f64 = 12_700.0;
@@ -698,8 +698,11 @@ pub(crate) fn migrate_doc(doc: &Doc) -> EditResult<()> {
     if version < 3.0 {
         migrate_doc_to_v3(doc)?;
     }
-    if version < SCHEMA_VERSION {
+    if version < 4.0 {
         migrate_doc_to_v4(doc)?;
+    }
+    if version < 5.0 {
+        migrate_doc_to_v5(doc)?;
     }
     Ok(())
 }
@@ -729,6 +732,26 @@ fn migrate_doc_to_v3(doc: &Doc) -> EditResult<()> {
 
 /// Persists slide numbering in schema 4.
 fn migrate_doc_to_v4(doc: &Doc) -> EditResult<()> {
+    let package = {
+        let txn = doc.transact();
+        let meta = required_map(&txn, META)?;
+        package_from_meta(&meta, &txn)?
+    };
+    let package_json =
+        serde_json::to_vec(&package).map_err(|error| EditError::Json(error.to_string()))?;
+    let mut txn = doc.transact_mut_with(MIGRATE_ORIGIN);
+    let meta = required_map(&txn, META)?;
+    meta.insert(
+        &mut txn,
+        "packageJson",
+        Any::Buffer(Arc::from(package_json)),
+    );
+    meta.insert(&mut txn, "schemaVersion", 4.0);
+    Ok(())
+}
+
+/// Persists theme formatting in schema 5.
+fn migrate_doc_to_v5(doc: &Doc) -> EditResult<()> {
     let package = {
         let txn = doc.transact();
         let meta = required_map(&txn, META)?;
@@ -1253,7 +1276,7 @@ mod tests {
     }
 
     #[test]
-    fn legacy_migrations_commit_v3_before_v4() {
+    fn legacy_migrations_commit_v3_then_v4_then_v5() {
         use std::sync::Mutex;
         use yrs::Update;
         use yrs::updates::decoder::Decode;
@@ -1262,9 +1285,11 @@ mod tests {
         const V2: &[u8] = include_bytes!("../tests/fixtures/deck-schema-v2-connectors.update.bin");
         const V3: &[u8] =
             include_bytes!("../tests/fixtures/deck-schema-v3-legacy-connectors.update.bin");
-        for (update, expected_versions) in
-            [(V1, vec![3.0, 4.0]), (V2, vec![3.0, 4.0]), (V3, vec![4.0])]
-        {
+        for (update, expected_versions) in [
+            (V1, vec![3.0, 4.0, 5.0]),
+            (V2, vec![3.0, 4.0, 5.0]),
+            (V3, vec![4.0, 5.0]),
+        ] {
             let doc = crate::doc_with_client_id(920);
             doc.transact_mut()
                 .apply_update(Update::decode_v1(update).unwrap())
@@ -1317,6 +1342,77 @@ mod tests {
                     Some(Out::Any(Any::Buffer(events[0].1.clone())))
                 );
             }
+        }
+    }
+
+    #[test]
+    fn main_generated_snapshots_commit_each_migration_in_order() {
+        use std::sync::Mutex;
+        use yrs::Update;
+        use yrs::updates::decoder::Decode;
+
+        const V2: &[u8] = include_bytes!("../tests/fixtures/deck-schema-v2.update.bin");
+        const V4_LEGACY: &[u8] =
+            include_bytes!("../tests/fixtures/deck-schema-v4-legacy-styles.update.bin");
+        const V4_STYLES: &[u8] =
+            include_bytes!("../tests/fixtures/deck-schema-v4-styles.update.bin");
+        const V4_NUMBERED: &[u8] =
+            include_bytes!("../tests/fixtures/deck-schema-v4-slide-number-fields.update.bin");
+
+        for (update, oracle, versions, first_slide_num) in [
+            (V2, V4_LEGACY, vec![3.0, 4.0, 5.0], 1),
+            (V4_STYLES, V4_STYLES, vec![5.0], 1),
+            (V4_NUMBERED, V4_NUMBERED, vec![5.0], 10),
+        ] {
+            let doc = crate::doc_with_client_id(9340);
+            doc.transact_mut()
+                .apply_update(Update::decode_v1(update).unwrap())
+                .unwrap();
+            let main = crate::doc_with_client_id(9341);
+            main.transact_mut()
+                .apply_update(Update::decode_v1(oracle).unwrap())
+                .unwrap();
+            let expected = {
+                let txn = main.transact();
+                let meta = required_map(&txn, META).unwrap();
+                assert_eq!(map_number(&meta, &txn, "schemaVersion"), Some(4.0));
+                meta.get(&txn, "packageJson").unwrap()
+            };
+            let before = snapshot_doc(&doc, &package_from_doc(&doc).unwrap()).unwrap();
+            let observed = Arc::new(Mutex::new(Vec::new()));
+            let events = observed.clone();
+            let _subscription = doc
+                .observe_update_v1(move |txn, _| {
+                    let meta = required_map(txn, META).unwrap();
+                    events.lock().unwrap().push((
+                        map_number(&meta, txn, "schemaVersion").unwrap(),
+                        meta.get(txn, "packageJson").unwrap(),
+                    ));
+                })
+                .unwrap();
+
+            migrate_doc(&doc).unwrap();
+
+            let events = observed.lock().unwrap();
+            assert_eq!(
+                events
+                    .iter()
+                    .map(|(version, _)| *version)
+                    .collect::<Vec<_>>(),
+                versions
+            );
+            for (_, package) in events.iter() {
+                assert_eq!(package, &expected);
+            }
+            let package = package_from_doc(&doc).unwrap();
+            assert_eq!(package.presentation.first_slide_num, first_slide_num);
+            assert_eq!(snapshot_doc(&doc, &package).unwrap(), before);
+            assert!(
+                package
+                    .themes
+                    .iter()
+                    .all(|theme| theme.format_scheme.is_empty())
+            );
         }
     }
 
