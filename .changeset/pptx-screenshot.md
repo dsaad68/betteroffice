@@ -1,5 +1,6 @@
 ---
 "@betteroffice/pptx": minor
+"@betteroffice/python-pptx": minor
 "@betteroffice/rust-crates": minor
 ---
 

@@ -1662,9 +1662,12 @@ function PptxEditorContent({
     })
       .then(async (blob) => {
         const bytes = new Uint8Array(await blob.arrayBuffer());
+        if (handleRef.current !== handle) return;
         downloadBytes(bytes, pngName(fileName, currentSlide), 'image/png');
       })
-      .catch(reportError);
+      .catch((value: unknown) => {
+        if (handleRef.current === handle) reportError(value);
+      });
   };
   const shapeDragDelta =
     dragPreview && dragPreview.shapeId === shapeSelection?.shapeId ? dragPreview.delta : null;
