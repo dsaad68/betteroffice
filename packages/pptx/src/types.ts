@@ -212,9 +212,11 @@ export type Paint =
     };
 
 export interface Stroke {
+  /** Flat colour for consumers that predate `paint`; the gradient's first stop when `paint` is one. */
   color: string;
   width: number;
   dashed?: boolean;
+  paint?: Paint;
 }
 
 export interface PrimitiveTransform {

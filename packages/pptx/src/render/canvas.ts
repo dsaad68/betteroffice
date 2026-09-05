@@ -120,7 +120,7 @@ function paintShape(ctx: CanvasRenderingContext2D, shape: ShapePrimitive): void 
     ctx.fillStyle = paintStyle(ctx, shape.fill, shape.x, shape.y, shape.w, shape.h);
     ctx.fill();
   }
-  if (shape.stroke) strokeCurrentPath(ctx, shape.stroke);
+  if (shape.stroke) strokeCurrentPath(ctx, shape.stroke, shape.x, shape.y, shape.w, shape.h);
 }
 
 function buildPath(
@@ -165,8 +165,15 @@ function buildPath(
   }
 }
 
-function strokeCurrentPath(ctx: CanvasRenderingContext2D, stroke: Stroke): void {
-  ctx.strokeStyle = stroke.color;
+function strokeCurrentPath(
+  ctx: CanvasRenderingContext2D,
+  stroke: Stroke,
+  x: number,
+  y: number,
+  width: number,
+  height: number
+): void {
+  ctx.strokeStyle = stroke.paint ? paintStyle(ctx, stroke.paint, x, y, width, height) : stroke.color;
   ctx.lineWidth = stroke.width;
   ctx.setLineDash(stroke.dashed ? [Math.max(3, stroke.width * 2), Math.max(2, stroke.width)] : []);
   ctx.stroke();
@@ -210,7 +217,7 @@ async function paintImage(
   if (image.stroke) {
     ctx.beginPath();
     ctx.rect(image.x, image.y, image.w, image.h);
-    strokeCurrentPath(ctx, image.stroke);
+    strokeCurrentPath(ctx, image.stroke, image.x, image.y, image.w, image.h);
   }
 }
 

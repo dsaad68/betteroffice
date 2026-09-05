@@ -5,7 +5,7 @@
 use std::collections::{BTreeMap, HashMap, HashSet};
 
 use ooxml_drawingml::{
-    ColorValue, ShapeFill, ShapeOutline, Theme, resolve_color_value_to_hex_with_theme,
+    ColorValue, GradientFill, ShapeFill, ShapeOutline, Theme, resolve_color_value_to_hex_with_theme,
 };
 
 use crate::PptxError;
@@ -1054,46 +1054,48 @@ fn fill_element(
                 .gradient
                 .as_ref()
                 .ok_or_else(|| write_error(part, "gradient fill without stops"))?;
-            let mut stops = XmlElement::new(prefixes.drawing("gsLst"));
-            for stop in &gradient.stops {
-                let color = color_element(&stop.color, prefixes)
-                    .ok_or_else(|| write_error(part, "gradient stop without a color"))?;
-                stops = stops.with_child(
-                    XmlElement::new(prefixes.drawing("gs"))
-                        .with_attribute("pos", format_fixed(stop.position))
-                        .with_child(color),
-                );
-            }
-            let mut element = XmlElement::new(prefixes.drawing("gradFill")).with_child(stops);
-            match gradient.gradient_type.as_str() {
-                "linear" => {
-                    element = element.with_child(
-                        XmlElement::new(prefixes.drawing("lin"))
-                            .with_attribute(
-                                "ang",
-                                format_fixed(gradient.angle.unwrap_or_default() * 60_000.0),
-                            )
-                            .with_attribute("scaled", "1"),
-                    );
-                }
-                kind => {
-                    let path = match kind {
-                        "radial" => "circle",
-                        "rectangular" => "rect",
-                        _ => "shape",
-                    };
-                    element = element.with_child(
-                        XmlElement::new(prefixes.drawing("path")).with_attribute("path", path),
-                    );
-                }
-            }
-            Ok(element)
+            gradient_element(gradient, prefixes)
+                .ok_or_else(|| write_error(part, "gradient stop without a color"))
         }
         other => Err(write_error(
             part,
             format!("unsupported fill type {other:?}"),
         )),
     }
+}
+
+fn gradient_element(gradient: &GradientFill, prefixes: &Prefixes) -> Option<XmlElement> {
+    let mut stops = XmlElement::new(prefixes.drawing("gsLst"));
+    for stop in &gradient.stops {
+        stops = stops.with_child(
+            XmlElement::new(prefixes.drawing("gs"))
+                .with_attribute("pos", format_fixed(stop.position))
+                .with_child(color_element(&stop.color, prefixes)?),
+        );
+    }
+    let mut element = XmlElement::new(prefixes.drawing("gradFill")).with_child(stops);
+    match gradient.gradient_type.as_str() {
+        "linear" => {
+            element = element.with_child(
+                XmlElement::new(prefixes.drawing("lin"))
+                    .with_attribute(
+                        "ang",
+                        format_fixed(gradient.angle.unwrap_or_default() * 60_000.0),
+                    )
+                    .with_attribute("scaled", "1"),
+            );
+        }
+        kind => {
+            let path = match kind {
+                "radial" => "circle",
+                "rectangular" => "rect",
+                _ => "shape",
+            };
+            element = element
+                .with_child(XmlElement::new(prefixes.drawing("path")).with_attribute("path", path));
+        }
+    }
+    Some(element)
 }
 
 fn color_element(color: &ColorValue, prefixes: &Prefixes) -> Option<XmlElement> {
@@ -1193,6 +1195,12 @@ fn outline_element(outline: &ShapeOutline, prefixes: &Prefixes) -> XmlElement {
     {
         element =
             element.with_child(XmlElement::new(prefixes.drawing("solidFill")).with_child(color));
+    } else if let Some(gradient) = outline
+        .gradient
+        .as_ref()
+        .and_then(|gradient| gradient_element(gradient, prefixes))
+    {
+        element = element.with_child(gradient);
     }
     if let Some(style) = &outline.style {
         element = element.with_child(

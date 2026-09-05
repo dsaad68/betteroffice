@@ -2,8 +2,8 @@ use std::collections::{BTreeMap, HashMap, HashSet};
 
 use ooxml_drawingml::chart::PlotRect;
 use ooxml_drawingml::{
-    ShapeFill, ShapeOutline, Theme, preset_geometry_to_path, resolve_color_value_to_hex_with_theme,
-    resolve_theme_font_ref,
+    GradientFill, ShapeFill, ShapeOutline, Theme, preset_geometry_to_path,
+    resolve_color_value_to_hex_with_theme, resolve_theme_font_ref,
 };
 use ooxml_text::{CompatFlags, FontId, FontStore, break_opportunities, shape, single_line_box};
 use pptx_edit::{DeckSnapshot, ShapeKind, ShapeSnapshot, StorySnapshot, TextStyle};
@@ -1980,37 +1980,61 @@ fn paint(fill: &ShapeFill, theme: &Theme) -> Option<Paint> {
     if fill.fill_type == "none" {
         return None;
     }
-    if let Some(gradient) = &fill.gradient {
-        let gradient_type = match gradient.gradient_type.as_str() {
-            "radial" => GradientType::Radial,
-            "rectangular" => GradientType::Rectangular,
-            "path" => GradientType::Path,
-            _ => GradientType::Linear,
-        };
-        let stops = gradient
-            .stops
-            .iter()
-            .filter_map(|stop| {
-                Some(GradientStop {
-                    position: (stop.position as f32 / 100_000.0).clamp(0.0, 1.0),
-                    color: resolve_color_value_to_hex_with_theme(Some(&stop.color), Some(theme))?,
-                })
-            })
-            .collect::<Vec<_>>();
-        if !stops.is_empty() {
-            return Some(Paint::Gradient {
-                gradient_type,
-                angle_deg: gradient.angle.map(|value| value as f32),
-                stops,
-            });
-        }
+    if let Some(paint) = fill
+        .gradient
+        .as_ref()
+        .and_then(|gradient| gradient_paint(gradient, theme))
+    {
+        return Some(paint);
     }
     resolve_color_value_to_hex_with_theme(fill.color.as_ref(), Some(theme))
         .map(|color| Paint::Solid { color })
 }
 
+fn gradient_paint(gradient: &GradientFill, theme: &Theme) -> Option<Paint> {
+    let gradient_type = match gradient.gradient_type.as_str() {
+        "radial" => GradientType::Radial,
+        "rectangular" => GradientType::Rectangular,
+        "path" => GradientType::Path,
+        _ => GradientType::Linear,
+    };
+    let stops = gradient
+        .stops
+        .iter()
+        .filter_map(|stop| {
+            Some(GradientStop {
+                position: (stop.position as f32 / 100_000.0).clamp(0.0, 1.0),
+                color: resolve_color_value_to_hex_with_theme(Some(&stop.color), Some(theme))?,
+            })
+        })
+        .collect::<Vec<_>>();
+    if stops.is_empty() {
+        return None;
+    }
+    Some(Paint::Gradient {
+        gradient_type,
+        angle_deg: gradient.angle.map(|value| value as f32),
+        stops,
+    })
+}
+
 fn stroke(outline: &ShapeOutline, theme: &Theme) -> Option<Stroke> {
-    let color = resolve_color_value_to_hex_with_theme(outline.color.as_ref(), Some(theme))?;
+    let solid = resolve_color_value_to_hex_with_theme(outline.color.as_ref(), Some(theme));
+    // an a:ln carries either a solidFill or a gradFill, so an explicit colour
+    // wins and only an outline that has none falls back to its gradient
+    let paint = match &solid {
+        Some(_) => None,
+        None => outline
+            .gradient
+            .as_ref()
+            .and_then(|gradient| gradient_paint(gradient, theme)),
+    };
+    let color = match (&solid, &paint) {
+        (Some(color), _) => color.clone(),
+        (None, Some(Paint::Gradient { stops, .. })) => stops.first()?.color.clone(),
+        (None, Some(Paint::Solid { color })) => color.clone(),
+        (None, None) => return None,
+    };
     Some(Stroke {
         color,
         width: outline
@@ -2022,6 +2046,7 @@ fn stroke(outline: &ShapeOutline, theme: &Theme) -> Option<Stroke> {
             .style
             .as_deref()
             .is_some_and(|style| style != "solid"),
+        paint,
     })
 }
 
@@ -2098,6 +2123,8 @@ mod tests {
 
     const FIXTURE: &[u8] = include_bytes!("../../../apps/demo/public/betteroffice-demo.pptx");
     const CHART_FIXTURE: &[u8] = include_bytes!("../../pptx-parse/tests/fixtures/chart-deck.pptx");
+    const GRADIENT_OUTLINE_FIXTURE: &[u8] =
+        include_bytes!("../../pptx-parse/tests/fixtures/gradient-outline.pptx");
     const FONT: &[u8] = include_bytes!("../../ooxml-text/tests/fonts/LiberationSans-Regular.ttf");
 
     fn renderer() -> SlideRenderer {
@@ -2547,6 +2574,67 @@ mod tests {
             })
             .unwrap();
         assert!(font_size < 40.0);
+    }
+
+    #[test]
+    fn a_gradient_outline_strokes_with_its_gradient_and_keeps_a_flat_fallback() {
+        let package = pptx_parse::parse_pptx(GRADIENT_OUTLINE_FIXTURE).unwrap();
+        let session = DeckSession::open(GRADIENT_OUTLINE_FIXTURE, 8_010).unwrap();
+        let primitives = renderer()
+            .layout_slide(&package, &session.snapshot().unwrap(), 0)
+            .unwrap()
+            .display_list
+            .primitives;
+        let strokes = primitives
+            .iter()
+            .filter_map(|primitive| match primitive {
+                Primitive::Shape { name, stroke, .. } => Some((name.clone(), stroke.clone()?)),
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+
+        let (_, gradient) = strokes
+            .iter()
+            .find(|(name, _)| name == "Gradient outline rectangle")
+            .expect("the gradient-stroked rectangle must reach the display list");
+        assert_eq!(
+            gradient.paint,
+            Some(Paint::Gradient {
+                gradient_type: GradientType::Linear,
+                angle_deg: Some(0.0),
+                stops: vec![
+                    GradientStop {
+                        position: 0.0,
+                        color: "#C00000".to_owned(),
+                    },
+                    GradientStop {
+                        position: 0.5,
+                        color: "#FFC000".to_owned(),
+                    },
+                    GradientStop {
+                        position: 1.0,
+                        color: "#1F7A3D".to_owned(),
+                    },
+                ],
+            })
+        );
+        // a consumer that only knows the flat field still draws a line
+        assert_eq!(gradient.color, "#C00000");
+        assert_eq!(gradient.width, 8.0);
+
+        // a zero-height connector is the shape the defect was found on
+        assert!(
+            strokes
+                .iter()
+                .any(|(name, stroke)| name == "Gradient outline line" && stroke.paint.is_some())
+        );
+
+        let (_, solid) = strokes
+            .iter()
+            .find(|(name, _)| name == "Solid outline rectangle")
+            .expect("the solid-stroked rectangle must reach the display list");
+        assert_eq!(solid.paint, None);
+        assert_eq!(solid.color, "#C00000");
     }
 
     fn chart_slide(index: usize) -> Vec<Primitive> {

@@ -376,6 +376,7 @@ impl From<ComposedStroke> for Stroke {
             color: stroke.color_hex,
             width: stroke.width_px,
             dashed: stroke.dash,
+            paint: None,
         }
     }
 }

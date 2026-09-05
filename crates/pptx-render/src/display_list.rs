@@ -52,10 +52,14 @@ pub struct GradientStop {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Stroke {
+    /// Flat colour for consumers that predate `paint`; when `paint` is a
+    /// gradient this is its first stop, so an old reader still draws a line.
     pub color: String,
     pub width: f32,
     #[serde(default, skip_serializing_if = "is_false")]
     pub dashed: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub paint: Option<Paint>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Default, Serialize, Deserialize)]

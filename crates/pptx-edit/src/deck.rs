@@ -497,7 +497,10 @@ impl DeckSession {
                     outline.width = Some(EMU_PER_POINT);
                 }
                 outline.color = Some(color);
-            } else if outline.color.is_none() {
+                // a:ln takes one fill; leaving a gradFill behind would outrank
+                // the colour the caller just chose
+                outline.gradient = None;
+            } else if outline.color.is_none() && outline.gradient.is_none() {
                 outline.color = Some(color_value("#000000")?);
             }
             if let Some(width) = stroke.width_pt {

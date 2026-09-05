@@ -149,6 +149,7 @@ impl PlotSink for ChartSink<'_> {
                         color,
                         width: width as f32,
                         dashed: false,
+                        paint: None,
                     }),
                 )
             }
@@ -175,6 +176,7 @@ impl PlotSink for ChartSink<'_> {
                     color: stroke.color,
                     width: stroke.width as f32,
                     dashed: false,
+                    paint: None,
                 }),
             ),
             PlotOp::Text {

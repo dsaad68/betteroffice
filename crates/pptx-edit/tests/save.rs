@@ -6,6 +6,8 @@ use pptx_edit::{
 };
 
 const FIXTURE: &[u8] = include_bytes!("../../../apps/demo/public/betteroffice-demo.pptx");
+const GRADIENT_OUTLINE_FIXTURE: &[u8] =
+    include_bytes!("../../pptx-parse/tests/fixtures/gradient-outline.pptx");
 
 fn open_fixture() -> DeckSession {
     DeckSession::open(FIXTURE, 7).unwrap()
@@ -241,6 +243,101 @@ fn fill_and_stroke_survive_reopen() {
     assert_eq!(restyled.resolved_fill_color.as_deref(), Some("#FF0000"));
     assert_eq!(restyled.resolved_outline_color.as_deref(), Some("#00FF00"));
     assert_eq!(restyled.outline.as_ref().unwrap().width, Some(25_400.0));
+}
+
+#[test]
+fn a_width_only_stroke_edit_keeps_a_gradient_outline() {
+    let session = DeckSession::open(GRADIENT_OUTLINE_FIXTURE, 21).unwrap();
+    let snapshot = session.snapshot().unwrap();
+    let (slide_id, shape) = snapshot
+        .slides
+        .iter()
+        .find_map(|slide| {
+            slide
+                .shapes
+                .iter()
+                .find(|shape| {
+                    shape
+                        .outline
+                        .as_ref()
+                        .is_some_and(|outline| outline.gradient.is_some())
+                })
+                .map(|shape| (slide.id.clone(), shape.clone()))
+        })
+        .expect("fixture has a gradient-stroked shape");
+    session
+        .set_shape_stroke(
+            &context(),
+            &slide_id,
+            &shape.id,
+            &ShapeStroke {
+                color: None,
+                width_pt: Some(3.0),
+            },
+        )
+        .unwrap();
+
+    let reopened = reopen(&session);
+    let restyled = reopened
+        .snapshot()
+        .unwrap()
+        .slides
+        .iter()
+        .flat_map(|slide| &slide.shapes)
+        .find(|candidate| candidate.source_id == shape.source_id)
+        .cloned()
+        .unwrap();
+    let outline = restyled.outline.as_ref().unwrap();
+
+    assert_eq!(outline.width, Some(38_100.0));
+    assert_eq!(outline.gradient.as_ref().unwrap().stops.len(), 3);
+}
+
+#[test]
+fn a_colour_stroke_edit_replaces_a_gradient_outline() {
+    let session = DeckSession::open(GRADIENT_OUTLINE_FIXTURE, 22).unwrap();
+    let snapshot = session.snapshot().unwrap();
+    let (slide_id, shape) = snapshot
+        .slides
+        .iter()
+        .find_map(|slide| {
+            slide
+                .shapes
+                .iter()
+                .find(|shape| {
+                    shape
+                        .outline
+                        .as_ref()
+                        .is_some_and(|outline| outline.gradient.is_some())
+                })
+                .map(|shape| (slide.id.clone(), shape.clone()))
+        })
+        .expect("fixture has a gradient-stroked shape");
+    session
+        .set_shape_stroke(
+            &context(),
+            &slide_id,
+            &shape.id,
+            &ShapeStroke {
+                color: Some("#00FF00".to_owned()),
+                width_pt: None,
+            },
+        )
+        .unwrap();
+
+    let reopened = reopen(&session);
+    let restyled = reopened
+        .snapshot()
+        .unwrap()
+        .slides
+        .iter()
+        .flat_map(|slide| &slide.shapes)
+        .find(|candidate| candidate.source_id == shape.source_id)
+        .cloned()
+        .unwrap();
+
+    assert_eq!(restyled.resolved_outline_color.as_deref(), Some("#00FF00"));
+    assert!(restyled.outline.as_ref().unwrap().gradient.is_none());
 }
 
 #[test]

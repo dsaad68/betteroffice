@@ -106,6 +106,78 @@ describe('PPTX canvas replay', () => {
     expect(calls).toContain('text:Hello');
   });
 
+  test('strokes a gradient outline with a gradient sized to the shape box', async () => {
+    const gradients: Array<{ args: number[]; stops: Array<[number, string]> }> = [];
+    let strokeStyle: unknown;
+    const ctx = new Proxy(
+      {
+        createLinearGradient: (...args: number[]) => {
+          const entry = { args, stops: [] as Array<[number, string]> };
+          gradients.push(entry);
+          return {
+            addColorStop: (position: number, color: string) => entry.stops.push([position, color]),
+          };
+        },
+      } as Record<string, unknown>,
+      {
+        get(target, property) {
+          if (property in target) return target[property as string];
+          return () => undefined;
+        },
+        set(target, property, value) {
+          if (property === 'strokeStyle') strokeStyle = value;
+          target[property as string] = value;
+          return true;
+        },
+      }
+    ) as unknown as CanvasRenderingContext2D;
+    const list: SlideDisplayList = {
+      contractVersion: 1,
+      width: 320,
+      height: 180,
+      primitives: [
+        {
+          kind: 'shape',
+          objectId: 1,
+          name: 'Spoke',
+          x: 20,
+          y: 40,
+          w: 200,
+          h: 0,
+          geometry: 'line',
+          path: [
+            { type: 'move', x: 0, y: 0 },
+            { type: 'line', x: 1, y: 0 },
+          ],
+          stroke: {
+            color: '#c00000',
+            width: 3,
+            paint: {
+              kind: 'gradient',
+              gradientType: 'linear',
+              angleDeg: 0,
+              stops: [
+                { position: 0, color: '#c00000' },
+                { position: 1, color: '#c2c2c2' },
+              ],
+            },
+          },
+        },
+      ],
+    };
+
+    await paintSlide(ctx, list, 1);
+    expect(gradients).toHaveLength(1);
+    // centred on the shape box, spanning its diagonal, as the raster backend does
+    expect(gradients[0]?.args).toEqual([20, 40, 220, 40]);
+    expect(gradients[0]?.stops).toEqual([
+      [0, '#c00000'],
+      [1, '#c2c2c2'],
+    ]);
+    // the gradient object reaches strokeStyle, not the flat fallback colour
+    expect(typeof strokeStyle).toBe('object');
+  });
+
   test('paints chart parts clipped to the chart rectangle', async () => {
     const calls: string[] = [];
     const ctx = new Proxy(
