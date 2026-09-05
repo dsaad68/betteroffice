@@ -113,18 +113,6 @@ impl SlideRenderer {
         Ok(id.to_u32())
     }
 
-    /// The store holding every registered face, so a raster backend can resolve
-    /// the `font_id`s the display list references.
-    pub fn fonts(&self) -> &FontStore {
-        &self.fonts
-    }
-
-    /// The first face registered, which text falls back to when no family
-    /// matches.
-    pub fn fallback_font(&self) -> Option<FontId> {
-        self.fallback.as_ref().map(|face| face.id)
-    }
-
     pub fn layout_slide(
         &self,
         package: &PptxPackage,
