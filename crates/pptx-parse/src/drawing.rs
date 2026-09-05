@@ -784,6 +784,7 @@ pub(crate) fn parse_text_body(
         inset_top: numeric_attribute(body_properties, "tIns"),
         inset_right: numeric_attribute(body_properties, "rIns"),
         inset_bottom: numeric_attribute(body_properties, "bIns"),
+        list_style: parse_style_levels(element.child("lstStyle")),
         paragraphs,
     })
 }
@@ -987,6 +988,62 @@ mod tests {
                 .font_size_pt,
             Some(24.0)
         );
+    }
+
+    #[test]
+    fn reads_a_shape_list_style_into_its_text_body() {
+        let limits = ParseLimits::default();
+        let mut budget = ParseBudget::new(&limits);
+        let root = parse_xml(
+            br#"<p:sld><p:cSld><p:spTree><p:sp><p:nvSpPr><p:cNvPr id="2" name="Body"/><p:nvPr/></p:nvSpPr><p:spPr/><p:txBody><a:bodyPr/><a:lstStyle><a:lvl1pPr marL="342900" indent="-342900"><a:buChar char="&#8226;"/><a:defRPr sz="6600" b="1"/></a:lvl1pPr><a:lvl3pPr><a:buChar char="&#8211;"/></a:lvl3pPr></a:lstStyle><a:p><a:r><a:rPr lang="en"/><a:t>Item</a:t></a:r></a:p></p:txBody></p:sp></p:spTree></p:cSld></p:sld>"#,
+            "ppt/slides/slide1.xml",
+            &mut budget,
+        )
+        .unwrap();
+        let data = common_slide_data(&root, &[], "ppt/slides/slide1.xml", &mut budget).unwrap();
+        let ShapeNode::Shape(shape) = &data.shapes[0] else {
+            panic!("expected shape");
+        };
+        let body = shape.text.as_ref().expect("text body");
+        assert_eq!(body.list_style.len(), 9);
+        let level1 = &body.list_style[0];
+        assert_eq!(level1.margin_left, Some(342_900));
+        assert_eq!(level1.indent, Some(-342_900));
+        assert_eq!(
+            level1.bullet,
+            Some(Bullet::Character {
+                value: "\u{2022}".to_owned()
+            })
+        );
+        assert_eq!(
+            level1.default_run.as_ref().and_then(|run| run.font_size_pt),
+            Some(66.0)
+        );
+        // A level the style does not define stays empty rather than inheriting level 1.
+        assert_eq!(body.list_style[1].bullet, None);
+        assert_eq!(
+            body.list_style[2].bullet,
+            Some(Bullet::Character {
+                value: "\u{2013}".to_owned()
+            })
+        );
+    }
+
+    #[test]
+    fn a_body_without_a_list_style_carries_none() {
+        let limits = ParseLimits::default();
+        let mut budget = ParseBudget::new(&limits);
+        let root = parse_xml(
+            br#"<p:sld><p:cSld><p:spTree><p:sp><p:nvSpPr><p:cNvPr id="3" name="Plain"/><p:nvPr/></p:nvSpPr><p:spPr/><p:txBody><a:bodyPr/><a:lstStyle/><a:p><a:r><a:rPr lang="en"/><a:t>Hi</a:t></a:r></a:p></p:txBody></p:sp></p:spTree></p:cSld></p:sld>"#,
+            "ppt/slides/slide1.xml",
+            &mut budget,
+        )
+        .unwrap();
+        let data = common_slide_data(&root, &[], "ppt/slides/slide1.xml", &mut budget).unwrap();
+        let ShapeNode::Shape(shape) = &data.shapes[0] else {
+            panic!("expected shape");
+        };
+        assert!(shape.text.as_ref().unwrap().list_style.is_empty());
     }
 
     #[test]
