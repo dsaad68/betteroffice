@@ -207,6 +207,7 @@ impl SlideRenderer {
             shape_count: 0,
             line_count: 0,
             chart_budget: MAX_CHART_PRIMITIVES,
+            slide_number: i64::from(package.presentation.first_slide_num) + slide_index as i64,
         };
         let root_space = Space::root();
         let show_master = parsed_slide.is_none_or(|slide| slide.show_master_shapes)
@@ -347,6 +348,8 @@ struct LayoutBuilder<'a> {
     shape_count: usize,
     line_count: usize,
     chart_budget: usize,
+    /// The number a `slidenum` field resolves to on this slide.
+    slide_number: i64,
 }
 
 impl<'a> LayoutBuilder<'a> {
@@ -592,7 +595,7 @@ impl<'a> LayoutBuilder<'a> {
             ShapeNode::Group(_) => unreachable!(),
         }
         let text_hit = if let Some(body) = node_text(shape) {
-            let content = content_from_body(stable_id, body, self.theme);
+            let content = content_from_body(stable_id, body, self.theme, self.slide_number);
             Some(self.render_text_box(
                 base.id,
                 stable_id,
@@ -920,7 +923,20 @@ fn content_from_story(story: &StorySnapshot) -> TextContent {
     }
 }
 
-fn content_from_body(story_id: &str, body: &TextBody, theme: &Theme) -> TextContent {
+/// Resolves inherited slide-number fields.
+fn field_text(run: &pptx_parse::TextRun, slide_number: i64) -> String {
+    match run.field_type.as_deref() {
+        Some("slidenum") => slide_number.to_string(),
+        _ => run.text.clone(),
+    }
+}
+
+fn content_from_body(
+    story_id: &str,
+    body: &TextBody,
+    theme: &Theme,
+    slide_number: i64,
+) -> TextContent {
     TextContent {
         story_id: format!("inherited:{story_id}"),
         paragraphs: body
@@ -933,7 +949,7 @@ fn content_from_body(story_id: &str, body: &TextBody, theme: &Theme) -> TextCont
                     .runs
                     .iter()
                     .map(|run| ContentRun {
-                        text: run.text.clone(),
+                        text: field_text(run, slide_number),
                         style: style_from_properties(&run.properties, theme),
                     })
                     .collect(),
@@ -2227,6 +2243,8 @@ mod tests {
 
     const FIXTURE: &[u8] = include_bytes!("../../../apps/demo/public/betteroffice-demo.pptx");
     const CHART_FIXTURE: &[u8] = include_bytes!("../../pptx-parse/tests/fixtures/chart-deck.pptx");
+    const NUMBERED_FIXTURE: &[u8] =
+        include_bytes!("../../pptx-parse/tests/fixtures/slide-number-fields.pptx");
     const STYLE_FIXTURE: &[u8] = include_bytes!("../../pptx-parse/tests/fixtures/shape-style.pptx");
     const FONT: &[u8] = include_bytes!("../../ooxml-text/tests/fonts/LiberationSans-Regular.ttf");
     const BOLD_FONT: &[u8] =
@@ -2756,6 +2774,124 @@ mod tests {
             stroke(&outline(None), &theme).map(|stroke| stroke.color),
             Some("#112233".to_owned())
         );
+    }
+
+    #[test]
+    fn a_slide_number_field_resolves_to_the_slide_it_is_drawn_on() {
+        let run = |field_type: Option<&str>, text: &str| pptx_parse::TextRun {
+            text: text.to_owned(),
+            properties: RunProperties::default(),
+            field_id: field_type.map(|_| "{GUID}".to_owned()),
+            field_type: field_type.map(str::to_owned),
+            line_break: false,
+        };
+
+        assert_eq!(
+            field_text(&run(Some("slidenum"), "\u{2039}#\u{203a}"), 7),
+            "7"
+        );
+        assert_eq!(
+            field_text(&run(Some("datetime"), "16/08/2026"), 7),
+            "16/08/2026"
+        );
+        assert_eq!(field_text(&run(None, "Chapter 3"), 7), "Chapter 3");
+    }
+
+    #[test]
+    fn slide_number_fields_count_from_first_slide_num_through_the_edit_snapshot() {
+        for first in [10, -3, i32::MAX] {
+            assert_slide_number_fields(first);
+        }
+    }
+
+    fn assert_slide_number_fields(first: i32) {
+        let mut source = pptx_parse::parse_pptx(NUMBERED_FIXTURE).unwrap();
+        assert_eq!(source.presentation.first_slide_num, 10);
+        assert!(
+            std::str::from_utf8(source.part_bytes("ppt/slides/slide1.xml").unwrap())
+                .unwrap()
+                .contains("show=\"0\"")
+        );
+        let presentation = std::str::from_utf8(source.part_bytes("ppt/presentation.xml").unwrap())
+            .unwrap()
+            .replace(
+                "firstSlideNum=\"10\"",
+                &format!("firstSlideNum=\"{first}\""),
+            );
+        assert!(source.replace_part("ppt/presentation.xml", presentation.into_bytes()));
+        let bytes = pptx_parse::write_pptx(&source).unwrap();
+        let parsed = pptx_parse::parse_pptx(&bytes).unwrap();
+        let opened = DeckSession::from_package_with_source(parsed, &bytes, 8_006).unwrap();
+        let session =
+            DeckSession::open_from_update(&opened.encode_state_as_update_v1(), 8_007).unwrap();
+        let package = session.package();
+        assert_eq!(package.presentation.first_slide_num, first);
+        let deck = session.snapshot().unwrap();
+        assert_eq!(deck.slides.len(), 3);
+        let master = &package.masters[0];
+        let layout = &package.layouts[0];
+        let master_probe = format!("master:{}:{}", master.part_path, master.shapes.len() - 1);
+        let layout_probe = format!("layout:{}:{}", layout.part_path, layout.shapes.len() - 1);
+        let slide_probe = deck.slides[1].shapes.last().unwrap();
+        assert_eq!(slide_probe.text_stories[0].plain_text(), "77");
+
+        let run = |text: &str, size: f32, emphasis: bool, color: &str| TextRun {
+            text: text.to_owned(),
+            font_family: "Arial".to_owned(),
+            font_size_pt: size,
+            bold: emphasis,
+            italic: emphasis,
+            underline: emphasis,
+            color: color.to_owned(),
+        };
+        let renderer = renderer();
+        for index in 0..3 {
+            let number = (i64::from(first) + index as i64).to_string();
+            let number = number.as_str();
+            let rendered = renderer.layout_slide(package, &deck, index).unwrap();
+            let (runs, line) = drawn_text(&rendered, &master_probe);
+            assert_eq!(
+                runs.iter().map(|run| run.text.as_str()).collect::<Vec<_>>(),
+                [number, "|", "CACHED-DATE"]
+            );
+            assert_eq!(runs[0], run(number, 23.0, true, "#FF0066"));
+            assert_eq!(runs[2], run("CACHED-DATE", 13.0, false, "#00AA55"));
+            assert_eq!(line, format!("{number}|CACHED-DATE"));
+            let (runs, line) = drawn_text(&rendered, &layout_probe);
+            assert_eq!(runs, [run(number, 17.0, false, "#1122CC")]);
+            assert_eq!(line, number);
+            if index == 1 {
+                let (runs, line) = drawn_text(&rendered, &slide_probe.id);
+                assert_eq!(runs, [run("77", 19.0, false, "#AA5500")]);
+                assert_eq!(line, "77");
+            }
+        }
+    }
+
+    fn drawn_text(rendered: &RenderedSlide, shape_id: &str) -> (Vec<TextRun>, String) {
+        rendered
+            .display_list
+            .primitives
+            .iter()
+            .find_map(|primitive| match primitive {
+                Primitive::TextBox {
+                    shape_id: Some(id),
+                    paragraphs,
+                    lines,
+                    ..
+                } if id == shape_id => Some((
+                    paragraphs
+                        .iter()
+                        .flat_map(|paragraph| paragraph.runs.iter().cloned())
+                        .collect(),
+                    lines
+                        .iter()
+                        .flat_map(|line| line.runs.iter().map(|run| run.text.as_str()))
+                        .collect(),
+                )),
+                _ => None,
+            })
+            .unwrap_or_else(|| panic!("{shape_id} was not drawn"))
     }
 
     #[test]
