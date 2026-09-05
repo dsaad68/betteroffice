@@ -990,6 +990,24 @@ mod tests {
     }
 
     #[test]
+    fn a_font_ref_without_a_colour_leaves_the_shape_unstyled() {
+        let limits = ParseLimits::default();
+        let mut budget = ParseBudget::new(&limits);
+        let root = parse_xml(
+            br#"<p:sld><p:cSld><p:spTree><p:sp><p:nvSpPr><p:cNvPr id="2" name="Bare"/><p:nvPr/></p:nvSpPr><p:spPr/><p:style><a:lnRef idx="2"><a:schemeClr val="accent1"/></a:lnRef><a:fillRef idx="1"><a:schemeClr val="accent1"/></a:fillRef><a:effectRef idx="0"><a:schemeClr val="accent1"/></a:effectRef><a:fontRef idx="minor"/></p:style></p:sp></p:spTree></p:cSld></p:sld>"#,
+            "ppt/slides/slide1.xml",
+            &mut budget,
+        )
+        .unwrap();
+        let data = common_slide_data(&root, &[], "ppt/slides/slide1.xml", &mut budget).unwrap();
+
+        let ShapeNode::Shape(shape) = &data.shapes[0] else {
+            panic!("expected a shape");
+        };
+        assert!(shape.style.is_none());
+    }
+
+    #[test]
     fn parses_text_formatting_and_nested_shape_types() {
         let limits = ParseLimits::default();
         let mut budget = ParseBudget::new(&limits);
