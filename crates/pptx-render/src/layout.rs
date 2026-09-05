@@ -8,8 +8,9 @@ use ooxml_drawingml::{
 use ooxml_text::{CompatFlags, FontId, FontStore, break_opportunities, shape, single_line_box};
 use pptx_edit::{DeckSnapshot, ShapeKind, ShapeSnapshot, StorySnapshot, TextStyle};
 use pptx_parse::{
-    ChartSpace, GraphicFrameData, ParagraphProperties, Placeholder, PptxPackage, RunProperties,
-    ShapeNode, ShapeTransform, Slide, SlideLayout, SlideMaster, TextAutofit, TextBody,
+    Bullet, ChartSpace, GraphicFrameData, ParagraphProperties, Placeholder, PptxPackage,
+    RunProperties, ShapeNode, ShapeTransform, Slide, SlideLayout, SlideMaster, TextAutofit,
+    TextBody,
 };
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
@@ -803,6 +804,12 @@ impl BodyCascade<'_> {
             .into_iter()
             .flatten()
         {
+            // ECMA-376 orders the cascade as master txStyles, then each body's own lstStyle, then
+            // that body's paragraph. Index the list style by level only: one that defines just
+            // lvl1pPr must contribute nothing to a level-3 paragraph.
+            if let Some(source) = body.list_style.get(level as usize) {
+                merge_paragraph_properties(&mut properties, source);
+            }
             if let Some(source) = body
                 .paragraphs
                 .get(index)
@@ -900,6 +907,10 @@ struct ResolvedParagraph {
     justify: bool,
     level: u32,
     margin_left_px: f32,
+    /// Where the bullet sits relative to the text column. Negative in every deck that uses one,
+    /// which is what puts the marker in the hanging-indent gutter.
+    indent_px: f32,
+    bullet: Option<Bullet>,
     runs: Vec<ResolvedRun>,
 }
 
@@ -989,6 +1000,8 @@ fn resolve_content(
             justify: is_full_justification(alignment),
             level: paragraph.level,
             margin_left_px: emu_to_px(properties.margin_left.unwrap_or_default()),
+            indent_px: emu_to_px(properties.indent.unwrap_or_default()),
+            bullet: properties.bullet.clone(),
             runs,
         });
         story_offset = story_offset.saturating_add(1);
@@ -1281,7 +1294,60 @@ fn layout_paragraph(
         });
         line_y += line_box.height();
     }
+    prepend_bullet(fonts, paragraph, x, &mut output, scale)?;
     Ok(output)
+}
+
+/// Draw a `buChar` marker as a leading run on the paragraph's first line.
+///
+/// The marker is not part of the story, so `start`, `end`, `width` and `caret_stops` are left
+/// alone: hit testing reads only `caret_stops`, and giving the bullet a character position would
+/// put the caret inside a glyph the document does not contain.
+fn prepend_bullet(
+    fonts: &FontStore,
+    paragraph: &ResolvedParagraph,
+    x: f32,
+    lines: &mut [PositionedTextLine],
+    scale: f32,
+) -> Result<(), RenderError> {
+    let Some(Bullet::Character { value }) = &paragraph.bullet else {
+        return Ok(());
+    };
+    let (Some(first), Some(style)) = (
+        lines.first_mut(),
+        paragraph.runs.first().map(|run| &run.style),
+    ) else {
+        return Ok(());
+    };
+    if value.trim().is_empty() || first.runs.is_empty() {
+        return Ok(());
+    }
+    // `x` is already the text column, so the indent walks back from it into the gutter; never
+    // past the shape's own left edge.
+    let bullet_x = (x + paragraph.indent_px).max(x - paragraph.margin_left_px.max(0.0));
+    let marker = ResolvedParagraph {
+        align: paragraph.align,
+        level: paragraph.level,
+        margin_left_px: 0.0,
+        indent_px: 0.0,
+        bullet: None,
+        runs: vec![ResolvedRun {
+            text: value.clone(),
+            start: paragraph.runs[0].start,
+            style: style.clone(),
+        }],
+    };
+    let clusters = shape_paragraph(fonts, &marker, scale)?;
+    if clusters.is_empty() {
+        return Ok(());
+    }
+    let mut runs = positioned_runs(&clusters, bullet_x, first.baseline, scale);
+    for run in &mut runs {
+        run.end = run.start;
+    }
+    runs.append(&mut first.runs);
+    first.runs = runs;
+    Ok(())
 }
 
 struct ShapedCluster {

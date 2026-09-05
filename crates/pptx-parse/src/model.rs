@@ -274,6 +274,10 @@ pub struct TextBody {
     pub inset_top: Option<i64>,
     pub inset_right: Option<i64>,
     pub inset_bottom: Option<i64>,
+    /// The shape's own `<a:lstStyle>`, one entry per outline level. Absent from bodies
+    /// serialized before it was parsed, and empty when the shape declares none.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub list_style: Vec<ParagraphProperties>,
     pub paragraphs: Vec<TextParagraph>,
 }
 
