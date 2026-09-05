@@ -35,6 +35,7 @@ pub fn preset_geometry_default_adjustments(shape_type: &str) -> HashMap<String, 
         .collect()
 }
 
+/// Adjust values are fractions of the shortest side: the ECMA-376 guide value over 100000.
 pub fn preset_geometry_to_path(
     shape_type: &str,
     adjustments: &HashMap<String, f64>,
@@ -197,10 +198,8 @@ pub fn preset_geometry_to_path(
             (0.0, 0.25),
         ]),
         "chevron" => {
-            let notch = shortest_side_fraction(
-                clamp_fraction(adjustments.get("adj").copied(), 0.5).min(0.5),
-                aspect_ratio,
-            );
+            let notch =
+                shortest_side_adjustment(adjustments.get("adj").copied(), 0.5, aspect_ratio);
             polygon(&[
                 (0.0, 0.0),
                 (1.0 - notch, 0.0),
@@ -211,10 +210,8 @@ pub fn preset_geometry_to_path(
             ])
         }
         "homePlate" => {
-            let point = shortest_side_fraction(
-                clamp_fraction(adjustments.get("adj").copied(), 0.5).min(0.5),
-                aspect_ratio,
-            );
+            let point =
+                shortest_side_adjustment(adjustments.get("adj").copied(), 0.5, aspect_ratio);
             polygon(&[
                 (0.0, 0.0),
                 (1.0 - point, 0.0),
@@ -244,16 +241,20 @@ pub fn preset_geometry_to_path(
     Some(result)
 }
 
-/// An adjust value is a fraction of the shape's *shortest side*, not of its width. Express it
-/// as a fraction of the width, which is the space the path is drawn in, so a wide banner gets
-/// a shallow notch instead of one scaled to its length.
-fn shortest_side_fraction(adjustment: f64, aspect_ratio: f64) -> f64 {
-    let aspect_ratio = if aspect_ratio.is_finite() && aspect_ratio > 0.0 {
-        aspect_ratio
+/// `pin 0 adj maxAdj` with `maxAdj = 100000 * w / ss`, then `ss * a / 100000` as a fraction of
+/// the width, as the chevron and homePlate preset definitions do.
+fn shortest_side_adjustment(adjustment: Option<f64>, fallback: f64, aspect_ratio: f64) -> f64 {
+    let width = width_in_shortest_sides(aspect_ratio);
+    pin(adjustment, fallback, width) / width
+}
+
+/// `w / ss`: the width measured in shortest sides.
+fn width_in_shortest_sides(aspect_ratio: f64) -> f64 {
+    if aspect_ratio.is_finite() && aspect_ratio > 0.0 {
+        aspect_ratio.max(1.0)
     } else {
         1.0
-    };
-    adjustment / aspect_ratio.max(1.0)
+    }
 }
 
 fn rounded_rect(aspect_ratio: f64, adjustment: f64) -> Vec<GeometryPathCommand> {
@@ -353,11 +354,15 @@ fn star(points: usize, adjustment: Option<f64>) -> Vec<GeometryPathCommand> {
 }
 
 fn clamp_fraction(value: Option<f64>, fallback: f64) -> f64 {
+    pin(value, fallback, 1.0)
+}
+
+/// `pin 0 value max`, with `fallback` standing in for a missing or non-finite value.
+fn pin(value: Option<f64>, fallback: f64, max: f64) -> f64 {
     value
-        .filter(|v| v.is_finite())
-        .map(|v| if v > 1.0 { v / 100_000.0 } else { v })
+        .filter(|value| value.is_finite())
         .unwrap_or(fallback)
-        .clamp(0.0, 1.0)
+        .clamp(0.0, max)
 }
 
 fn arrow(
@@ -494,12 +499,18 @@ mod tests {
         // On the banner measured in the report, 171.3 x 55.6, the notch must be half the
         // height expressed against the width, not half the width.
         let aspect = 171.3 / 55.6;
-        assert_close(1.0 - leading_edge("chevron", Some(0.5), aspect), 0.5 / aspect);
+        assert_close(
+            1.0 - leading_edge("chevron", Some(0.5), aspect),
+            0.5 / aspect,
+        );
 
         // Home plate takes the same adjust value, and used to ignore it entirely.
         assert_close(1.0 - leading_edge("homePlate", Some(0.5), 1.0), 0.5);
         let aspect = 280.9 / 37.5;
-        assert_close(1.0 - leading_edge("homePlate", Some(0.5), aspect), 0.5 / aspect);
+        assert_close(
+            1.0 - leading_edge("homePlate", Some(0.5), aspect),
+            0.5 / aspect,
+        );
         assert_close(
             1.0 - leading_edge("homePlate", Some(0.25), aspect),
             0.25 / aspect,
@@ -510,12 +521,43 @@ mod tests {
     fn chevron_and_home_plate_default_to_half_the_shortest_side() {
         for shape in ["chevron", "homePlate"] {
             assert_eq!(
-                preset_geometry_default_adjustments(shape).get("adj").copied(),
+                preset_geometry_default_adjustments(shape)
+                    .get("adj")
+                    .copied(),
                 Some(0.5),
                 "{shape} must default to the value the spec gives it"
             );
             let aspect = 4.0;
             assert_close(1.0 - leading_edge(shape, None, aspect), 0.5 / aspect);
+        }
+    }
+
+    #[test]
+    fn square_adjustments_above_half_reach_past_the_middle() {
+        for shape in ["chevron", "homePlate"] {
+            assert_close(leading_edge(shape, Some(0.75), 1.0), 0.25);
+        }
+    }
+
+    #[test]
+    fn wide_shape_adjustments_may_exceed_the_shortest_side() {
+        for shape in ["chevron", "homePlate"] {
+            assert_close(leading_edge(shape, Some(2.0), 4.0), 0.5);
+        }
+        let adjustments = HashMap::from([("adj".to_owned(), 2.0)]);
+        let chevron = preset_geometry_to_path("chevron", &adjustments, 4.0).unwrap();
+        let GeometryPathCommand::Line { x, y } = chevron[5] else {
+            panic!("expected the notch vertex");
+        };
+        assert_close(x, 0.5);
+        assert_close(y, 0.5);
+    }
+
+    #[test]
+    fn adjustments_pin_at_the_width() {
+        for shape in ["chevron", "homePlate"] {
+            assert_close(leading_edge(shape, Some(6.0), 4.0), 0.0);
+            assert_close(leading_edge(shape, Some(2.0), 0.25), 0.0);
         }
     }
 
