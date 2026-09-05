@@ -177,14 +177,14 @@ fn parse_picture(
     let media_part_path = relationship_id
         .as_deref()
         .and_then(|id| relationship_target(relationships, id));
+    let transform = properties.and_then(|value| value.child("xfrm"));
     Ok(Picture {
-        base: parse_base(
-            element.child("nvPicPr"),
-            properties.and_then(|value| value.child("xfrm")),
-        ),
+        base: parse_base(element.child("nvPicPr"), transform),
         relationship_id,
         media_part_path,
         crop: parse_crop(blip_fill.and_then(|value| value.child("srcRect"))),
+        geometry: parse_geometry(properties),
+        adjust_values: parse_adjust_values(properties, parse_shape_extent(transform)),
         fill: properties.and_then(parse_fill),
         outline: properties.and_then(parse_outline),
     })
@@ -1102,6 +1102,69 @@ mod tests {
                 .font_size_pt,
             Some(24.0)
         );
+    }
+
+    #[test]
+    fn reads_a_picture_source_crop_and_its_own_geometry() {
+        let limits = ParseLimits::default();
+        let mut budget = ParseBudget::new(&limits);
+        let root = parse_xml(
+            br#"<p:sld><p:cSld><p:spTree><p:pic><p:nvPicPr><p:cNvPr id="7" name="Screenshot"/><p:nvPr/></p:nvPicPr><p:blipFill><a:blip r:embed="rId2"/><a:srcRect t="251" b="16720"/></p:blipFill><p:spPr><a:xfrm><a:off x="0" y="0"/><a:ext cx="400" cy="200"/></a:xfrm><a:prstGeom prst="ellipse"><a:avLst/></a:prstGeom></p:spPr></p:pic></p:spTree></p:cSld></p:sld>"#,
+            "ppt/slides/slide1.xml",
+            &mut budget,
+        )
+        .unwrap();
+        let data = common_slide_data(&root, &[], "ppt/slides/slide1.xml", &mut budget).unwrap();
+        let ShapeNode::Picture(picture) = &data.shapes[0] else {
+            panic!("expected picture");
+        };
+        assert_eq!(picture.crop.top, 251);
+        assert_eq!(picture.crop.bottom, 16_720);
+        assert_eq!(picture.crop.left, 0);
+        assert_eq!(picture.geometry, "ellipse");
+    }
+
+    #[test]
+    fn a_picture_without_a_preset_geometry_reads_as_a_rectangle() {
+        let limits = ParseLimits::default();
+        let mut budget = ParseBudget::new(&limits);
+        let root = parse_xml(
+            br#"<p:sld><p:cSld><p:spTree><p:pic><p:nvPicPr><p:cNvPr id="8" name="Photo"/><p:nvPr/></p:nvPicPr><p:blipFill><a:blip r:embed="rId3"/></p:blipFill><p:spPr/></p:pic></p:spTree></p:cSld></p:sld>"#,
+            "ppt/slides/slide1.xml",
+            &mut budget,
+        )
+        .unwrap();
+        let data = common_slide_data(&root, &[], "ppt/slides/slide1.xml", &mut budget).unwrap();
+        let ShapeNode::Picture(picture) = &data.shapes[0] else {
+            panic!("expected picture");
+        };
+        assert_eq!(picture.crop, PictureCrop::default());
+        assert_eq!(picture.geometry, "rect");
+    }
+
+    #[test]
+    fn a_rectangular_picture_serializes_as_it_did_before_pictures_had_a_geometry() {
+        let limits = ParseLimits::default();
+        let mut budget = ParseBudget::new(&limits);
+        let root = parse_xml(
+            br#"<p:sld><p:cSld><p:spTree><p:pic><p:nvPicPr><p:cNvPr id="8" name="Photo"/><p:nvPr/></p:nvPicPr><p:blipFill><a:blip r:embed="rId3"/></p:blipFill><p:spPr><a:prstGeom prst="rect"><a:avLst/></a:prstGeom></p:spPr></p:pic><p:pic><p:nvPicPr><p:cNvPr id="9" name="Portrait"/><p:nvPr/></p:nvPicPr><p:blipFill><a:blip r:embed="rId3"/></p:blipFill><p:spPr><a:xfrm><a:off x="0" y="0"/><a:ext cx="400" cy="200"/></a:xfrm><a:prstGeom prst="roundRect"><a:avLst><a:gd name="adj" fmla="val 25000"/></a:avLst></a:prstGeom></p:spPr></p:pic></p:spTree></p:cSld></p:sld>"#,
+            "ppt/slides/slide1.xml",
+            &mut budget,
+        )
+        .unwrap();
+        let data = common_slide_data(&root, &[], "ppt/slides/slide1.xml", &mut budget).unwrap();
+        let (ShapeNode::Picture(rectangle), ShapeNode::Picture(rounded)) =
+            (&data.shapes[0], &data.shapes[1])
+        else {
+            panic!("expected two pictures");
+        };
+        let json = serde_json::to_value(rectangle).unwrap();
+        assert!(json.get("geometry").is_none());
+        assert!(json.get("adjustValues").is_none());
+        assert_eq!(serde_json::from_value::<Picture>(json).unwrap(), *rectangle);
+        let json = serde_json::to_value(rounded).unwrap();
+        assert_eq!(json["geometry"], "roundRect");
+        assert_eq!(json["adjustValues"]["adj"], 0.25);
     }
 
     #[test]

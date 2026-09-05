@@ -123,6 +123,72 @@ function paintShape(ctx: CanvasRenderingContext2D, shape: ShapePrimitive): void 
   if (shape.stroke) strokeCurrentPath(ctx, shape.stroke);
 }
 
+/** Draws the cropped source through the picture's outline. */
+function drawCropped(
+  ctx: CanvasRenderingContext2D,
+  source: CanvasImageSource,
+  image: ImagePrimitive
+): void {
+  const crop = image.crop;
+  const left = clampCrop(crop?.left);
+  const top = clampCrop(crop?.top);
+  const keptX = 1 - left - clampCrop(crop?.right);
+  const keptY = 1 - top - clampCrop(crop?.bottom);
+  const masked = image.path !== undefined || keptX !== 1 || keptY !== 1;
+  if (keptX <= 0 || keptY <= 0) return;
+  if (masked) {
+    ctx.save();
+    buildImageOutline(ctx, image);
+    ctx.clip();
+  }
+  const width = sourceWidth(source);
+  const height = sourceHeight(source);
+  if (width > 0 && height > 0) {
+    ctx.drawImage(
+      source,
+      left * width,
+      top * height,
+      keptX * width,
+      keptY * height,
+      image.x,
+      image.y,
+      image.w,
+      image.h
+    );
+  } else {
+    ctx.drawImage(source, image.x, image.y, image.w, image.h);
+  }
+  if (masked) ctx.restore();
+}
+
+/** The picture's own outline when it has one, else its frame. */
+function buildImageOutline(ctx: CanvasRenderingContext2D, image: ImagePrimitive): void {
+  if (image.path) buildPath(ctx, image.path, image.x, image.y, image.w, image.h);
+  else {
+    ctx.beginPath();
+    ctx.rect(image.x, image.y, image.w, image.h);
+  }
+}
+
+/** `a:srcRect` also encodes outsets as negatives, which canvas cannot express. */
+function clampCrop(value: number | undefined): number {
+  if (value === undefined || !Number.isFinite(value)) return 0;
+  return Math.min(Math.max(value, 0), 1);
+}
+
+function sourceWidth(source: CanvasImageSource): number {
+  if ('naturalWidth' in source && typeof source.naturalWidth === 'number') return source.naturalWidth;
+  if ('width' in source && typeof source.width === 'number') return source.width;
+  return 0;
+}
+
+function sourceHeight(source: CanvasImageSource): number {
+  if ('naturalHeight' in source && typeof source.naturalHeight === 'number')
+    return source.naturalHeight;
+  if ('height' in source && typeof source.height === 'number') return source.height;
+  return 0;
+}
+
 function buildPath(
   ctx: CanvasRenderingContext2D,
   commands: GeometryPathCommand[],
@@ -205,11 +271,10 @@ async function paintImage(
 ): Promise<void> {
   if (image.assetId && resolver) {
     const source = await resolver(image.assetId);
-    if (source) ctx.drawImage(source, image.x, image.y, image.w, image.h);
+    if (source) drawCropped(ctx, source, image);
   }
   if (image.stroke) {
-    ctx.beginPath();
-    ctx.rect(image.x, image.y, image.w, image.h);
+    buildImageOutline(ctx, image);
     strokeCurrentPath(ctx, image.stroke);
   }
 }

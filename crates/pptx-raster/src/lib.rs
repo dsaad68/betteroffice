@@ -14,8 +14,8 @@ use std::io::Cursor;
 use ooxml_drawingml::GeometryPathCommand;
 use ooxml_text::{FontId, FontStore};
 use pptx_render::{
-    GradientType, Paint as SlidePaint, Primitive, Stroke as SlideStroke, SurfaceDisplayList,
-    Transform as SlideTransform,
+    GradientType, ImageCrop, Paint as SlidePaint, Primitive, Stroke as SlideStroke,
+    SurfaceDisplayList, Transform as SlideTransform,
 };
 use tiny_skia::{
     Color, ColorU8, FillRule, FilterQuality, GradientStop, IntSize, LinearGradient, Mask, Paint,
@@ -267,6 +267,8 @@ impl Painter<'_, '_> {
                 w,
                 h,
                 asset_id,
+                crop,
+                path,
                 stroke,
                 ..
             } => self.paint_image(
@@ -275,6 +277,8 @@ impl Painter<'_, '_> {
                 *w,
                 *h,
                 asset_id.as_deref(),
+                *crop,
+                path.as_deref(),
                 stroke.as_ref(),
                 transform,
                 clip,
@@ -334,7 +338,16 @@ impl Painter<'_, '_> {
         let Ok(rect) = frame_rect(x, y, w, h) else {
             return Ok(None);
         };
-        let Some(path) = PathBuilder::from_rect(rect).transform(transform) else {
+        self.clipped_path(clip, PathBuilder::from_rect(rect), transform)
+    }
+
+    fn clipped_path(
+        &self,
+        clip: Option<&Mask>,
+        path: Path,
+        transform: Transform,
+    ) -> Result<Option<Mask>, String> {
+        let Some(path) = path.transform(transform) else {
             return Ok(None);
         };
         let bounds = path.bounds();
@@ -395,21 +408,41 @@ impl Painter<'_, '_> {
         w: f32,
         h: f32,
         asset_id: Option<&str>,
+        crop: ImageCrop,
+        commands: Option<&[GeometryPathCommand]>,
         stroke: Option<&SlideStroke>,
         transform: Transform,
         clip: Option<&Mask>,
     ) -> Result<(), String> {
-        let frame = frame_rect(x, y, w, h);
-        if let Ok(frame) = frame.as_ref() {
+        let Ok(frame) = frame_rect(x, y, w, h) else {
+            return Ok(());
+        };
+        let outline = match commands {
+            Some(commands) => geometry_path(commands, x, y, w, h),
+            None => Some(PathBuilder::from_rect(frame)),
+        };
+        let Some(outline) = outline else {
+            return Ok(());
+        };
+        let (kept_x, kept_y) = crop.kept();
+        if kept_x > 0.0 && kept_y > 0.0 {
+            let mask = if !crop.is_whole() || commands.is_some() {
+                let Some(mask) = self.clipped_path(clip, outline.clone(), transform)? else {
+                    return Ok(());
+                };
+                Some(mask)
+            } else {
+                None
+            };
             match asset_id.and_then(|asset_id| self.decode(asset_id)) {
                 Some(source) => {
                     let fit = Transform::from_row(
-                        frame.width() / source.width() as f32,
+                        frame.width() / (source.width() as f32 * kept_x),
                         0.0,
                         0.0,
-                        frame.height() / source.height() as f32,
-                        frame.x(),
-                        frame.y(),
+                        frame.height() / (source.height() as f32 * kept_y),
+                        frame.x() - crop.left * frame.width() / kept_x,
+                        frame.y() - crop.top * frame.height() / kept_y,
                     );
                     self.pixmap.draw_pixmap(
                         0,
@@ -420,14 +453,14 @@ impl Painter<'_, '_> {
                             ..PixmapPaint::default()
                         },
                         transform.pre_concat(fit),
-                        clip,
+                        mask.as_ref().or(clip),
                     );
                 }
                 None => self.skipped_images += 1,
             }
         }
-        if let (Some(stroke), Ok(frame)) = (stroke, frame) {
-            self.stroke_path(&PathBuilder::from_rect(frame), stroke, transform, clip)?;
+        if let Some(stroke) = stroke {
+            self.stroke_path(&outline, stroke, transform, clip)?;
         }
         Ok(())
     }
@@ -851,6 +884,97 @@ mod tests {
     }
 
     #[test]
+    fn a_cropped_masked_picture_preserves_pixels_outline_and_parent_clip() {
+        let fonts = FontStore::new();
+        let mut source = Pixmap::new(100, 100).unwrap();
+        for (i, pixel) in source.pixels_mut().iter_mut().enumerate() {
+            *pixel =
+                ColorU8::from_rgba((i % 100 * 2) as u8, (i / 100 * 2) as u8, 40, 255).premultiply();
+        }
+        let bytes = source.encode_png().unwrap();
+        let images = AssetMap::from([("photo", bytes.as_slice())]);
+        for flip_h in [false, true] {
+            for parent_clip in [false, true] {
+                let image = Primitive::Image {
+                    object_id: 1,
+                    shape_id: None,
+                    name: "Photo".into(),
+                    x: 100.0,
+                    y: 50.0,
+                    w: 200.0,
+                    h: 100.0,
+                    asset_id: Some("photo".into()),
+                    crop: ImageCrop {
+                        left: 0.1,
+                        top: 0.2,
+                        right: 0.3,
+                        bottom: 0.1,
+                    },
+                    path: ooxml_drawingml::preset_geometry_to_path(
+                        "ellipse",
+                        &Default::default(),
+                        2.0,
+                    ),
+                    stroke: Some(SlideStroke {
+                        color: "#ff00ff".into(),
+                        width: 2.0,
+                        dashed: false,
+                    }),
+                    transform: SlideTransform {
+                        flip_h,
+                        ..Default::default()
+                    },
+                };
+                let mut list = empty_list(400.0, 200.0);
+                list.primitives.push(if parent_clip {
+                    Primitive::Chart {
+                        object_id: 2,
+                        shape_id: None,
+                        name: "Parent".into(),
+                        x: 175.0,
+                        y: 0.0,
+                        w: 225.0,
+                        h: 200.0,
+                        label: String::new(),
+                        primitives: vec![image],
+                        transform: SlideTransform::default(),
+                    }
+                } else {
+                    image
+                });
+                let rendered = render_slide(
+                    &list,
+                    &resources(&fonts, &images),
+                    &RenderOptions {
+                        background: Background::Transparent,
+                        ..Default::default()
+                    },
+                )
+                .unwrap();
+                assert_eq!(rendered.skipped_images, 0);
+                let pixels = Pixmap::decode_png(&rendered.bytes).unwrap();
+                let kept = pixels.pixel(250, 125).unwrap();
+                let expected_red = if flip_h { 50 } else { 110 };
+                assert!(kept.red().abs_diff(expected_red) <= 2, "{kept:?}");
+                assert!(kept.green().abs_diff(145) <= 2, "{kept:?}");
+                assert_eq!(kept.blue(), 40);
+                assert_eq!(kept.alpha(), 255);
+                assert_eq!(
+                    pixels.pixel(150, 100).unwrap().alpha(),
+                    if parent_clip { 0 } else { 255 }
+                );
+                assert_eq!(pixels.pixel(299, 51).unwrap().alpha(), 0);
+                assert_eq!(pixels.pixel(250, 45).unwrap().alpha(), 0);
+                let border = pixels.pixel(287, 75).unwrap();
+                assert!(
+                    border.red() > 100 && border.green() < 10 && border.blue() > 100,
+                    "{border:?}"
+                );
+            }
+        }
+    }
+
+    #[test]
     fn a_missing_asset_is_skipped_and_counted() {
         let fonts = FontStore::new();
         let images = AssetMap::default();
@@ -865,6 +989,8 @@ mod tests {
                 w: 50.0,
                 h: 50.0,
                 asset_id: asset_id.map(str::to_owned),
+                crop: ImageCrop::default(),
+                path: None,
                 stroke: None,
                 transform: SlideTransform::default(),
             });

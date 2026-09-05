@@ -243,10 +243,21 @@ export interface ShapePrimitive extends PrimitiveBase {
   stroke?: Stroke;
 }
 
+export interface ImageCrop {
+  left?: number;
+  top?: number;
+  right?: number;
+  bottom?: number;
+}
+
 export interface ImagePrimitive extends PrimitiveBase {
   kind: 'image';
   name: string;
   assetId?: string;
+  /** Fraction of the source discarded per edge, from `a:srcRect`. */
+  crop?: ImageCrop;
+  /** Outline the picture is masked to, when its `spPr` gives it one. */
+  path?: GeometryPathCommand[];
   stroke?: Stroke;
 }
 

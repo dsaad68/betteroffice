@@ -203,6 +203,7 @@ dependencies = [
  "betteroffice-opc",
  "quick-xml",
  "serde",
+ "serde_json",
  "thiserror",
 ]
 
