@@ -198,7 +198,7 @@ pub fn preset_geometry_to_path(
         ]),
         "chevron" => {
             let notch = shortest_side_fraction(
-                clamp_fraction(adjustments.get("adj").copied(), 0.5).min(0.5),
+                clamp_fraction(adjustments.get("adj").copied(), 0.5),
                 aspect_ratio,
             );
             polygon(&[
@@ -212,7 +212,7 @@ pub fn preset_geometry_to_path(
         }
         "homePlate" => {
             let point = shortest_side_fraction(
-                clamp_fraction(adjustments.get("adj").copied(), 0.5).min(0.5),
+                clamp_fraction(adjustments.get("adj").copied(), 0.5),
                 aspect_ratio,
             );
             polygon(&[
@@ -244,16 +244,14 @@ pub fn preset_geometry_to_path(
     Some(result)
 }
 
-/// An adjust value is a fraction of the shape's *shortest side*, not of its width. Express it
-/// as a fraction of the width, which is the space the path is drawn in, so a wide banner gets
-/// a shallow notch instead of one scaled to its length.
+/// An adjust value measured off the shortest side, restated as a fraction of the width.
 fn shortest_side_fraction(adjustment: f64, aspect_ratio: f64) -> f64 {
     let aspect_ratio = if aspect_ratio.is_finite() && aspect_ratio > 0.0 {
         aspect_ratio
     } else {
         1.0
     };
-    adjustment / aspect_ratio.max(1.0)
+    (adjustment / aspect_ratio.max(1.0)).min(1.0)
 }
 
 fn rounded_rect(aspect_ratio: f64, adjustment: f64) -> Vec<GeometryPathCommand> {
@@ -472,8 +470,7 @@ mod tests {
         (rx, ry)
     }
 
-    /// The x of the first line command, which is where a chevron's or home plate's leading
-    /// edge stops before the point begins.
+    /// Where the leading edge stops before the point begins.
     fn leading_edge(shape: &str, adjust: Option<f64>, aspect_ratio: f64) -> f64 {
         let mut adjustments = HashMap::new();
         if let Some(value) = adjust {
@@ -488,15 +485,11 @@ mod tests {
 
     #[test]
     fn an_adjust_value_is_a_fraction_of_the_shortest_side() {
-        // On a square the shortest side is the width, so the notch is the adjust value itself.
         assert_close(1.0 - leading_edge("chevron", Some(0.5), 1.0), 0.5);
 
-        // On the banner measured in the report, 171.3 x 55.6, the notch must be half the
-        // height expressed against the width, not half the width.
         let aspect = 171.3 / 55.6;
         assert_close(1.0 - leading_edge("chevron", Some(0.5), aspect), 0.5 / aspect);
 
-        // Home plate takes the same adjust value, and used to ignore it entirely.
         assert_close(1.0 - leading_edge("homePlate", Some(0.5), 1.0), 0.5);
         let aspect = 280.9 / 37.5;
         assert_close(1.0 - leading_edge("homePlate", Some(0.5), aspect), 0.5 / aspect);
@@ -504,6 +497,14 @@ mod tests {
             1.0 - leading_edge("homePlate", Some(0.25), aspect),
             0.25 / aspect,
         );
+    }
+
+    #[test]
+    fn an_adjust_value_above_half_is_honoured() {
+        for shape in ["chevron", "homePlate"] {
+            assert_close(1.0 - leading_edge(shape, Some(0.75), 1.0), 0.75);
+            assert_close(1.0 - leading_edge(shape, Some(1.0), 1.0), 1.0);
+        }
     }
 
     #[test]
