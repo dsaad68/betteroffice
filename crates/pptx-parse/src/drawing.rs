@@ -1039,7 +1039,10 @@ mod tests {
             panic!("expected a nested group");
         };
         let nearest = fill_of(&own.children[0]).expect("the child should have a fill");
-        assert_eq!(nearest.color.as_ref().unwrap().rgb.as_deref(), Some("FF0000"));
+        assert_eq!(
+            nearest.color.as_ref().unwrap().rgb.as_deref(),
+            Some("FF0000")
+        );
     }
 
     #[test]
