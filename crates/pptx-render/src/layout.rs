@@ -910,7 +910,9 @@ struct ResolvedParagraph {
     /// Where the bullet sits relative to the text column. Negative in every deck that uses one,
     /// which is what puts the marker in the hanging-indent gutter.
     indent_px: f32,
-    bullet: Option<Bullet>,
+    /// The marker to draw, already resolved: a `buChar` glyph or a formatted `buAutoNum`. Layout
+    /// draws whichever it is given and keeps no counter state of its own.
+    marker: Option<String>,
     runs: Vec<ResolvedRun>,
 }
 
@@ -965,6 +967,9 @@ fn resolve_content(
     }
     let mut story_offset = 0_u32;
     let mut paragraphs = Vec::with_capacity(content.paragraphs.len());
+    // One counter per outline level. This lives here rather than in layout_content, which the
+    // autofit loop re-runs and would re-increment on every pass.
+    let mut counters = [0_u32; 9];
     for (index, paragraph) in content.paragraphs.iter().enumerate() {
         let properties = cascade.paragraph_properties(index, paragraph.level);
         let mut runs = Vec::with_capacity(paragraph.runs.len().max(1));
@@ -995,13 +1000,14 @@ fn resolve_content(
             .alignment
             .as_deref()
             .or(properties.alignment.as_deref());
+        let marker = resolve_marker(properties.bullet.as_ref(), paragraph.level, &mut counters);
         paragraphs.push(ResolvedParagraph {
             align: parse_align(alignment),
             justify: is_full_justification(alignment),
             level: paragraph.level,
             margin_left_px: emu_to_px(properties.margin_left.unwrap_or_default()),
             indent_px: emu_to_px(properties.indent.unwrap_or_default()),
-            bullet: properties.bullet.clone(),
+            marker,
             runs,
         });
         story_offset = story_offset.saturating_add(1);
@@ -1310,7 +1316,7 @@ fn prepend_bullet(
     lines: &mut [PositionedTextLine],
     scale: f32,
 ) -> Result<(), RenderError> {
-    let Some(Bullet::Character { value }) = &paragraph.bullet else {
+    let Some(value) = &paragraph.marker else {
         return Ok(());
     };
     let (Some(first), Some(style)) = (
@@ -1327,10 +1333,12 @@ fn prepend_bullet(
     let bullet_x = (x + paragraph.indent_px).max(x - paragraph.margin_left_px.max(0.0));
     let marker = ResolvedParagraph {
         align: paragraph.align,
+        // A marker is one glyph on its own; justification padding never applies to it.
+        justify: false,
         level: paragraph.level,
         margin_left_px: 0.0,
         indent_px: 0.0,
-        bullet: None,
+        marker: None,
         runs: vec![ResolvedRun {
             text: value.clone(),
             start: paragraph.runs[0].start,
@@ -1341,7 +1349,11 @@ fn prepend_bullet(
     if clusters.is_empty() {
         return Ok(());
     }
-    let mut runs = positioned_runs(&clusters, bullet_x, first.baseline, scale);
+    let advances = clusters
+        .iter()
+        .map(|cluster| cluster.width)
+        .collect::<Vec<_>>();
+    let mut runs = positioned_runs(&clusters, &advances, bullet_x, first.baseline, scale);
     for run in &mut runs {
         run.end = run.start;
     }
@@ -2127,6 +2139,91 @@ fn is_full_justification(value: Option<&str>) -> bool {
     value == Some("just")
 }
 
+/// The marker text for one paragraph, advancing the per-level counter when it is numbered.
+fn resolve_marker(bullet: Option<&Bullet>, level: u32, counters: &mut [u32; 9]) -> Option<String> {
+    let level = (level as usize).min(counters.len() - 1);
+    match bullet? {
+        Bullet::Character { value } if !value.trim().is_empty() => Some(value.clone()),
+        Bullet::Character { .. } | Bullet::None => None,
+        Bullet::AutoNumber { scheme, start_at } => {
+            // `start_at` applies the first time a level is numbered; after that the level simply
+            // advances, which is what lets it resume across paragraphs at another level.
+            counters[level] = match counters[level] {
+                0 => (*start_at).max(1),
+                current => current.saturating_add(1),
+            };
+            let value = counters[level];
+            for deeper in counters.iter_mut().skip(level + 1) {
+                *deeper = 0;
+            }
+            Some(format_autonum(value, scheme))
+        }
+    }
+}
+
+/// `ST_TextAutonumberScheme` is a numeral style followed by a suffix, e.g. `arabicPeriod`,
+/// `alphaLcParenR`, `romanUcPeriod`. Anything unrecognised falls back to `arabicPeriod`.
+fn format_autonum(value: u32, scheme: &str) -> String {
+    let (numeral, suffix) = ["ParenBoth", "ParenR", "Period", "Plain"]
+        .into_iter()
+        .find_map(|suffix| Some((scheme.strip_suffix(suffix)?, suffix)))
+        .unwrap_or((scheme, "Period"));
+    let body = match numeral {
+        "alphaLc" => format_alpha(value, false),
+        "alphaUc" => format_alpha(value, true),
+        "romanLc" => format_roman(value, false),
+        "romanUc" => format_roman(value, true),
+        _ => value.to_string(),
+    };
+    match suffix {
+        "ParenBoth" => format!("({body})"),
+        "ParenR" => format!("{body})"),
+        "Plain" => body,
+        _ => format!("{body}."),
+    }
+}
+
+/// 1 -> a, 26 -> z, 27 -> aa, in the spreadsheet-column sense the scheme uses.
+fn format_alpha(value: u32, upper: bool) -> String {
+    let base = if upper { b'A' } else { b'a' };
+    let mut value = value.max(1);
+    let mut out = Vec::new();
+    while value > 0 {
+        let index = (value - 1) % 26;
+        out.push(base + index as u8);
+        value = (value - 1) / 26;
+    }
+    out.reverse();
+    String::from_utf8(out).unwrap_or_default()
+}
+
+fn format_roman(value: u32, upper: bool) -> String {
+    const NUMERALS: [(u32, &str); 13] = [
+        (1000, "m"),
+        (900, "cm"),
+        (500, "d"),
+        (400, "cd"),
+        (100, "c"),
+        (90, "xc"),
+        (50, "l"),
+        (40, "xl"),
+        (10, "x"),
+        (9, "ix"),
+        (5, "v"),
+        (4, "iv"),
+        (1, "i"),
+    ];
+    let mut value = value.max(1);
+    let mut out = String::new();
+    for (amount, numeral) in NUMERALS {
+        while value >= amount {
+            out.push_str(numeral);
+            value -= amount;
+        }
+    }
+    if upper { out.to_uppercase() } else { out }
+}
+
 fn normalize_family(value: &str) -> String {
     value.trim().to_lowercase()
 }
@@ -2166,6 +2263,74 @@ mod tests {
     const CHART_FIXTURE: &[u8] = include_bytes!("../../pptx-parse/tests/fixtures/chart-deck.pptx");
     const FONT: &[u8] = include_bytes!("../../ooxml-text/tests/fonts/LiberationSans-Regular.ttf");
 
+    #[test]
+    fn autonumbering_counts_per_level_and_resumes_across_other_levels() {
+        let mut counters = [0_u32; 9];
+        let number = |level, counters: &mut [u32; 9]| {
+            resolve_marker(
+                Some(&Bullet::AutoNumber {
+                    scheme: "arabicPeriod".to_owned(),
+                    start_at: 1,
+                }),
+                level,
+                counters,
+            )
+        };
+        let dash = |level, counters: &mut [u32; 9]| {
+            resolve_marker(
+                Some(&Bullet::Character {
+                    value: "-".to_owned(),
+                }),
+                level,
+                counters,
+            )
+        };
+        assert_eq!(number(0, &mut counters).as_deref(), Some("1."));
+        // A run of level-1 bullets between two numbered items must not disturb the level-0 count.
+        assert_eq!(dash(1, &mut counters).as_deref(), Some("-"));
+        assert_eq!(dash(1, &mut counters).as_deref(), Some("-"));
+        assert_eq!(number(0, &mut counters).as_deref(), Some("2."));
+        assert_eq!(number(0, &mut counters).as_deref(), Some("3."));
+        // A deeper level restarts under each new parent.
+        assert_eq!(number(1, &mut counters).as_deref(), Some("1."));
+        assert_eq!(number(1, &mut counters).as_deref(), Some("2."));
+        assert_eq!(number(0, &mut counters).as_deref(), Some("4."));
+        assert_eq!(number(1, &mut counters).as_deref(), Some("1."));
+        // Bullet::None suppresses an inherited marker.
+        assert_eq!(resolve_marker(Some(&Bullet::None), 0, &mut counters), None);
+    }
+
+    #[test]
+    fn autonumber_start_at_applies_only_to_the_first_item() {
+        let mut counters = [0_u32; 9];
+        let number = |counters: &mut [u32; 9]| {
+            resolve_marker(
+                Some(&Bullet::AutoNumber {
+                    scheme: "arabicPeriod".to_owned(),
+                    start_at: 7,
+                }),
+                0,
+                counters,
+            )
+        };
+        assert_eq!(number(&mut counters).as_deref(), Some("7."));
+        assert_eq!(number(&mut counters).as_deref(), Some("8."));
+    }
+
+    #[test]
+    fn autonumber_schemes_format_their_numeral_and_suffix() {
+        assert_eq!(format_autonum(4, "arabicPeriod"), "4.");
+        assert_eq!(format_autonum(4, "arabicParenR"), "4)");
+        assert_eq!(format_autonum(4, "arabicParenBoth"), "(4)");
+        assert_eq!(format_autonum(4, "arabicPlain"), "4");
+        assert_eq!(format_autonum(1, "alphaLcParenR"), "a)");
+        assert_eq!(format_autonum(27, "alphaUcPeriod"), "AA.");
+        assert_eq!(format_autonum(9, "romanLcPeriod"), "ix.");
+        assert_eq!(format_autonum(2024, "romanUcPeriod"), "MMXXIV.");
+        // An unknown scheme falls back to arabic with a period rather than drawing nothing.
+        assert_eq!(format_autonum(3, "somethingElse"), "3.");
+    }
+
     fn renderer() -> SlideRenderer {
         let mut renderer = SlideRenderer::new();
         for bold in [false, true] {
@@ -2192,6 +2357,8 @@ mod tests {
             justify: is_full_justification(Some(alignment)),
             level: 0,
             margin_left_px: 0.0,
+            indent_px: 0.0,
+            marker: None,
             runs: vec![ResolvedRun {
                 text: text.to_owned(),
                 start: 0,
