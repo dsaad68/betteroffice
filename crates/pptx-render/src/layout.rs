@@ -459,7 +459,7 @@ impl<'a> LayoutBuilder<'a> {
         };
         self.hit_regions.push(HitRegion {
             shape_id: stable_id,
-            rect,
+            rect: rect_covering_text(rect, text_hit.as_ref()),
             transform,
             text: text_hit,
         });
@@ -570,7 +570,7 @@ impl<'a> LayoutBuilder<'a> {
         };
         self.hit_regions.push(HitRegion {
             shape_id: stable_id.to_owned(),
-            rect,
+            rect: rect_covering_text(rect, text_hit.as_ref()),
             transform,
             text: text_hit,
         });
@@ -673,10 +673,9 @@ impl<'a> LayoutBuilder<'a> {
             _ => 1.0,
         };
         let mut laid_out = layout_content(&self.renderer.fonts, &resolved, content_rect, scale)?;
-        if matches!(
-            autofit,
-            Some(TextAutofit::Normal { .. } | TextAutofit::Shape)
-        ) {
+        // Only normAutofit shrinks text. spAutoFit resizes the *shape* to its text and never
+        // touches the font size, so text under it overflows the stored box at full size.
+        if matches!(autofit, Some(TextAutofit::Normal { .. })) {
             while laid_out.total_height > content_rect.h && scale > MIN_AUTOFIT_SCALE {
                 scale = (scale * 0.9).max(MIN_AUTOFIT_SCALE);
                 laid_out = layout_content(&self.renderer.fonts, &resolved, content_rect, scale)?;
@@ -696,10 +695,12 @@ impl<'a> LayoutBuilder<'a> {
             Some("b") => TextAnchor::Bottom,
             _ => TextAnchor::Top,
         };
+        // A negative shift is text taller than its box: centred text then spills equally above
+        // and below rather than starting at the top edge, and bottom-anchored text spills above.
         let vertical_shift = match anchor {
             TextAnchor::Top => 0.0,
-            TextAnchor::Center => ((content_rect.h - laid_out.total_height) / 2.0).max(0.0),
-            TextAnchor::Bottom => (content_rect.h - laid_out.total_height).max(0.0),
+            TextAnchor::Center => (content_rect.h - laid_out.total_height) / 2.0,
+            TextAnchor::Bottom => content_rect.h - laid_out.total_height,
         };
         for line in &mut laid_out.lines {
             shift_line(line, 0.0, vertical_shift);
@@ -1327,6 +1328,8 @@ fn prepend_bullet(
     let bullet_x = (x + paragraph.indent_px).max(x - paragraph.margin_left_px.max(0.0));
     let marker = ResolvedParagraph {
         align: paragraph.align,
+        // A marker is one glyph on its own; justification padding never applies to it.
+        justify: false,
         level: paragraph.level,
         margin_left_px: 0.0,
         indent_px: 0.0,
@@ -1341,7 +1344,11 @@ fn prepend_bullet(
     if clusters.is_empty() {
         return Ok(());
     }
-    let mut runs = positioned_runs(&clusters, bullet_x, first.baseline, scale);
+    let advances = clusters
+        .iter()
+        .map(|cluster| cluster.width)
+        .collect::<Vec<_>>();
+    let mut runs = positioned_runs(&clusters, &advances, bullet_x, first.baseline, scale);
     for run in &mut runs {
         run.end = run.start;
     }
@@ -2127,6 +2134,25 @@ fn is_full_justification(value: Option<&str>) -> bool {
     value == Some("just")
 }
 
+/// The shape's box grown to whatever its text actually painted. Text that overflows is drawn
+/// outside the box, and a caret has to be reachable wherever a glyph is visible.
+fn rect_covering_text(rect: PxRect, text: Option<&TextHit>) -> PxRect {
+    let Some(text) = text else {
+        return rect;
+    };
+    let (mut top, mut bottom) = (rect.y, rect.y + rect.h);
+    for line in &text.lines {
+        top = top.min(line.y);
+        bottom = bottom.max(line.y + line.height);
+    }
+    PxRect {
+        x: rect.x,
+        y: top,
+        w: rect.w,
+        h: (bottom - top).max(rect.h),
+    }
+}
+
 fn normalize_family(value: &str) -> String {
     value.trim().to_lowercase()
 }
@@ -2166,6 +2192,51 @@ mod tests {
     const CHART_FIXTURE: &[u8] = include_bytes!("../../pptx-parse/tests/fixtures/chart-deck.pptx");
     const FONT: &[u8] = include_bytes!("../../ooxml-text/tests/fonts/LiberationSans-Regular.ttf");
 
+    #[test]
+    fn overflowing_text_grows_the_hit_region_so_a_visible_glyph_stays_clickable() {
+        let rect = PxRect {
+            x: 10.0,
+            y: 100.0,
+            w: 200.0,
+            h: 20.0,
+        };
+        let line = |y: f32, height: f32| PositionedTextLine {
+            x: 10.0,
+            y,
+            width: 200.0,
+            height,
+            baseline: y + height,
+            start: 0,
+            end: 0,
+            runs: Vec::new(),
+            caret_stops: Vec::new(),
+        };
+        // Text centred in a box shorter than itself spills equally above and below.
+        let text = TextHit {
+            story_id: "story".to_owned(),
+            lines: vec![line(80.0, 40.0), line(120.0, 40.0)],
+        };
+        let grown = rect_covering_text(rect, Some(&text));
+        assert_eq!(grown.y, 80.0);
+        assert_eq!(grown.y + grown.h, 160.0);
+        assert_eq!(grown.x, rect.x);
+        assert_eq!(grown.w, rect.w);
+        // Text that fits leaves the box alone.
+        let fitting = TextHit {
+            story_id: "story".to_owned(),
+            lines: vec![line(104.0, 12.0)],
+        };
+        let same = rect_covering_text(rect, Some(&fitting));
+        assert_eq!((same.y, same.h), (rect.y, rect.h));
+        assert_eq!(
+            (
+                rect_covering_text(rect, None).y,
+                rect_covering_text(rect, None).h
+            ),
+            (rect.y, rect.h)
+        );
+    }
+
     fn renderer() -> SlideRenderer {
         let mut renderer = SlideRenderer::new();
         for bold in [false, true] {
@@ -2192,6 +2263,8 @@ mod tests {
             justify: is_full_justification(Some(alignment)),
             level: 0,
             margin_left_px: 0.0,
+            indent_px: 0.0,
+            bullet: None,
             runs: vec![ResolvedRun {
                 text: text.to_owned(),
                 start: 0,

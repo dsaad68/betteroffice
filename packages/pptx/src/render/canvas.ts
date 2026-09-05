@@ -215,9 +215,13 @@ async function paintImage(
 }
 
 function paintTextBox(ctx: CanvasRenderingContext2D, textBox: TextBoxPrimitive): void {
-  ctx.beginPath();
-  ctx.rect(textBox.x, textBox.y, textBox.w, textBox.h);
-  ctx.clip();
+  // DrawingML puts no clip on autoshape text: text taller than its box spills out of it rather
+  // than being sliced at the edge.
+  if (!textBox.overflow) {
+    ctx.beginPath();
+    ctx.rect(textBox.x, textBox.y, textBox.w, textBox.h);
+    ctx.clip();
+  }
   ctx.textAlign = 'left';
   ctx.textBaseline = 'alphabetic';
   for (const line of textBox.lines) {
