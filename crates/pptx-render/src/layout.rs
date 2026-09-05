@@ -485,6 +485,7 @@ impl<'a> LayoutBuilder<'a> {
             master: master_node.and_then(node_text),
             master_slide: self.master,
             placeholder: shape.placeholder.as_ref(),
+            style_color: shape_style_color(original),
         };
         let text = shape.text_stories.first().map(content_from_story);
         let text_hit = if let Some(content) = text {
@@ -607,6 +608,7 @@ impl<'a> LayoutBuilder<'a> {
                     master: None,
                     master_slide: self.master,
                     placeholder: base.placeholder.as_ref(),
+                    style_color: shape_style_color(Some(shape)),
                 },
             )?)
         } else {
@@ -797,6 +799,7 @@ struct BodyCascade<'a> {
     master: Option<&'a TextBody>,
     master_slide: Option<&'a SlideMaster>,
     placeholder: Option<&'a Placeholder>,
+    style_color: Option<&'a ColorValue>,
 }
 
 impl BodyCascade<'_> {
@@ -844,6 +847,12 @@ impl BodyCascade<'_> {
             .and_then(|master| master_style(master, self.placeholder, level))
             .cloned()
             .unwrap_or_default();
+        if let Some(color) = self.style_color {
+            properties
+                .default_run
+                .get_or_insert_with(RunProperties::default)
+                .color = Some(color.clone());
+        }
         for body in [self.master, self.layout, self.primary]
             .into_iter()
             .flatten()
@@ -2075,6 +2084,13 @@ fn paint(fill: &ShapeFill, theme: &Theme) -> Option<Paint> {
     resolve_paint_color(fill.color.as_ref(), theme).map(|color| Paint::Solid { color })
 }
 
+fn shape_style_color(shape: Option<&ShapeNode>) -> Option<&ColorValue> {
+    match shape? {
+        ShapeNode::Shape(shape) => shape.style.as_ref()?.font_color.as_ref(),
+        _ => None,
+    }
+}
+
 fn line_end(end: Option<&LineEnd>, stroke_width: f32) -> Option<StrokeEnd> {
     let end = end.filter(|end| end.end_type != "none")?;
     let base = stroke_width.max(LINE_END_MIN_BASE_PX);
@@ -2229,6 +2245,7 @@ mod tests {
     const CHART_FIXTURE: &[u8] = include_bytes!("../../pptx-parse/tests/fixtures/chart-deck.pptx");
     const NUMBERED_FIXTURE: &[u8] =
         include_bytes!("../../pptx-parse/tests/fixtures/slide-number-fields.pptx");
+    const STYLE_FIXTURE: &[u8] = include_bytes!("../../pptx-parse/tests/fixtures/shape-style.pptx");
     const FONT: &[u8] = include_bytes!("../../ooxml-text/tests/fonts/LiberationSans-Regular.ttf");
     const BOLD_FONT: &[u8] =
         include_bytes!("../../../packages/fonts/assets/LiberationSans-Bold.ttf");
@@ -3395,6 +3412,7 @@ mod tests {
             children: Vec::new(),
         };
         let layout_shape = ShapeNode::Shape(pptx_parse::Shape {
+            style: None,
             base: pptx_parse::ShapeBase {
                 id: 2,
                 name: "Layout title".to_owned(),
@@ -3420,6 +3438,130 @@ mod tests {
             (resolved.x, resolved.y, resolved.width, resolved.height),
             (100, 200, 300, 400)
         );
+    }
+
+    #[test]
+    fn a_shape_style_colour_sits_between_inherited_bodies_and_master_defaults() {
+        let package = pptx_parse::parse_pptx(STYLE_FIXTURE).unwrap();
+        let session = DeckSession::open(STYLE_FIXTURE, 8_010).unwrap();
+        let snapshot = session.snapshot().unwrap();
+        let renderer = renderer();
+        let expected = [
+            (
+                "#EEEEEE",
+                "fontRef schemeClr resolves through the deck theme",
+            ),
+            ("#FF0000", "fontRef srgbClr"),
+            ("#00B050", "run colour beats fontRef"),
+            ("#0070C0", "paragraph defRPr beats fontRef"),
+            ("#0070C0", "layout placeholder colour beats fontRef"),
+            ("#595959", "fontRef without a colour falls to otherStyle"),
+            ("#595959", "no p:style falls to otherStyle"),
+            (
+                "#EEEEEE",
+                "fontRef beats bodyStyle when no placeholder sets a colour",
+            ),
+        ];
+        let mut failures = Vec::new();
+        for (index, (color, case)) in expected.iter().enumerate() {
+            let rendered = renderer.layout_slide(&package, &snapshot, index).unwrap();
+            let colors: Vec<&str> = rendered
+                .display_list
+                .primitives
+                .iter()
+                .filter_map(|primitive| match primitive {
+                    Primitive::TextBox {
+                        shape_id: Some(id),
+                        paragraphs,
+                        ..
+                    } if id.starts_with("slide:") => Some(paragraphs),
+                    _ => None,
+                })
+                .flat_map(|paragraphs| paragraphs.iter().flat_map(|paragraph| &paragraph.runs))
+                .map(|run| run.color.as_str())
+                .collect();
+            if colors.is_empty() || colors.iter().any(|value| value != color) {
+                failures.push(format!("slide {}: {case}: {colors:?}", index + 1));
+            }
+        }
+        assert!(failures.is_empty(), "{}", failures.join("\n"));
+    }
+
+    fn assert_style_colours(rendered: &RenderedSlide, prefix: &str, expected: &[(&str, &str)]) {
+        let mut paragraphs = Vec::new();
+        let mut positioned = Vec::new();
+        for primitive in &rendered.display_list.primitives {
+            if let Primitive::TextBox {
+                shape_id: Some(id),
+                paragraphs: text,
+                lines,
+                ..
+            } = primitive
+                && id.starts_with(prefix)
+            {
+                paragraphs.extend(text.iter().flat_map(|paragraph| {
+                    paragraph
+                        .runs
+                        .iter()
+                        .map(|run| (run.text.as_str(), run.color.as_str()))
+                }));
+                positioned.extend(lines.iter().flat_map(|line| {
+                    line.runs
+                        .iter()
+                        .map(|run| (run.text.as_str(), run.color.as_str()))
+                }));
+            }
+        }
+        assert_eq!(paragraphs, expected);
+        assert_eq!(positioned, expected);
+    }
+
+    #[test]
+    fn placeholder_colours_outrank_font_refs_per_paragraph() {
+        let session = DeckSession::open(STYLE_FIXTURE, 8_011).unwrap();
+        let snapshot = session.snapshot().unwrap();
+        let renderer = renderer();
+        let layout_placeholder = renderer
+            .layout_slide(session.package(), &snapshot, 4)
+            .unwrap();
+        assert_style_colours(
+            &layout_placeholder,
+            "slide:",
+            &[("layout title 0070C0", "#0070C0")],
+        );
+        let master_placeholder = renderer
+            .layout_slide(session.package(), &snapshot, 9)
+            .unwrap();
+        assert_style_colours(
+            &master_placeholder,
+            "slide:",
+            &[
+                ("master placeholder", "#7030A0"),
+                ("paragraph default", "#0070C0"),
+                ("explicit run", "#00B050"),
+            ],
+        );
+    }
+
+    #[test]
+    fn font_ref_scheme_colours_follow_the_slides_layout_master_and_theme() {
+        let session = DeckSession::open(STYLE_FIXTURE, 8_012).unwrap();
+        let snapshot = session.snapshot().unwrap();
+        let renderer = renderer();
+        let first_theme = renderer
+            .layout_slide(session.package(), &snapshot, 0)
+            .unwrap();
+        assert_style_colours(&first_theme, "slide:", &[("fontRef lt1", "#EEEEEE")]);
+        let second_theme = renderer
+            .layout_slide(session.package(), &snapshot, 8)
+            .unwrap();
+        for (prefix, expected) in [
+            ("slide:", ("second theme", "#123456")),
+            ("layout:", ("layout theme", "#234567")),
+            ("master:", ("master theme", "#345678")),
+        ] {
+            assert_style_colours(&second_theme, prefix, &[expected]);
+        }
     }
 
     fn end(kind: &str, width: Option<&str>, length: Option<&str>) -> LineEnd {

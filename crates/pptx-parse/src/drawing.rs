@@ -140,6 +140,13 @@ fn parse_shape_children(
     Ok(shapes)
 }
 
+fn parse_shape_style(element: Option<&XmlElement>) -> Option<ShapeStyle> {
+    let font_color = element?.child("fontRef").and_then(parse_color_container);
+    font_color.map(|color| ShapeStyle {
+        font_color: Some(color),
+    })
+}
+
 fn parse_shape(
     element: &XmlElement,
     part: &str,
@@ -149,6 +156,7 @@ fn parse_shape(
     let properties = element.child("spPr");
     let transform = properties.and_then(|value| value.child("xfrm"));
     Ok(Shape {
+        style: parse_shape_style(element.child("style")).map(Box::new),
         base: parse_base(
             element
                 .child("nvSpPr")
@@ -1003,6 +1011,66 @@ mod tests {
     use super::*;
     use crate::ParseLimits;
     use crate::xml::parse_xml;
+
+    #[test]
+    fn a_shape_style_supplies_the_default_text_colour() {
+        let limits = ParseLimits::default();
+        let mut budget = ParseBudget::new(&limits);
+        let root = parse_xml(
+            br#"<p:sld><p:cSld><p:spTree><p:sp><p:nvSpPr><p:cNvPr id="2" name="Styled"/><p:nvPr/></p:nvSpPr><p:spPr/><p:style><a:lnRef idx="2"><a:schemeClr val="accent1"/></a:lnRef><a:fillRef idx="1"><a:schemeClr val="accent1"/></a:fillRef><a:effectRef idx="0"><a:schemeClr val="accent1"/></a:effectRef><a:fontRef idx="minor"><a:schemeClr val="lt1"/></a:fontRef></p:style></p:sp><p:sp><p:nvSpPr><p:cNvPr id="3" name="Plain"/><p:nvPr/></p:nvSpPr><p:spPr/></p:sp></p:spTree></p:cSld></p:sld>"#,
+            "ppt/slides/slide1.xml",
+            &mut budget,
+        )
+        .unwrap();
+        let data = common_slide_data(
+            &root,
+            &[],
+            "ppt/slides/slide1.xml",
+            &mut budget,
+            ShapeElements::WithConnectors,
+        )
+        .unwrap();
+
+        let ShapeNode::Shape(styled) = &data.shapes[0] else {
+            panic!("expected a shape");
+        };
+        let color = styled
+            .style
+            .as_ref()
+            .and_then(|style| style.font_color.as_ref())
+            .expect("fontRef supplies a colour");
+        assert_eq!(color.theme_color.as_deref(), Some("lt1"));
+
+        let ShapeNode::Shape(plain) = &data.shapes[1] else {
+            panic!("expected a shape");
+        };
+        assert!(plain.style.is_none());
+    }
+
+    #[test]
+    fn a_font_ref_without_a_colour_leaves_the_shape_unstyled() {
+        let limits = ParseLimits::default();
+        let mut budget = ParseBudget::new(&limits);
+        let root = parse_xml(
+            br#"<p:sld><p:cSld><p:spTree><p:sp><p:nvSpPr><p:cNvPr id="2" name="Bare"/><p:nvPr/></p:nvSpPr><p:spPr/><p:style><a:lnRef idx="2"><a:schemeClr val="accent1"/></a:lnRef><a:fillRef idx="1"><a:schemeClr val="accent1"/></a:fillRef><a:effectRef idx="0"><a:schemeClr val="accent1"/></a:effectRef><a:fontRef idx="minor"/></p:style></p:sp></p:spTree></p:cSld></p:sld>"#,
+            "ppt/slides/slide1.xml",
+            &mut budget,
+        )
+        .unwrap();
+        let data = common_slide_data(
+            &root,
+            &[],
+            "ppt/slides/slide1.xml",
+            &mut budget,
+            ShapeElements::WithConnectors,
+        )
+        .unwrap();
+
+        let ShapeNode::Shape(shape) = &data.shapes[0] else {
+            panic!("expected a shape");
+        };
+        assert!(shape.style.is_none());
+    }
 
     #[test]
     fn a_connector_parses_as_a_shape_and_keeps_its_place_in_the_tree() {
