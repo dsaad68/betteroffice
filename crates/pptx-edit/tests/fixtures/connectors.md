@@ -27,3 +27,9 @@ The release-produced v1 fixture remains unchanged.
 
 In the basic deck, connector 3 joins shapes 2 and 4. Its transform is
 `(190500, 285750, 381000, 571500)` EMU, and its line is red at 25400 EMU.
+
+The v2 updates were regenerated again with schema-5 main at
+`2710a419282950442f5218975aedbd395fef64b5` using
+`generate_hidden_schema_snapshots.rs`; their bytes remain unchanged. That
+generator preserves legacy connector ordinals and omits later schema fields.
+The v3 fixtures retain the provenance above.
