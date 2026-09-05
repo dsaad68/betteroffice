@@ -206,6 +206,7 @@ fn compile(slide: ComposedSlide) -> SurfaceDisplayList {
                     w: base.rect.w,
                     h: base.rect.h,
                     asset_id: image_part_path,
+                    effects: Vec::new(),
                     stroke: stroke.map(Into::into),
                     transform,
                 });

@@ -243,10 +243,19 @@ export interface ShapePrimitive extends PrimitiveBase {
   stroke?: Stroke;
 }
 
+/** An `a:blip` colour transform, colours already resolved to `#rrggbbaa`. */
+export type ImageEffect =
+  | { kind: 'biLevel'; threshold: number }
+  | { kind: 'grayscale' }
+  | { kind: 'duotone'; shadow: string; highlight: string }
+  | { kind: 'colorChange'; from: string; to: string };
+
 export interface ImagePrimitive extends PrimitiveBase {
   kind: 'image';
   name: string;
   assetId?: string;
+  /** Applied to the bitmap in order before it is drawn. */
+  effects?: ImageEffect[];
   stroke?: Stroke;
 }
 

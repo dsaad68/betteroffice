@@ -141,6 +141,9 @@ fn seed_shape(
             shape_map.insert(txn, "geometry", "rect");
             insert_json(&shape_map, txn, "fillJson", picture.fill.as_ref())?;
             insert_json(&shape_map, txn, "outlineJson", picture.outline.as_ref())?;
+            if !picture.effects.is_empty() {
+                insert_json(&shape_map, txn, "blipEffectsJson", Some(&picture.effects))?;
+            }
             if let Some(media) = &picture.media_part_path {
                 shape_map.insert(txn, "mediaPartPath", media.as_str());
             }
@@ -845,6 +848,7 @@ fn snapshot_shape<T: ReadTxn>(
         outline,
         resolved_outline_color,
         media_part_path: map_string(&shape, txn, "mediaPartPath"),
+        blip_effects: optional_json(&shape, txn, "blipEffectsJson")?.unwrap_or_default(),
         graphic: optional_json(&shape, txn, "graphicJson")?,
         text_stories: text_snapshots,
         children,

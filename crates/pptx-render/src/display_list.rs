@@ -49,6 +49,21 @@ pub struct GradientStop {
     pub color: String,
 }
 
+/// An `a:blip` colour transform with its colours resolved to `#rrggbbaa`,
+/// applied to the decoded bitmap in the order the list gives.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(
+    tag = "kind",
+    rename_all = "camelCase",
+    rename_all_fields = "camelCase"
+)]
+pub enum ImageEffect {
+    BiLevel { threshold: f32 },
+    Grayscale,
+    Duotone { shadow: String, highlight: String },
+    ColorChange { from: String, to: String },
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Stroke {
@@ -107,6 +122,8 @@ pub enum Primitive {
         h: f32,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         asset_id: Option<String>,
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        effects: Vec<ImageEffect>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         stroke: Option<Stroke>,
         #[serde(default, skip_serializing_if = "Transform::is_identity")]

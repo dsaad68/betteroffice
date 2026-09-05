@@ -1,6 +1,7 @@
 import type {
   ChartPrimitive,
   GeometryPathCommand,
+  ImageEffect,
   ImagePrimitive,
   Paint,
   PlaceholderPrimitive,
@@ -205,12 +206,129 @@ async function paintImage(
 ): Promise<void> {
   if (image.assetId && resolver) {
     const source = await resolver(image.assetId);
-    if (source) ctx.drawImage(source, image.x, image.y, image.w, image.h);
+    if (source) {
+      const recoloured = image.effects?.length ? recolourImage(source, image.effects) : source;
+      ctx.drawImage(recoloured, image.x, image.y, image.w, image.h);
+    }
   }
   if (image.stroke) {
     ctx.beginPath();
     ctx.rect(image.x, image.y, image.w, image.h);
     strokeCurrentPath(ctx, image.stroke);
+  }
+}
+
+function imageSourceSize(source: CanvasImageSource): { width: number; height: number } | null {
+  const candidate = source as { naturalWidth?: number; naturalHeight?: number; width?: unknown; height?: unknown };
+  const width = candidate.naturalWidth ?? (typeof candidate.width === 'number' ? candidate.width : 0);
+  const height = candidate.naturalHeight ?? (typeof candidate.height === 'number' ? candidate.height : 0);
+  return width > 0 && height > 0 ? { width, height } : null;
+}
+
+function offscreen(width: number, height: number): HTMLCanvasElement | OffscreenCanvas | null {
+  if (typeof OffscreenCanvas !== 'undefined') return new OffscreenCanvas(width, height);
+  if (typeof document === 'undefined') return null;
+  const canvas = document.createElement('canvas');
+  canvas.width = width;
+  canvas.height = height;
+  return canvas;
+}
+
+/**
+ * `a:blip` colour transforms, per pixel: `ctx.filter` can approximate `biLevel`
+ * but cannot express `duotone` or `clrChange` at all. Returns the source
+ * untouched when there is no offscreen surface, or when reading it back would
+ * throw on a cross-origin bitmap.
+ */
+function recolourImage(source: CanvasImageSource, effects: ImageEffect[]): CanvasImageSource {
+  const size = imageSourceSize(source);
+  if (!size) return source;
+  const canvas = offscreen(size.width, size.height);
+  const ctx = canvas?.getContext('2d') as CanvasRenderingContext2D | null;
+  if (!canvas || !ctx) return source;
+  try {
+    ctx.drawImage(source, 0, 0);
+    const data = ctx.getImageData(0, 0, size.width, size.height);
+    applyImageEffects(data.data, effects);
+    ctx.putImageData(data, 0, 0);
+  } catch {
+    return source;
+  }
+  return canvas as CanvasImageSource;
+}
+
+/** Rec. 601 luma, the weighting `biLevel` and `duotone` are defined against. */
+function luma(data: Uint8ClampedArray, index: number): number {
+  return 0.299 * data[index] + 0.587 * data[index + 1] + 0.114 * data[index + 2];
+}
+
+function rgba(color: string): [number, number, number, number] | null {
+  const hex = color.startsWith('#') ? color.slice(1) : color;
+  const expanded = hex.length === 3 || hex.length === 4 ? [...hex].map((c) => c + c).join('') : hex;
+  if (expanded.length !== 6 && expanded.length !== 8) return null;
+  const byte = (at: number) => Number.parseInt(expanded.slice(at, at + 2), 16);
+  const channels: [number, number, number, number] = [
+    byte(0),
+    byte(2),
+    byte(4),
+    expanded.length === 8 ? byte(6) : 255,
+  ];
+  return channels.some(Number.isNaN) ? null : channels;
+}
+
+/** `getImageData` hands back straight alpha, which is what these are defined on. */
+export function applyImageEffects(data: Uint8ClampedArray, effects: ImageEffect[]): void {
+  for (const effect of effects) {
+    switch (effect.kind) {
+      case 'biLevel': {
+        const threshold = Math.min(Math.max(effect.threshold, 0), 1) * 255;
+        for (let index = 0; index < data.length; index += 4) {
+          const value = luma(data, index) < threshold ? 0 : 255;
+          data[index] = value;
+          data[index + 1] = value;
+          data[index + 2] = value;
+        }
+        break;
+      }
+      case 'grayscale': {
+        for (let index = 0; index < data.length; index += 4) {
+          const value = Math.round(luma(data, index));
+          data[index] = value;
+          data[index + 1] = value;
+          data[index + 2] = value;
+        }
+        break;
+      }
+      case 'duotone': {
+        const shadow = rgba(effect.shadow);
+        const highlight = rgba(effect.highlight);
+        if (!shadow || !highlight) break;
+        for (let index = 0; index < data.length; index += 4) {
+          const ratio = luma(data, index) / 255;
+          for (let channel = 0; channel < 3; channel += 1) {
+            data[index + channel] = Math.round(
+              shadow[channel] * (1 - ratio) + highlight[channel] * ratio
+            );
+          }
+        }
+        break;
+      }
+      case 'colorChange': {
+        const from = rgba(effect.from);
+        const to = rgba(effect.to);
+        if (!from || !to) break;
+        for (let index = 0; index < data.length; index += 4) {
+          if (data[index] !== from[0] || data[index + 1] !== from[1] || data[index + 2] !== from[2]) {
+            continue;
+          }
+          data[index] = to[0];
+          data[index + 1] = to[1];
+          data[index + 2] = to[2];
+          data[index + 3] = to[3];
+        }
+        break;
+      }
+    }
   }
 }
 

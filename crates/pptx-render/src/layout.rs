@@ -2,21 +2,22 @@ use std::collections::{BTreeMap, HashMap, HashSet};
 
 use ooxml_drawingml::chart::PlotRect;
 use ooxml_drawingml::{
-    ShapeFill, ShapeOutline, Theme, preset_geometry_to_path, resolve_color_value_to_hex_with_theme,
-    resolve_theme_font_ref,
+    ColorValue, ShapeFill, ShapeOutline, Theme, preset_geometry_to_path,
+    resolve_color_value_to_hex_with_theme, resolve_color_value_to_rgba_hex, resolve_theme_font_ref,
 };
 use ooxml_text::{CompatFlags, FontId, FontStore, break_opportunities, shape, single_line_box};
 use pptx_edit::{DeckSnapshot, ShapeKind, ShapeSnapshot, StorySnapshot, TextStyle};
 use pptx_parse::{
-    ChartSpace, GraphicFrameData, ParagraphProperties, Placeholder, PptxPackage, RunProperties,
-    ShapeNode, ShapeTransform, Slide, SlideLayout, SlideMaster, TextAutofit, TextBody,
+    BlipEffect, ChartSpace, GraphicFrameData, ParagraphProperties, Placeholder, PptxPackage,
+    RunProperties, ShapeNode, ShapeTransform, Slide, SlideLayout, SlideMaster, TextAutofit,
+    TextBody,
 };
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
 use crate::chart::{ChartFrame, ChartText, chart_primitive};
 use crate::{
-    CONTRACT_VERSION, CaretStop, GradientStop, GradientType, Paint, PositionedGlyph,
+    CONTRACT_VERSION, CaretStop, GradientStop, GradientType, ImageEffect, Paint, PositionedGlyph,
     PositionedTextLine, PositionedTextRun, Primitive, Stroke, SurfaceDisplayList, TextAlign,
     TextAnchor, TextParagraph, TextRun, Transform,
 };
@@ -420,6 +421,7 @@ impl<'a> LayoutBuilder<'a> {
                     w: rect.w,
                     h: rect.h,
                     asset_id: shape.media_part_path.clone(),
+                    effects: image_effects(&shape.blip_effects, self.theme),
                     stroke: outline,
                     transform,
                 });
@@ -529,6 +531,7 @@ impl<'a> LayoutBuilder<'a> {
                     w: rect.w,
                     h: rect.h,
                     asset_id: value.media_part_path.clone(),
+                    effects: image_effects(&value.effects, self.theme),
                     stroke: value
                         .outline
                         .as_ref()
@@ -1976,6 +1979,30 @@ fn resolved_transform_value(
     }
 }
 
+/// `a:blip` colour transforms with their colours resolved against the theme.
+/// An effect whose colours will not resolve is dropped rather than painted with
+/// a black stand-in, which would erase the artwork it recolours.
+fn image_effects(effects: &[BlipEffect], theme: &Theme) -> Vec<ImageEffect> {
+    let rgba = |color: Option<&ColorValue>| resolve_color_value_to_rgba_hex(color, Some(theme));
+    effects
+        .iter()
+        .filter_map(|effect| match effect {
+            BlipEffect::BiLevel { threshold } => Some(ImageEffect::BiLevel {
+                threshold: (*threshold as f32).clamp(0.0, 1.0),
+            }),
+            BlipEffect::Grayscale => Some(ImageEffect::Grayscale),
+            BlipEffect::Duotone { shadow, highlight } => Some(ImageEffect::Duotone {
+                shadow: rgba(shadow.as_ref())?,
+                highlight: rgba(highlight.as_ref())?,
+            }),
+            BlipEffect::ColorChange { from, to } => Some(ImageEffect::ColorChange {
+                from: rgba(from.as_ref())?,
+                to: rgba(to.as_ref())?,
+            }),
+        })
+        .collect()
+}
+
 fn paint(fill: &ShapeFill, theme: &Theme) -> Option<Paint> {
     if fill.fill_type == "none" {
         return None;
@@ -2092,6 +2119,7 @@ fn utf16_len(value: &str) -> u32 {
 
 #[cfg(test)]
 mod tests {
+    use ooxml_drawingml::ThemeColorScheme;
     use pptx_edit::{DeckSession, EditCtx};
 
     use super::*;
@@ -2270,6 +2298,66 @@ mod tests {
             assert_eq!(parse_align(Some(alignment)), TextAlign::Justify);
             assert!(!is_full_justification(Some(alignment)));
         }
+    }
+
+    /// The cisco deck's Google Drive glyph: `bg2` with `shade="45000"` against a
+    /// white `lt2` is the shadow, `prstClr val="white"` the highlight. Resolving
+    /// it in the parser, which has no theme, would have produced black.
+    #[test]
+    fn duotone_colours_resolve_against_the_theme() {
+        let theme = Theme {
+            color_scheme: ThemeColorScheme {
+                lt2: "FFFFFF".to_owned(),
+                ..ThemeColorScheme::default()
+            },
+            ..Theme::default()
+        };
+        let effects = image_effects(
+            &[
+                BlipEffect::Duotone {
+                    shadow: Some(ColorValue {
+                        theme_color: Some("background2".to_owned()),
+                        theme_shade: Some("73".to_owned()),
+                        ..ColorValue::default()
+                    }),
+                    highlight: Some(ColorValue {
+                        rgb: Some("FFFFFF".to_owned()),
+                        ..ColorValue::default()
+                    }),
+                },
+                BlipEffect::BiLevel { threshold: 0.25 },
+            ],
+            &theme,
+        );
+
+        assert_eq!(
+            effects,
+            vec![
+                ImageEffect::Duotone {
+                    shadow: "#737373FF".to_owned(),
+                    highlight: "#FFFFFFFF".to_owned(),
+                },
+                ImageEffect::BiLevel { threshold: 0.25 },
+            ]
+        );
+    }
+
+    /// A duotone missing one of its two colours is dropped, not painted with a
+    /// black stand-in that would erase the artwork it recolours.
+    #[test]
+    fn an_unresolvable_duotone_is_dropped() {
+        let effects = image_effects(
+            &[BlipEffect::Duotone {
+                shadow: Some(ColorValue::default()),
+                highlight: Some(ColorValue {
+                    rgb: Some("FFFFFF".to_owned()),
+                    ..ColorValue::default()
+                }),
+            }],
+            &Theme::default(),
+        );
+
+        assert!(effects.is_empty());
     }
 
     #[test]
@@ -2785,6 +2873,7 @@ mod tests {
             outline: None,
             resolved_outline_color: None,
             media_part_path: None,
+            blip_effects: Vec::new(),
             graphic: None,
             text_stories: Vec::new(),
             children: Vec::new(),

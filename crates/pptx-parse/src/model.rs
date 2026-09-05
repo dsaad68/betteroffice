@@ -214,8 +214,34 @@ pub struct Picture {
     pub relationship_id: Option<String>,
     pub media_part_path: Option<String>,
     pub crop: PictureCrop,
+    /// `a:blip` colour transforms, in document order: `clrChange` then
+    /// `duotone` is not `duotone` then `clrChange`.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub effects: Vec<BlipEffect>,
     pub fill: Option<ShapeFill>,
     pub outline: Option<ShapeOutline>,
+}
+
+/// A colour transform an `a:blip` applies to its bitmap before it is drawn.
+/// Colours stay unresolved because the parser has no theme.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(tag = "type", rename_all = "camelCase")]
+pub enum BlipEffect {
+    /// `a:biLevel`: luminance below `threshold` becomes black, the rest white.
+    BiLevel { threshold: f64 },
+    /// `a:grayscl`.
+    Grayscale,
+    /// `a:duotone`: luminance interpolates between the two colours.
+    Duotone {
+        shadow: Option<ColorValue>,
+        highlight: Option<ColorValue>,
+    },
+    /// `a:clrChange`: pixels equal to `from` are replaced by `to`, whose alpha
+    /// is what makes `clrFrom="FFFFFF"` -> `alpha="0"` knock out a background.
+    ColorChange {
+        from: Option<ColorValue>,
+        to: Option<ColorValue>,
+    },
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]

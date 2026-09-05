@@ -1,6 +1,6 @@
 import { describe, expect, test } from 'bun:test';
-import type { SlideDisplayList } from '../types';
-import { paintSlide } from './canvas';
+import type { ImageEffect, SlideDisplayList } from '../types';
+import { applyImageEffects, paintSlide } from './canvas';
 
 describe('PPTX canvas replay', () => {
   test('paints shape geometry and positioned text in display-list order', async () => {
@@ -300,5 +300,41 @@ describe('PPTX canvas replay', () => {
       { text: 'one ', x: 40 },
       { text: 'two', x: 100 },
     ]);
+  });
+});
+
+describe('blip colour effects', () => {
+  // #03A7DF is the elastica mark from the cisco deck: 48.7% under Rec. 601 and
+  // 53.4% under Rec. 709, so the two luma formulas disagree at this threshold.
+  test('biLevel thresholds on Rec. 601 luma and leaves alpha alone', () => {
+    const data = new Uint8ClampedArray([0x03, 0xa7, 0xdf, 0x80]);
+    applyImageEffects(data, [{ kind: 'biLevel', threshold: 0.5 }]);
+    expect([...data]).toEqual([0, 0, 0, 0x80]);
+
+    const light = new Uint8ClampedArray([0x03, 0xa7, 0xdf, 0xff]);
+    applyImageEffects(light, [{ kind: 'biLevel', threshold: 0.25 }]);
+    expect([...light]).toEqual([255, 255, 255, 0xff]);
+  });
+
+  test('duotone interpolates between the two colours by luma', () => {
+    const data = new Uint8ClampedArray([0, 0, 0, 0xff, 255, 255, 255, 0xff]);
+    applyImageEffects(data, [{ kind: 'duotone', shadow: '#737373ff', highlight: '#ffffffff' }]);
+    expect([...data]).toEqual([0x73, 0x73, 0x73, 0xff, 255, 255, 255, 0xff]);
+  });
+
+  // clrFrom="FFFFFF" -> clrTo with alpha="0" has to run before the duotone that
+  // follows it, or the whole bitmap is recoloured opaque.
+  test('effects apply in list order', () => {
+    const ordered: ImageEffect[] = [
+      { kind: 'colorChange', from: '#ffffffff', to: '#ffffff00' },
+      { kind: 'duotone', shadow: '#000000ff', highlight: '#ff0000ff' },
+    ];
+    const data = new Uint8ClampedArray([255, 255, 255, 0xff]);
+    applyImageEffects(data, ordered);
+    expect(data[3]).toBe(0);
+
+    const reversed = new Uint8ClampedArray([255, 255, 255, 0xff]);
+    applyImageEffects(reversed, [...ordered].reverse());
+    expect(reversed[3]).toBe(0xff);
   });
 });
