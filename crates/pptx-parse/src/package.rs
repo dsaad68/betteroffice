@@ -633,6 +633,35 @@ mod tests {
     const NUMBERED_FIXTURE: &[u8] = include_bytes!("../tests/fixtures/slide-number-fields.pptx");
     const CHART_PART: &str = "ppt/charts/chart1.xml";
 
+    fn presentation_from(xml: &str) -> Presentation {
+        let limits = ParseLimits::default();
+        let mut budget = ParseBudget::new(&limits);
+        let root = parse_xml(xml.as_bytes(), "ppt/presentation.xml", &mut budget).unwrap();
+        parse_presentation(&root, "ppt/presentation.xml", &[]).unwrap()
+    }
+
+    #[test]
+    fn first_slide_num_sets_where_slide_numbering_starts() {
+        const NS: &str = "http://schemas.openxmlformats.org/presentationml/2006/main";
+        let deck = |attribute: &str| {
+            format!(r#"<p:presentation xmlns:p="{NS}"{attribute}><p:sldSz cx="12192000" cy="6858000"/></p:presentation>"#)
+        };
+
+        assert_eq!(presentation_from(&deck("")).first_slide_num, 1);
+        assert_eq!(
+            presentation_from(&deck(r#" firstSlideNum="4""#)).first_slide_num,
+            4
+        );
+        assert_eq!(
+            presentation_from(&deck(r#" firstSlideNum="0""#)).first_slide_num,
+            0
+        );
+        assert_eq!(
+            presentation_from(&deck(r#" firstSlideNum="oops""#)).first_slide_num,
+            1
+        );
+    }
+
     #[test]
     fn parses_betteroffice_demo_deck_surface() {
         let package = parse_pptx(FIXTURE).unwrap();

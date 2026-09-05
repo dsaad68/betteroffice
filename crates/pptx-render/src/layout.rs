@@ -2782,7 +2782,6 @@ mod tests {
             field_text(&run(Some("datetime"), "16/08/2026"), 7),
             "16/08/2026"
         );
-        // Ordinary text is untouched.
         assert_eq!(field_text(&run(None, "Chapter 3"), 7), "Chapter 3");
     }
 
