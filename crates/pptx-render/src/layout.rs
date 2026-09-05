@@ -2,8 +2,8 @@ use std::collections::{BTreeMap, HashMap, HashSet};
 
 use ooxml_drawingml::chart::PlotRect;
 use ooxml_drawingml::{
-    ColorValue, ShapeFill, ShapeOutline, Theme, preset_geometry_to_path, resolve_color_value_to_hex_with_theme,
-    resolve_theme_font_ref,
+    ColorValue, ShapeFill, ShapeOutline, Theme, preset_geometry_to_path,
+    resolve_color_value_to_hex_with_theme, resolve_theme_font_ref,
 };
 use ooxml_text::{CompatFlags, FontId, FontStore, break_opportunities, shape, single_line_box};
 use pptx_edit::{DeckSnapshot, ShapeKind, ShapeSnapshot, StorySnapshot, TextStyle};
@@ -454,6 +454,7 @@ impl<'a> LayoutBuilder<'a> {
             master: master_node.and_then(node_text),
             master_slide: self.master,
             placeholder: shape.placeholder.as_ref(),
+            style_color: shape_style_color(original),
         };
         let text = shape.text_stories.first().map(content_from_story);
         let text_hit = if let Some(content) = text {
@@ -464,7 +465,6 @@ impl<'a> LayoutBuilder<'a> {
                 transform,
                 content,
                 body_cascade,
-                shape_style_color(original),
             )?)
         } else {
             None
@@ -575,8 +575,8 @@ impl<'a> LayoutBuilder<'a> {
                     master: None,
                     master_slide: self.master,
                     placeholder: base.placeholder.as_ref(),
+                    style_color: shape_style_color(Some(shape)),
                 },
-                shape_style_color(Some(shape)),
             )?)
         } else {
             None
@@ -664,10 +664,8 @@ impl<'a> LayoutBuilder<'a> {
         transform: Transform,
         content: TextContent,
         cascade: BodyCascade<'_>,
-        style_color: Option<&ColorValue>,
     ) -> Result<TextHit, RenderError> {
-        let resolved =
-            resolve_content(self.renderer, self.theme, &content, cascade, style_color)?;
+        let resolved = resolve_content(self.renderer, self.theme, &content, cascade)?;
         let left = cascade.inset_left().unwrap_or(DEFAULT_INSET_HORIZONTAL_EMU);
         let right = cascade
             .inset_right()
@@ -768,6 +766,8 @@ struct BodyCascade<'a> {
     master: Option<&'a TextBody>,
     master_slide: Option<&'a SlideMaster>,
     placeholder: Option<&'a Placeholder>,
+    /// `p:style/a:fontRef`: above the master's `txStyles`, below every inherited body.
+    style_color: Option<&'a ColorValue>,
 }
 
 impl BodyCascade<'_> {
@@ -815,6 +815,12 @@ impl BodyCascade<'_> {
             .and_then(|master| master_style(master, self.placeholder, level))
             .cloned()
             .unwrap_or_default();
+        if let Some(color) = self.style_color {
+            properties
+                .default_run
+                .get_or_insert_with(RunProperties::default)
+                .color = Some(color.clone());
+        }
         for body in [self.master, self.layout, self.primary]
             .into_iter()
             .flatten()
@@ -941,7 +947,6 @@ fn resolve_content(
     theme: &Theme,
     content: &TextContent,
     cascade: BodyCascade<'_>,
-    style_color: Option<&ColorValue>,
 ) -> Result<ResolvedContent, RenderError> {
     let total_bytes = content
         .paragraphs
@@ -975,13 +980,8 @@ fn resolve_content(
         let properties = cascade.paragraph_properties(index, paragraph.level);
         let mut runs = Vec::with_capacity(paragraph.runs.len().max(1));
         for run in &paragraph.runs {
-            let style = resolve_style(
-                renderer,
-                theme,
-                &run.style,
-                properties.default_run.as_ref(),
-                style_color,
-            )?;
+            let style =
+                resolve_style(renderer, theme, &run.style, properties.default_run.as_ref())?;
             let start = story_offset;
             story_offset = story_offset.saturating_add(utf16_len(&run.text));
             runs.push(ResolvedRun {
@@ -999,7 +999,6 @@ fn resolve_content(
                     theme,
                     &TextStyle::default(),
                     properties.default_run.as_ref(),
-                    style_color,
                 )?,
             });
         }
@@ -1024,7 +1023,6 @@ fn resolve_style(
     theme: &Theme,
     direct: &TextStyle,
     fallback: Option<&RunProperties>,
-    style_color: Option<&ColorValue>,
 ) -> Result<ResolvedStyle, RenderError> {
     let bold = direct
         .bold
@@ -1052,14 +1050,11 @@ fn resolve_style(
         })
         .unwrap_or_else(|| resolve_theme_font_ref(Some(theme), "+mn-lt"));
     let face = renderer.resolve_face(&family, bold, italic)?;
-    // p:style belongs to the shape, so it outranks the document-wide default the cascade
-    // supplies, but never an explicit colour on the run.
     let color = direct
         .color
         .as_deref()
         .filter(|color| valid_color(color))
         .map(str::to_owned)
-        .or_else(|| resolve_color_value_to_hex_with_theme(style_color, Some(theme)))
         .or_else(|| {
             fallback.and_then(|value| {
                 resolve_color_value_to_hex_with_theme(value.color.as_ref(), Some(theme))
@@ -2132,6 +2127,7 @@ mod tests {
 
     const FIXTURE: &[u8] = include_bytes!("../../../apps/demo/public/betteroffice-demo.pptx");
     const CHART_FIXTURE: &[u8] = include_bytes!("../../pptx-parse/tests/fixtures/chart-deck.pptx");
+    const STYLE_FIXTURE: &[u8] = include_bytes!("../../pptx-parse/tests/fixtures/shape-style.pptx");
     const FONT: &[u8] = include_bytes!("../../ooxml-text/tests/fonts/LiberationSans-Regular.ttf");
 
     fn renderer() -> SlideRenderer {
@@ -2850,5 +2846,52 @@ mod tests {
             (resolved.x, resolved.y, resolved.width, resolved.height),
             (100, 200, 300, 400)
         );
+    }
+
+    #[test]
+    fn a_shape_style_colour_sits_between_inherited_bodies_and_master_defaults() {
+        let package = pptx_parse::parse_pptx(STYLE_FIXTURE).unwrap();
+        let session = DeckSession::open(STYLE_FIXTURE, 8_010).unwrap();
+        let snapshot = session.snapshot().unwrap();
+        let renderer = renderer();
+        let expected = [
+            (
+                "#EEEEEE",
+                "fontRef schemeClr resolves through the deck theme",
+            ),
+            ("#FF0000", "fontRef srgbClr"),
+            ("#00B050", "run colour beats fontRef"),
+            ("#0070C0", "paragraph defRPr beats fontRef"),
+            ("#0070C0", "layout placeholder colour beats fontRef"),
+            ("#595959", "fontRef without a colour falls to otherStyle"),
+            ("#595959", "no p:style falls to otherStyle"),
+            (
+                "#EEEEEE",
+                "fontRef beats bodyStyle when no placeholder sets a colour",
+            ),
+        ];
+        let mut failures = Vec::new();
+        for (index, (color, case)) in expected.iter().enumerate() {
+            let rendered = renderer.layout_slide(&package, &snapshot, index).unwrap();
+            let colors: Vec<&str> = rendered
+                .display_list
+                .primitives
+                .iter()
+                .filter_map(|primitive| match primitive {
+                    Primitive::TextBox {
+                        shape_id: Some(id),
+                        paragraphs,
+                        ..
+                    } if id.starts_with("slide:") => Some(paragraphs),
+                    _ => None,
+                })
+                .flat_map(|paragraphs| paragraphs.iter().flat_map(|paragraph| &paragraph.runs))
+                .map(|run| run.color.as_str())
+                .collect();
+            if colors.is_empty() || colors.iter().any(|value| value != color) {
+                failures.push(format!("slide {}: {case}: {colors:?}", index + 1));
+            }
+        }
+        assert!(failures.is_empty(), "{}", failures.join("\n"));
     }
 }
