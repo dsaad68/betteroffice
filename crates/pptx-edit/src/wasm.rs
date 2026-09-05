@@ -6,8 +6,8 @@ use wasm_bindgen::prelude::*;
 use yrs::Subscription;
 
 use crate::{
-    DeckSession, DeckSnapshot, EditCtx, PresetShapeDraft, ShapeDraft, ShapeStroke, TextStyle,
-    TextStylePatch, UpdateEvent, UpdateOrigin,
+    DeckSession, DeckSnapshot, EditCtx, PresetShapeDraft, ShapeDraft, ShapeRect, ShapeStroke,
+    TextStyle, TextStylePatch, UpdateEvent, UpdateOrigin,
 };
 
 #[wasm_bindgen]
@@ -129,6 +129,14 @@ struct ResizeShapeArgs {
     shape_id: String,
     width: i64,
     height: i64,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct SetShapeRectArgs {
+    slide_id: String,
+    shape_id: String,
+    rect: ShapeRect,
 }
 
 #[derive(Deserialize)]
@@ -464,6 +472,16 @@ impl PptxDocument {
                     args.width,
                     args.height,
                 )
+                .map_err(js_error)?,
+        )
+    }
+
+    #[wasm_bindgen(js_name = setShapeRectJson)]
+    pub fn set_shape_rect_json(&self, args: &str) -> Result<String, JsValue> {
+        let args: SetShapeRectArgs = parse_args(args)?;
+        json(
+            self.session
+                .set_shape_rect(&local_context(), &args.slide_id, &args.shape_id, args.rect)
                 .map_err(js_error)?,
         )
     }
