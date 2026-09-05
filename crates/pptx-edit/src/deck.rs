@@ -302,6 +302,18 @@ impl DeckSession {
         let shape_order = slide_shape_order(&slide, &txn)?;
         let shape_ids = string_array_ref(&shape_order, &txn);
         remove_shape_entries(&mut txn, &shape_ids)?;
+        let comments = required_map(&txn, crate::COMMENTS)?;
+        let comment_ids: Vec<String> = comments
+            .iter(&txn)
+            .filter_map(|(id, value)| {
+                let entry = value.cast::<MapRef>().ok()?;
+                (map_string(&entry, &txn, "slideId").as_deref() == Some(slide_id))
+                    .then(|| id.to_owned())
+            })
+            .collect();
+        for id in comment_ids {
+            comments.remove(&mut txn, &id);
+        }
         order.remove(&mut txn, index);
         slides.remove(&mut txn, slide_id);
         Ok(SlideReceipt {

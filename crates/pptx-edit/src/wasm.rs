@@ -7,8 +7,7 @@ use yrs::Subscription;
 
 use crate::{
     CommentFlavor, DeckSession, DeckSnapshot, EditCtx, PresetShapeDraft, ShapeDraft, ShapeRect,
-    ShapeStroke,
-    TextStyle, TextStylePatch, UpdateEvent, UpdateOrigin,
+    ShapeStroke, TextStyle, TextStylePatch, UpdateEvent, UpdateOrigin,
 };
 
 #[wasm_bindgen]

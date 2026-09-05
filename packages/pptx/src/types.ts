@@ -100,14 +100,11 @@ export interface DeckSnapshot {
   widthEmu: number;
   heightEmu: number;
   slides: SlideSnapshot[];
-  commentFlavor: CommentFlavor;
-  comments: CommentSnapshot[];
+  commentFlavor?: CommentFlavor;
+  comments?: CommentSnapshot[];
 }
 
-/**
- * PowerPoint fixes a file to one comment system at its first comment and never
- * mixes them: legacy reads everywhere, modern carries replies and resolve.
- */
+/** Legacy comments or modern threads. */
 export type CommentFlavor = 'legacy' | 'modern';
 
 export interface CommentSnapshot {

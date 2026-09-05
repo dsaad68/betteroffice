@@ -1,10 +1,3 @@
-//! Comment parts in both wire formats: the ISO 29500 legacy pair
-//! (`commentAuthors.xml` + `comments/commentN.xml`) and the `[MS-PPTX]` modern
-//! threaded pair (`authors.xml` + `comments/modernCommentN.xml`).
-//!
-//! PowerPoint never writes both into one package: the first comment fixes the
-//! flavour for the file's lifetime.
-
 use serde::{Deserialize, Serialize};
 
 use crate::relationships::{Relationship, relationship_types};
@@ -26,8 +19,6 @@ pub(crate) const CT_MODERN_COMMENTS: &str = "application/vnd.ms-powerpoint.comme
 pub(crate) const LEGACY_AUTHORS_PART: &str = "ppt/commentAuthors.xml";
 pub(crate) const MODERN_AUTHORS_PART: &str = "ppt/authors.xml";
 
-/// EMU per PowerPoint master unit (1/576 inch): 914400 / 576. Not an integer,
-/// so the conversion rounds rather than truncating.
 pub(crate) const EMU_PER_MASTER_UNIT: f64 = 1587.5;
 
 pub(crate) fn emu_to_master(emu: i64) -> i64 {
@@ -38,7 +29,6 @@ pub(crate) fn master_to_emu(master: i64) -> i64 {
     (master as f64 * EMU_PER_MASTER_UNIT).round() as i64
 }
 
-/// Which of the two mutually exclusive comment systems a deck uses.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub enum CommentFlavor {
@@ -50,16 +40,12 @@ pub enum CommentFlavor {
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct CommentAuthor {
-    /// Legacy authors use a small integer as a string; modern authors use a
-    /// braced GUID.
     pub id: String,
     pub name: String,
     #[serde(default)]
     pub initials: String,
-    /// Legacy `lastIdx`: the highest per-author comment index in use.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub last_index: Option<u32>,
-    /// Legacy `clrIdx`: the author's display colour slot.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub color_index: Option<u32>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -71,8 +57,6 @@ pub struct CommentAuthor {
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Comment {
-    /// Legacy comments have no durable id of their own, so they take
-    /// `{authorId}:{idx}`; modern comments carry a braced GUID.
     pub id: String,
     pub author_id: String,
     pub slide_part_path: String,
@@ -81,16 +65,13 @@ pub struct Comment {
     pub created: Option<String>,
     pub x_emu: i64,
     pub y_emu: i64,
-    /// Set on a modern reply; names the thread's root comment.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub parent_id: Option<String>,
-    /// Modern `status`, e.g. `resolved`.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub status: Option<String>,
     pub flavor: CommentFlavor,
 }
 
-/// The comment parts a slide's relationships point at.
 pub(crate) struct SlideCommentParts {
     pub legacy: Option<String>,
     pub modern: Option<String>,
@@ -114,9 +95,6 @@ pub(crate) fn authors_part(
     resolved_by_exact_type(relationships, relationship_type)
 }
 
-/// Exact-match lookup. [`Relationship::has_type`] is a suffix test, and the
-/// modern comment relationship type also ends with `/comments`, so a suffix
-/// match would conflate the two flavours.
 fn resolved_by_exact_type(
     relationships: &[Relationship],
     relationship_type: &str,
@@ -237,15 +215,31 @@ fn modern_comment(
         slide_part_path: slide_part_path.to_owned(),
         text: element
             .child("txBody")
-            .map(XmlElement::text_content)
+            .map(comment_text)
             .unwrap_or_default(),
         created: element.attribute_local("created").map(str::to_owned),
-        x_emu: master_to_emu(coordinate(position, "x")),
-        y_emu: master_to_emu(coordinate(position, "y")),
+        x_emu: coordinate(position, "x"),
+        y_emu: coordinate(position, "y"),
         parent_id,
         status: element.attribute_local("status").map(str::to_owned),
         flavor: CommentFlavor::Modern,
     }
+}
+
+fn comment_text(body: &XmlElement) -> String {
+    body.children_named("p")
+        .map(|paragraph| {
+            paragraph
+                .child_elements()
+                .filter_map(|child| match child.local_name() {
+                    "r" | "fld" => child.child("t").map(XmlElement::text_content),
+                    "br" => Some("\n".to_owned()),
+                    _ => None,
+                })
+                .collect::<String>()
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
 }
 
 fn coordinate(position: Option<&XmlElement>, name: &str) -> i64 {
@@ -259,19 +253,12 @@ fn unsigned_attribute(element: &XmlElement, name: &str) -> Option<u32> {
     element.attribute_local(name)?.parse::<u32>().ok()
 }
 
-/// The desired final comment state for a deck. One flavour only: PowerPoint
-/// fixes a file to legacy or modern at its first comment and never mixes them.
 pub struct CommentsWrite {
     pub flavor: CommentFlavor,
     pub authors: Vec<CommentAuthorWrite>,
-    /// A slide present with an empty list has its comment part, relationship
-    /// and content-type override dropped.
     pub per_slide: Vec<(CommentSlide, Vec<CommentWrite>)>,
 }
 
-/// Which slide a comment set belongs to. A slide minted by this same write has
-/// no part path yet, so it is named by its position in [`crate::DeckWrite`]'s
-/// slide list and resolved once the part has been created.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum CommentSlide {
     Existing(String),
@@ -289,8 +276,6 @@ pub struct CommentAuthorWrite {
 }
 
 pub struct CommentWrite {
-    /// Modern comments carry this as a braced GUID; legacy ones are keyed by
-    /// `(author_id, index)` instead and ignore it.
     pub id: String,
     pub author_id: String,
     pub index: u32,
@@ -299,7 +284,6 @@ pub struct CommentWrite {
     pub x_emu: i64,
     pub y_emu: i64,
     pub status: Option<String>,
-    /// Modern only; a legacy write flattens them away before reaching here.
     pub replies: Vec<CommentWrite>,
 }
 
@@ -427,23 +411,19 @@ fn legacy_comment_element(comment: &CommentWrite) -> XmlElement {
         .with_child(XmlElement::new("p:text").with_text(comment.text.clone()))
 }
 
-/// `CT_Comment` is an `xsd:sequence` of anchor, `pos?`, `replyLst?`, `txBody` —
-/// the comment's own body really does come last.
 fn modern_comment_element(comment: &CommentWrite, slide_id: u32) -> XmlElement {
     let mut element = modern_body_element("p188:cm", comment)
         .with_child(
             XmlElement::new("pc:sldMkLst")
                 .with_child(XmlElement::new("pc:docMk"))
                 .with_child(
-                    XmlElement::new("pc:sldMk")
-                        .with_attribute("cId", "0")
-                        .with_attribute("sldId", slide_id.to_string()),
+                    XmlElement::new("pc:sldMk").with_attribute("sldId", slide_id.to_string()),
                 ),
         )
         .with_child(
             XmlElement::new("p188:pos")
-                .with_attribute("x", emu_to_master(comment.x_emu).to_string())
-                .with_attribute("y", emu_to_master(comment.y_emu).to_string()),
+                .with_attribute("x", comment.x_emu.to_string())
+                .with_attribute("y", comment.y_emu.to_string()),
         );
     if !comment.replies.is_empty() {
         let mut replies = XmlElement::new("p188:replyLst");
@@ -471,12 +451,18 @@ fn modern_body_element(name: &str, comment: &CommentWrite) -> XmlElement {
 }
 
 fn text_body(text: &str) -> XmlElement {
-    XmlElement::new("p188:txBody")
+    let mut body = XmlElement::new("p188:txBody")
         .with_child(XmlElement::new("a:bodyPr"))
-        .with_child(XmlElement::new("a:lstStyle"))
-        .with_child(XmlElement::new("a:p").with_child(
-            XmlElement::new("a:r").with_child(XmlElement::new("a:t").with_text(text.to_owned())),
-        ))
+        .with_child(XmlElement::new("a:lstStyle"));
+    for paragraph in text.split('\n') {
+        body = body.with_child(
+            XmlElement::new("a:p").with_child(
+                XmlElement::new("a:r")
+                    .with_child(XmlElement::new("a:t").with_text(paragraph.to_owned())),
+            ),
+        );
+    }
+    body
 }
 
 #[cfg(test)]
@@ -525,7 +511,6 @@ mod tests {
         assert_eq!(emu_to_master(914_400), 576, "one inch");
         assert_eq!(master_to_emu(576), 914_400);
         assert_eq!(emu_to_master(0), 0);
-        // 1587.5 EMU per unit, so halves round rather than truncate.
         assert_eq!(emu_to_master(2_381), 1);
         assert_eq!(emu_to_master(-914_400), -576);
     }

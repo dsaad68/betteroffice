@@ -289,7 +289,7 @@ fn hydrate_doc(doc: &Doc, bytes: &[u8]) -> EditResult<()> {
     // An empty container carries no items, so an update cannot carry it either.
     // Every peer registers the roots the same way, which stays convergent.
     txn.get_or_insert_array(SLIDE_ORDER);
-    for root in [SLIDES, SHAPES, STORIES, COMMENTS] {
+    for root in [META, SLIDES, SHAPES, STORIES, COMMENTS] {
         txn.get_or_insert_map(root);
     }
     Ok(())

@@ -384,11 +384,7 @@ class Presentation:
         x: int = 0,
         y: int = 0,
     ) -> CommentEdit:
-        """Anchor a comment to a slide. Position is EMU.
-
-        ``created`` is caller-supplied rather than read from a clock, so the
-        same edits replay to the same bytes; pass an ISO-8601 timestamp.
-        """
+        """Add a slide comment at an EMU position."""
         return self._inner.add_comment(
             slide, text, author=author, initials=initials, created=created, x=x, y=y
         )

@@ -200,9 +200,6 @@ pub fn parse_pptx_with_limits(data: &[u8], limits: &ParseLimits) -> Result<PptxP
     })
 }
 
-/// Discovers whichever comment system the deck commits to and reads it. A deck
-/// carrying both is malformed; the legacy parts win, since every reader
-/// understands them.
 fn parse_package_comments(
     parts: &HashMap<&str, &[u8]>,
     presentation: &Presentation,

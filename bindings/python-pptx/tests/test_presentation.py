@@ -1147,7 +1147,9 @@ def test_remove_comment_drops_the_parts(deck, tmp_path):
     edit = deck.add_comment(
         0, "Root.", author="Ada", initials="AL", created="2026-09-01T10:00:00.000"
     )
-    deck.remove_comment(edit.comment_id)
+    deck = bo.Presentation.open(deck.save())
+    edit = deck.comments()[0]
+    deck.remove_comment(edit.id)
     assert deck.comments() == []
     out = tmp_path / "empty.pptx"
     deck.save_path(out)

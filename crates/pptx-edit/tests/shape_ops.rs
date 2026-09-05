@@ -380,9 +380,6 @@ fn a_deck_without_any_text_opens_and_accepts_edits() {
     );
 }
 
-/// A commented slide that also owns a chart and an external hyperlink: the
-/// comment relationship has to land beside them without disturbing either, and
-/// deleting the slide has to prune the chart and the comment together.
 #[test]
 fn comments_coexist_with_chart_and_hyperlink_relationships() {
     const CHART_DECK: &[u8] = include_bytes!("../../pptx-parse/tests/fixtures/chart-deck.pptx");

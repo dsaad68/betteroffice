@@ -30,7 +30,6 @@ const MAX_SLIDE_ID: u32 = 2_147_483_647;
 /// The desired final deck, expressed against the parsed source package.
 pub struct DeckWrite {
     pub slides: Vec<SlideWrite>,
-    /// `None` leaves every comment part exactly as the source had it.
     pub comments: Option<CommentsWrite>,
 }
 
@@ -526,11 +525,6 @@ fn patch_structure(
 const PACKAGE_RELATIONSHIPS_NS: &str =
     "http://schemas.openxmlformats.org/package/2006/relationships";
 
-/// Writes the deck's comment parts and their OPC bookkeeping. Parts belonging
-/// to the flavour the deck is not using are dropped, so a package never ends up
-/// carrying both systems.
-/// The slides this write minted, addressed by their position in the deck's
-/// slide list rather than by a part path they do not have yet.
 struct MintedSlides<'a> {
     slides: &'a [MintedSlide],
     by_slide_index: &'a HashMap<usize, usize>,
@@ -553,9 +547,6 @@ fn patch_comment_parts(
     removed_paths: &mut HashSet<String>,
     budget: &mut ParseBudget<'_>,
 ) -> Result<(), PptxError> {
-    // Every comment part the deck already spells out, so a slide minting its
-    // first one never lands on a name another slide owns. `commentN.xml` is a
-    // convention, not a rule: the relationship is what binds part to slide.
     let mut taken: HashSet<String> = package
         .parts
         .iter()
@@ -628,7 +619,8 @@ fn patch_comment_parts(
     }
 
     let presentation_relationships = slide_relationships_path(&package.presentation.part_path);
-    let authors_path = write.authors_part_path().to_owned();
+    let authors_path = existing_authors_part(package, write)
+        .unwrap_or_else(|| write.authors_part_path().to_owned());
     if write.authors.is_empty() {
         removed_paths.insert(authors_path.clone());
         sink.forget(&authors_path);
@@ -660,8 +652,6 @@ fn patch_comment_parts(
     drop_other_flavor(package, write, &mut sink, removed_paths, budget)
 }
 
-/// Prefers the slide's own number so conventional decks keep conventional
-/// names, then counts up past anything already spoken for.
 fn mint_comment_part_path(
     write: &CommentsWrite,
     slide_part_path: &str,
@@ -678,7 +668,6 @@ fn mint_comment_part_path(
     }
 }
 
-/// Removes whatever the deck holds for the flavour it is not being written in.
 fn drop_other_flavor(
     package: &PptxPackage,
     write: &CommentsWrite,
@@ -708,7 +697,8 @@ fn drop_other_flavor(
             budget,
         )?;
     }
-    let authors_path = other.authors_part_path().to_owned();
+    let authors_path = existing_authors_part(package, &other)
+        .unwrap_or_else(|| other.authors_part_path().to_owned());
     if package.part_bytes(&authors_path).is_some() {
         removed_paths.insert(authors_path.clone());
         sink.forget(&authors_path);
@@ -721,6 +711,15 @@ fn drop_other_flavor(
         )?;
     }
     Ok(())
+}
+
+fn existing_authors_part(package: &PptxPackage, write: &CommentsWrite) -> Option<String> {
+    package
+        .relationships
+        .get(&package.presentation.part_path)?
+        .iter()
+        .find(|relationship| relationship.is_type(write.authors_relationship_type()))
+        .and_then(|relationship| relationship.resolved_target.clone())
 }
 
 fn existing_comment_part(
@@ -736,9 +735,6 @@ fn existing_comment_part(
         .and_then(|relationship| relationship.resolved_target.clone())
 }
 
-/// `ppt/slides/slide7.xml` -> 7, so a comment part lands beside the slide it
-/// belongs to. Anything unparseable falls back to 1; the relationship, not the
-/// name, is what binds the two.
 fn slide_number(slide_part_path: &str) -> usize {
     slide_part_path
         .rsplit_once("/slide")
@@ -747,8 +743,6 @@ fn slide_number(slide_part_path: &str) -> usize {
         .unwrap_or(1)
 }
 
-/// Reads and writes package parts while a write is in flight, so later steps
-/// see what earlier ones produced.
 struct PartSink<'a> {
     package: &'a PptxPackage,
     replacements: &'a mut HashMap<String, Vec<u8>>,

@@ -13,12 +13,12 @@ use pyo3::types::{PyBool, PyBytes, PyDict, PyInt};
 use python_common::{generated_client_id, map_io_error};
 
 use betteroffice_pptx::{
-    Background, CommentFlavor, CommentReceipt, CommentSnapshot, DeckSnapshot, EditCtx, EditError, EditOrigin,
-    Error as CoreError, MAX_COLLABORATION_BYTES, MAX_COLLABORATION_CLIENT_ID, ParagraphSnapshot,
-    ParseLimits, Presentation as CorePresentation, PresetShapeDraft, RenderOptions, ShapeAdjustReceipt,
-    ShapeDraft, ShapeFillReceipt, ShapeKind, ShapeReceipt, ShapeRect, ShapeSnapshot, ShapeStroke,
-    ShapeStrokeReceipt, SlideReceipt, SlideSnapshot, StorySnapshot, TextReceipt, TextRunSnapshot,
-    TextStyle, TextStylePatch, TransformReceipt,
+    Background, CommentFlavor, CommentReceipt, CommentSnapshot, DeckSnapshot, EditCtx, EditError,
+    EditOrigin, Error as CoreError, MAX_COLLABORATION_BYTES, MAX_COLLABORATION_CLIENT_ID,
+    ParagraphSnapshot, ParseLimits, Presentation as CorePresentation, PresetShapeDraft,
+    RenderOptions, ShapeAdjustReceipt, ShapeDraft, ShapeFillReceipt, ShapeKind, ShapeReceipt,
+    ShapeRect, ShapeSnapshot, ShapeStroke, ShapeStrokeReceipt, SlideReceipt, SlideSnapshot,
+    StorySnapshot, TextReceipt, TextRunSnapshot, TextStyle, TextStylePatch, TransformReceipt,
 };
 
 create_exception!(
@@ -941,7 +941,6 @@ impl PyAdjustEdit {
     }
 }
 
-/// One comment or reply on a slide.
 #[pyclass(module = "betteroffice_pptx", name = "Comment", frozen)]
 pub struct PyComment {
     #[pyo3(get)]
@@ -993,7 +992,6 @@ impl PyComment {
     }
 }
 
-/// What a comment edit touched.
 #[pyclass(module = "betteroffice_pptx", name = "CommentEdit", frozen)]
 pub struct PyCommentEdit {
     #[pyo3(get)]
@@ -1672,8 +1670,6 @@ impl PyPresentation {
         Ok(PyTextEdit::from_core(receipt))
     }
 
-    /// Anchor a comment to a slide. `created` is caller-supplied so the engine
-    /// stays clock-free; pass an ISO-8601 timestamp.
     #[pyo3(signature = (slide, text, *, author, initials = "", created, x = 0, y = 0))]
     #[allow(clippy::too_many_arguments)]
     fn add_comment(
@@ -1700,7 +1696,6 @@ impl PyPresentation {
         Ok(PyCommentEdit::from_core(receipt))
     }
 
-    /// Reply to a thread. Modern comments only: legacy `p:cm` has no reply list.
     #[pyo3(signature = (comment_id, text, *, author, initials = "", created))]
     fn reply_to_comment(
         &self,
@@ -1721,8 +1716,6 @@ impl PyPresentation {
         Ok(PyCommentEdit::from_core(receipt))
     }
 
-    /// Mark a thread resolved. Modern comments only; on a legacy deck,
-    /// resolving means removing.
     #[pyo3(signature = (comment_id, resolved = true))]
     fn set_comment_status(&self, comment_id: &str, resolved: bool) -> PyResult<PyCommentEdit> {
         let receipt = self.committed(self.presentation.set_comment_status(
@@ -1751,7 +1744,6 @@ impl PyPresentation {
             .collect())
     }
 
-    /// Which comment system the deck writes: `"legacy"` or `"modern"`.
     #[getter]
     fn comment_flavor(&self) -> PyResult<String> {
         Ok(
@@ -1762,8 +1754,6 @@ impl PyPresentation {
         )
     }
 
-    /// Only legal while the deck has no comments: PowerPoint fixes the flavour
-    /// at the first comment and the two bodies are not interchangeable.
     fn set_comment_flavor(&self, flavor: &str) -> PyResult<String> {
         let flavor = match flavor {
             "legacy" => CommentFlavor::Legacy,

@@ -594,8 +594,9 @@ fn a_comment_added_to_the_demo_deck_survives_a_reopen() {
 
 #[test]
 fn a_deck_with_no_comment_edits_keeps_every_part_untouched() {
-    let session = open_fixture();
-    assert_eq!(parts(&session.save().unwrap()), parts(FIXTURE));
+    let source = include_bytes!("fixtures/modern-comments.pptx");
+    let session = DeckSession::open(source, 719).unwrap();
+    assert_eq!(parts(&session.save().unwrap()), parts(source));
 }
 
 #[test]

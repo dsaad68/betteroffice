@@ -168,7 +168,6 @@ const LEGACY_AUTHORS_REL: &str = r#"<Relationship Id="rId9" Type="http://schemas
 const MODERN_COMMENTS_REL: &str = r#"<Relationship Id="rId9" Type="http://schemas.microsoft.com/office/2018/10/relationships/comments" Target="../comments/modernComment1.xml"/>"#;
 const MODERN_AUTHORS_REL: &str = r#"<Relationship Id="rId9" Type="http://schemas.microsoft.com/office/2018/10/relationships/authors" Target="authors.xml"/>"#;
 
-/// The base fixture with one commented slide, in whichever wire format.
 fn commented_fixture(flavor: CommentFlavor) -> Vec<u8> {
     let (
         authors_part,
@@ -760,7 +759,6 @@ fn a_deck_reads_the_comments_it_was_opened_with() {
     assert_eq!(comment.author, "Mary Smith");
     assert_eq!(comment.initials, "mas");
     assert_eq!(comment.slide_id, snapshot.slides[0].id);
-    // 576 master units is one inch, and an inch is 914400 EMU.
     assert_eq!(comment.x_emu, 914_400);
     assert_eq!(comment.y_emu, 457_200);
 }
@@ -986,10 +984,6 @@ fn switching_an_emptied_deck_to_modern_drops_the_legacy_parts() {
     assert_relationships_resolve(&saved);
 }
 
-/// The `commentN.xml` naming is conventional, not normative: the relationship
-/// is what binds a comment part to its slide. A deck where slide 2 owns
-/// `comment1.xml` must not have that part stolen when slide 1 gains its first
-/// comment.
 #[test]
 fn a_minted_comment_part_never_overwrites_another_slides() {
     let mut sources = fixture_parts(256);
@@ -1007,7 +1001,6 @@ fn a_minted_comment_part_never_overwrites_another_slides() {
                     &format!("{LEGACY_AUTHORS_REL}</Relationships>"),
                 );
             }
-            // slide 2 owns comment1.xml, which is legal and what makes this bite
             "ppt/slides/_rels/slide2.xml.rels" => {
                 *body = body.replace(
                     "</Relationships>",

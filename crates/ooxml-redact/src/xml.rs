@@ -319,7 +319,6 @@ fn sensitive_attribute(
         Format::Pptx => {
             element == "cSld" && attribute == "name"
                 || element == "cmAuthor" && matches!(attribute, "name" | "initials")
-                // The modern threaded-comment author list, ppt/authors.xml.
                 || element == "author" && matches!(attribute, "name" | "initials" | "userId")
                 || element == "tag" && matches!(attribute, "name" | "val")
                 || element == "custShow" && attribute == "name"

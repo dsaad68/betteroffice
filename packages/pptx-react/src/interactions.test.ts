@@ -37,8 +37,6 @@ const deck: DeckSnapshot = {
   widthEmu: 12_192_000,
   heightEmu: 6_858_000,
   slides: [{ id: 'slide', sourcePartPath: null, layoutPartPath: null, name: null, shapes: [group, picture] }],
-  commentFlavor: 'legacy',
-  comments: [],
 };
 const frame: SlideDisplayList = {
   contractVersion: 1,

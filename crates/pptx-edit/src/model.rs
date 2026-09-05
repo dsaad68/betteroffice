@@ -148,12 +148,14 @@ pub struct DeckSnapshot {
     pub width_emu: i64,
     pub height_emu: i64,
     pub slides: Vec<SlideSnapshot>,
-    /// Which comment system the deck writes. A deck with no comments is
-    /// neutral and can still be switched.
+    #[serde(default, skip_serializing_if = "legacy_comment_flavor")]
     pub comment_flavor: CommentFlavor,
-    /// Flat, with replies naming their thread root through `parent_id`.
-    /// Ordered by `(created, id)` so every peer agrees.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub comments: Vec<CommentSnapshot>,
+}
+
+fn legacy_comment_flavor(flavor: &CommentFlavor) -> bool {
+    *flavor == CommentFlavor::Legacy
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]

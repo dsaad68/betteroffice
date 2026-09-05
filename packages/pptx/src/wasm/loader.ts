@@ -88,8 +88,7 @@ export interface PresentationHandle extends CollaborationReplica {
     adjustments: Record<string, number>
   ): ShapeAdjustReceipt;
   removeShape(slideId: string, shapeId: string): ShapeReceipt;
-  /** Anchors a comment to a slide. `created` is caller-supplied so the engine
-   *  needs no clock; pass an ISO-8601 local timestamp. */
+  /** Adds a slide comment; coordinates are EMU. */
   addComment(
     slideId: string,
     comment: {
@@ -106,7 +105,7 @@ export interface PresentationHandle extends CollaborationReplica {
     commentId: string,
     reply: { author: string; initials?: string; text: string; created: string }
   ): CommentReceipt;
-  /** Modern decks only; on a legacy deck, resolving means removing. */
+  /** Resolves or reopens a modern comment. */
   setCommentStatus(commentId: string, resolved: boolean): CommentReceipt;
   removeComment(commentId: string): CommentReceipt;
   /** Only legal while the deck has no comments. */

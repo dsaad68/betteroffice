@@ -1,10 +1,3 @@
-//! Deck comments: a flat side map keyed by comment id, with replies naming
-//! their thread root.
-//!
-//! Ids come from the session's deterministic counter, never from a generated
-//! GUID, so two peers that replay the same edits snapshot identically. The
-//! GUIDs the modern wire format needs are derived from those ids at save time.
-
 use pptx_parse::{CommentFlavor, PptxPackage};
 use sha2::{Digest, Sha256};
 use yrs::{Map, MapPrelim, MapRef, ReadTxn, Transact, TransactionMut, WriteTxn};
@@ -14,7 +7,6 @@ use crate::{
     COMMENTS, CommentReceipt, CommentSnapshot, DeckSession, EditCtx, EditError, EditResult, META,
 };
 
-/// Builds the stable id a seeded comment keeps for the deck's lifetime.
 pub(crate) fn seeded_comment_id(index: usize, source_id: &str) -> String {
     format!("comment:{index}:{source_id}")
 }
@@ -120,8 +112,6 @@ pub(crate) fn flavor_key(flavor: CommentFlavor) -> &'static str {
     }
 }
 
-/// A stable braced GUID for the modern wire format, derived from a deck-stable
-/// id so it survives a save/reopen cycle unchanged.
 pub(crate) fn derived_guid(seed: &str) -> String {
     let digest = Sha256::digest(seed.as_bytes());
     let hex: String = digest
@@ -140,8 +130,6 @@ pub(crate) fn derived_guid(seed: &str) -> String {
 }
 
 impl DeckSession {
-    /// Anchors a comment to a slide. `created` is caller-supplied so the engine
-    /// stays clock-free and reproducible.
     #[allow(clippy::too_many_arguments)]
     pub fn add_comment(
         &self,
@@ -154,11 +142,11 @@ impl DeckSession {
         x_emu: i64,
         y_emu: i64,
     ) -> EditResult<CommentReceipt> {
-        crate::model::validate_xml_text(text)?;
-        crate::model::validate_xml_text(author)?;
+        validate_fields(author, initials, text, created)?;
         if text.is_empty() {
             return Err(EditError::InvalidComment("comment text is empty".into()));
         }
+        self.add_undo_barrier();
         let comment_id = self.next_id("comment");
         let mut txn = self.transact_for(context);
         crate::deck::slide_ref(&txn, slide_id)?;
@@ -173,6 +161,8 @@ impl DeckSession {
         entry.insert(&mut txn, "x", x_emu as f64);
         entry.insert(&mut txn, "y", y_emu as f64);
         entry.insert(&mut txn, "resolved", false);
+        drop(txn);
+        self.add_undo_barrier();
         Ok(CommentReceipt {
             comment_id,
             slide_id: slide_id.to_owned(),
@@ -181,8 +171,6 @@ impl DeckSession {
         })
     }
 
-    /// Adds a reply to a thread. Legacy `p:cm` has no reply list, so this is
-    /// rejected on a legacy deck.
     pub fn reply_to_comment(
         &self,
         context: &EditCtx,
@@ -192,11 +180,11 @@ impl DeckSession {
         text: &str,
         created: &str,
     ) -> EditResult<CommentReceipt> {
-        crate::model::validate_xml_text(text)?;
-        crate::model::validate_xml_text(author)?;
+        validate_fields(author, initials, text, created)?;
         if text.is_empty() {
             return Err(EditError::InvalidComment("reply text is empty".into()));
         }
+        self.add_undo_barrier();
         let reply_id = self.next_id("comment");
         let mut txn = self.transact_for(context);
         require_modern(&txn)?;
@@ -219,6 +207,8 @@ impl DeckSession {
         entry.insert(&mut txn, "y", 0.0);
         entry.insert(&mut txn, "parentId", comment_id);
         entry.insert(&mut txn, "resolved", false);
+        drop(txn);
+        self.add_undo_barrier();
         Ok(CommentReceipt {
             comment_id: reply_id,
             slide_id,
@@ -227,14 +217,13 @@ impl DeckSession {
         })
     }
 
-    /// Marks a thread resolved. Modern only — legacy has no status field, so
-    /// resolving there means deleting.
     pub fn set_comment_status(
         &self,
         context: &EditCtx,
         comment_id: &str,
         resolved: bool,
     ) -> EditResult<CommentReceipt> {
+        self.add_undo_barrier();
         let mut txn = self.transact_for(context);
         require_modern(&txn)?;
         let comments = required_map(&txn, COMMENTS)?;
@@ -242,6 +231,8 @@ impl DeckSession {
         let slide_id = map_string(&entry, &txn, "slideId").unwrap_or_default();
         let parent_id = map_string(&entry, &txn, "parentId");
         entry.insert(&mut txn, "resolved", resolved);
+        drop(txn);
+        self.add_undo_barrier();
         Ok(CommentReceipt {
             comment_id: comment_id.to_owned(),
             slide_id,
@@ -250,12 +241,12 @@ impl DeckSession {
         })
     }
 
-    /// Removes a comment. Removing a thread root removes its replies too.
     pub fn remove_comment(
         &self,
         context: &EditCtx,
         comment_id: &str,
     ) -> EditResult<CommentReceipt> {
+        self.add_undo_barrier();
         let mut txn = self.transact_for(context);
         let comments = required_map(&txn, COMMENTS)?;
         let entry = comment_ref(&comments, &txn, comment_id)?;
@@ -274,6 +265,8 @@ impl DeckSession {
             comments.remove(&mut txn, &reply);
         }
         comments.remove(&mut txn, comment_id);
+        drop(txn);
+        self.add_undo_barrier();
         Ok(CommentReceipt {
             comment_id: comment_id.to_owned(),
             slide_id,
@@ -282,14 +275,12 @@ impl DeckSession {
         })
     }
 
-    /// Switches which comment system the deck writes. Only legal while the deck
-    /// has no comments — PowerPoint fixes the flavour at the first comment and
-    /// the two bodies are not interchangeable.
     pub fn set_comment_flavor(
         &self,
         context: &EditCtx,
         flavor: CommentFlavor,
     ) -> EditResult<CommentFlavor> {
+        self.add_undo_barrier();
         let mut txn = self.transact_for(context);
         let comments = required_map(&txn, COMMENTS)?;
         if comments.len(&txn) > 0 {
@@ -299,6 +290,8 @@ impl DeckSession {
         }
         let meta = required_map(&txn, META)?;
         meta.insert(&mut txn, "commentFlavor", flavor_key(flavor));
+        drop(txn);
+        self.add_undo_barrier();
         Ok(flavor)
     }
 
@@ -309,6 +302,13 @@ impl DeckSession {
     pub fn comment_flavor(&self) -> EditResult<CommentFlavor> {
         snapshot_flavor(&self.doc.transact())
     }
+}
+
+fn validate_fields(author: &str, initials: &str, text: &str, created: &str) -> EditResult<()> {
+    for value in [author, initials, text, created] {
+        crate::model::validate_xml_text(value)?;
+    }
+    Ok(())
 }
 
 fn require_modern<T: ReadTxn>(txn: &T) -> EditResult<()> {

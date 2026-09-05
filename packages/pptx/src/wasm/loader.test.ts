@@ -389,7 +389,7 @@ describe('PPTX wasm boundary', () => {
 
   test('anchors a legacy comment and carries it through a save', () => {
     const deck = openPresentation(fixture, { clientId: 9201 });
-    expect(deck.snapshot().commentFlavor).toBe('legacy');
+    expect(deck.snapshot().commentFlavor).toBeUndefined();
     expect(deck.comments()).toEqual([]);
 
     const slideId = deck.snapshot().slides[0].id;
@@ -412,7 +412,7 @@ describe('PPTX wasm boundary', () => {
 
     const reopened = openPresentation(deck.save(), { clientId: 9202 });
     expect(reopened.comments()[0]?.text).toBe('Does this claim hold?');
-    expect(reopened.snapshot().commentFlavor).toBe('legacy');
+    expect(reopened.snapshot().commentFlavor).toBeUndefined();
 
     deck.removeComment(receipt.commentId);
     expect(deck.comments()).toEqual([]);

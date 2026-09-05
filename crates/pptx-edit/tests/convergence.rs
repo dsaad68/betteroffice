@@ -483,5 +483,11 @@ fn comment_ids_are_deterministic_per_client_not_random() {
         .unwrap();
 
     assert_eq!(mine.comment_id, theirs.comment_id);
+    assert_eq!(mine.comment_id, "comment:606:0");
     assert_eq!(left.snapshot().unwrap(), right.snapshot().unwrap());
+    let second = left
+        .add_comment(&context, &slide, "Ada", "AL", "Second", arguments.3, 0, 0)
+        .unwrap();
+    assert_eq!(second.comment_id, "comment:606:1");
+    assert_ne!(mine.comment_id, second.comment_id);
 }

@@ -19,8 +19,8 @@ relationships and content-type overrides.
 reply list nor a status, and are rejected on a legacy deck. `removeComment`
 takes a thread root's replies with it, and dropping a slide's last comment
 removes its part, its relationship and its content-type override. Comment
-positions cross the API in EMU and convert to the 1/576-inch master units the
-wire format uses. Timestamps are caller-supplied, so the engine stays clock-free
+positions cross the API in EMU. Legacy comments convert to 1/576-inch master
+units; modern comments store EMU directly. Timestamps are caller-supplied, so the engine stays clock-free
 and two peers replaying the same edits converge byte for byte.
 
 Minor rather than patch: `DeckSnapshot` gains `comments` and `commentFlavor`,
@@ -28,7 +28,8 @@ Minor rather than patch: `DeckSnapshot` gains `comments` and `commentFlavor`,
 gains `CommentNotFound` and `InvalidComment` — so anything that _constructs_ a
 `ParseLimits` or `DeckWrite` by literal, or matches `EditError` exhaustively,
 must be updated. The deck schema moves to v3; v1 and v2 collaboration updates
-still migrate forward.
+load through the migration path, but restoring their existing comments and
+interoperating with v2 clients remain unresolved.
 
 Redaction now also scrubs author names, initials and user IDs from the modern
 `ppt/authors.xml` part, which it previously passed through untouched.

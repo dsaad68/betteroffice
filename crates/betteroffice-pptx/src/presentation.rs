@@ -279,8 +279,6 @@ impl Presentation {
             .set_paragraph_alignment(context, story_id, start, end, alignment)?)
     }
 
-    /// Anchors a comment to a slide. `created` is caller-supplied, so the
-    /// engine needs no clock.
     #[allow(clippy::too_many_arguments)]
     pub fn add_comment(
         &self,
@@ -298,7 +296,6 @@ impl Presentation {
         )?)
     }
 
-    /// Modern comments only; legacy `p:cm` has no reply list.
     pub fn reply_to_comment(
         &self,
         context: &EditCtx,
@@ -313,7 +310,6 @@ impl Presentation {
             .reply_to_comment(context, comment_id, author, initials, text, created)?)
     }
 
-    /// Modern comments only; on a legacy deck, resolving means removing.
     pub fn set_comment_status(
         &self,
         context: &EditCtx,
@@ -329,8 +325,6 @@ impl Presentation {
         Ok(self.session.remove_comment(context, comment_id)?)
     }
 
-    /// Only legal while the deck has no comments: PowerPoint fixes the flavour
-    /// at the first comment and the two bodies are not interchangeable.
     pub fn set_comment_flavor(
         &self,
         context: &EditCtx,

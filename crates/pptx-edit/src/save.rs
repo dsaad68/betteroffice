@@ -131,11 +131,25 @@ fn deck_write(
     })
 }
 
-/// Rebuilds the deck's comment parts when they differ from the source. `None`
-/// leaves every comment part byte for byte as it was, which is also what makes
-/// a slide deletion prune its comments through the reachability walk alone.
 fn comments_write(current: &DeckSnapshot, baseline: &DeckSnapshot) -> Option<CommentsWrite> {
     if current.comments == baseline.comments && current.comment_flavor == baseline.comment_flavor {
+        return None;
+    }
+    let baseline_live: Vec<&CommentSnapshot> = baseline
+        .comments
+        .iter()
+        .filter(|comment| {
+            current
+                .slides
+                .iter()
+                .any(|slide| slide.id == comment.slide_id)
+        })
+        .collect();
+    if !current.comments.is_empty()
+        && current.comments.len() < baseline.comments.len()
+        && current.comment_flavor == baseline.comment_flavor
+        && current.comments.iter().eq(baseline_live)
+    {
         return None;
     }
     let flavor = current.comment_flavor;
@@ -151,8 +165,6 @@ fn comments_write(current: &DeckSnapshot, baseline: &DeckSnapshot) -> Option<Com
         .collect();
 
     let mut authors: Vec<CommentAuthorWrite> = Vec::new();
-    // A slide minted by this same write has no source part path yet, so it is
-    // named by its position and resolved once the part exists.
     let mut per_slide: Vec<(CommentSlide, Vec<CommentWrite>)> = current
         .slides
         .iter()
@@ -197,8 +209,6 @@ fn comments_write(current: &DeckSnapshot, baseline: &DeckSnapshot) -> Option<Com
     })
 }
 
-/// Finds or adds the comment's author, then takes the next per-author index.
-/// Legacy `idx` runs per author across the whole deck, starting at 1.
 fn charge_author(
     authors: &mut Vec<CommentAuthorWrite>,
     flavor: CommentFlavor,
