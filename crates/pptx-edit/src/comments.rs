@@ -159,8 +159,26 @@ pub(crate) fn snapshot_comments<T: ReadTxn>(txn: &T) -> EditResult<Vec<CommentSn
     Ok(output)
 }
 
+/// Promotes alternating levels so undo cannot create nested replies.
 fn live_parent<T: ReadTxn>(comments: &MapRef, entry: &MapRef, txn: &T) -> Option<String> {
-    map_string(entry, txn, "parentId").filter(|id| comments.contains_key(txn, id))
+    let parent_id = map_string(entry, txn, "parentId")?;
+    let mut next = Some(parent_id.clone());
+    let mut seen = std::collections::HashSet::new();
+    let mut depth = 0;
+    while let Some(id) = next {
+        if !seen.insert(id.clone()) || depth == 128 {
+            return None;
+        }
+        let Some(parent) = comments
+            .get(txn, &id)
+            .and_then(|value| value.cast::<MapRef>().ok())
+        else {
+            break;
+        };
+        depth += 1;
+        next = map_string(&parent, txn, "parentId");
+    }
+    (depth % 2 == 1).then_some(parent_id)
 }
 
 pub(crate) fn snapshot_flavor<T: ReadTxn>(txn: &T) -> EditResult<CommentFlavor> {

@@ -431,6 +431,82 @@ fn editing_a_comment_preserves_an_untouched_empty_comment_part() {
 }
 
 #[test]
+fn undoing_a_root_deletion_preserves_replies_to_a_promoted_comment() {
+    let left = DeckSession::open(MODERN, 745).unwrap();
+    let right = DeckSession::open(MODERN, 746).unwrap();
+    let root = first_root(&left);
+    let context = EditCtx::local("test");
+    left.remove_comment(&context, &root.id).unwrap();
+    let reply = right
+        .reply_to_comment(
+            &context,
+            &root.id,
+            "Peer",
+            "P",
+            "Concurrent reply",
+            "2026-09-05T15:00:00Z",
+        )
+        .unwrap();
+    left.apply_update_v1(&right.encode_state_as_update_v1())
+        .unwrap();
+    right
+        .apply_update_v1(&left.encode_state_as_update_v1())
+        .unwrap();
+    let followup = right
+        .reply_to_comment(
+            &context,
+            &reply.comment_id,
+            "Peer",
+            "P",
+            "Follow-up",
+            "2026-09-05T15:01:00Z",
+        )
+        .unwrap();
+    left.apply_update_v1(&right.encode_state_as_update_v1())
+        .unwrap();
+    assert!(left.undo());
+    right
+        .apply_update_v1(&left.encode_state_as_update_v1())
+        .unwrap();
+    assert_eq!(left.snapshot().unwrap(), right.snapshot().unwrap());
+    assert_eq!(left.comments().unwrap().len(), 7);
+    assert_eq!(
+        DeckSession::open(&left.save().unwrap(), 747)
+            .unwrap()
+            .comments()
+            .unwrap()
+            .len(),
+        7
+    );
+    assert!(
+        left.comments()
+            .unwrap()
+            .iter()
+            .find(|comment| comment.id == followup.comment_id)
+            .unwrap()
+            .parent_id
+            .is_none()
+    );
+    left.reply_to_comment(
+        &context,
+        &followup.comment_id,
+        "Peer",
+        "P",
+        "Next reply",
+        "2026-09-05T15:02:00Z",
+    )
+    .unwrap();
+    assert_eq!(
+        DeckSession::open(&left.save().unwrap(), 748)
+            .unwrap()
+            .comments()
+            .unwrap()
+            .len(),
+        8
+    );
+}
+
+#[test]
 fn comment_operations_are_individually_undoable_and_publish_one_update() {
     let session = DeckSession::open(DEMO, 711).unwrap();
     let context = EditCtx::local("test");
