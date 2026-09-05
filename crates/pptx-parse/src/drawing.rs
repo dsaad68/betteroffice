@@ -582,6 +582,16 @@ fn parse_fill(element: &XmlElement) -> Option<ShapeFill> {
     None
 }
 
+/// A run's `a:gradFill` flattened to one colour. The display list carries a single colour per
+/// run, and in practice these gradients are degenerate — every occurrence in the corpus is a
+/// two-stop gradient whose stops are the same colour, used as a plain fill. Taking the lowest
+/// stop is exact for those and is what a renderer that cannot ramp text settles on anyway.
+pub(crate) fn run_gradient_color(element: &XmlElement) -> Option<ColorValue> {
+    let mut stops = parse_gradient_fill(element).gradient?.stops;
+    stops.sort_by(|left, right| left.position.total_cmp(&right.position));
+    stops.into_iter().next().map(|stop| stop.color)
+}
+
 fn parse_gradient_fill(element: &XmlElement) -> ShapeFill {
     let linear = element.child("lin");
     let path = element.child("path");
@@ -914,7 +924,10 @@ pub(crate) fn parse_run_properties(element: Option<&XmlElement>) -> RunPropertie
             .child("latin")
             .and_then(|value| value.attribute("typeface"))
             .map(str::to_owned),
-        color: element.child("solidFill").and_then(parse_color_container),
+        color: element
+            .child("solidFill")
+            .and_then(parse_color_container)
+            .or_else(|| run_gradient_color(element.child("gradFill")?)),
         language: element.attribute("lang").map(str::to_owned),
         hyperlink_relationship_id: element
             .child("hlinkClick")
@@ -987,6 +1000,30 @@ mod tests {
                 .font_size_pt,
             Some(24.0)
         );
+    }
+
+    #[test]
+    fn a_run_gradient_fill_resolves_to_a_colour() {
+        let limits = ParseLimits::default();
+        let mut budget = ParseBudget::new(&limits);
+        let root = parse_xml(
+            br#"<p:sld><p:cSld><p:spTree><p:sp><p:nvSpPr><p:cNvPr id="2" name="Label"/><p:nvPr/></p:nvSpPr><p:spPr/><p:txBody><a:bodyPr/><a:p><a:r><a:rPr lang="en"><a:gradFill><a:gsLst><a:gs pos="100000"><a:srgbClr val="FFFFFF"/></a:gs><a:gs pos="0"><a:srgbClr val="FFFFFF"/></a:gs></a:gsLst></a:gradFill></a:rPr><a:t>Label</a:t></a:r><a:r><a:rPr lang="en"><a:solidFill><a:srgbClr val="112233"/></a:solidFill></a:rPr><a:t>Solid</a:t></a:r><a:r><a:rPr lang="en"/><a:t>Plain</a:t></a:r></a:p></p:txBody></p:sp></p:spTree></p:cSld></p:sld>"#,
+            "ppt/slides/slide1.xml",
+            &mut budget,
+        )
+        .unwrap();
+        let data = common_slide_data(&root, &[], "ppt/slides/slide1.xml", &mut budget).unwrap();
+        let ShapeNode::Shape(shape) = &data.shapes[0] else {
+            panic!("expected shape");
+        };
+        let runs = &shape.text.as_ref().unwrap().paragraphs[0].runs;
+        assert!(
+            runs[0].properties.color.is_some(),
+            "a gradient-filled run must carry a colour instead of falling through to the theme"
+        );
+        // An explicit solidFill still wins over any gradient, and a run with neither stays None.
+        assert!(runs[1].properties.color.is_some());
+        assert!(runs[2].properties.color.is_none());
     }
 
     #[test]

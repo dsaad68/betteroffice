@@ -1539,9 +1539,19 @@ fn apply_run_properties(base: &mut XmlElement, properties: &RunProperties, prefi
             base.attributes.remove("u");
         }
     }
+    // A colour still equal to the run's authored gradFill was flattened by the parser rather than
+    // chosen by an edit, so the gradient stays. Without this, saving a deck after editing any
+    // paragraph containing gradient-filled text would silently rewrite it as a flat colour.
+    let keeps_gradient = properties.color.as_ref().is_some_and(|color| {
+        base.child("gradFill")
+            .and_then(crate::drawing::run_gradient_color)
+            .is_some_and(|authored| &authored == color)
+    });
     // A colour write replaces the whole fill choice; clearing the colour only
     // drops an explicit solidFill so an unmodeled noFill/gradFill survives.
-    let removed_fills: &[&str] = if properties.color.is_some() {
+    let removed_fills: &[&str] = if keeps_gradient {
+        &[]
+    } else if properties.color.is_some() {
         &FILL_ELEMENTS
     } else {
         &["solidFill"]
@@ -1555,6 +1565,7 @@ fn apply_run_properties(base: &mut XmlElement, properties: &RunProperties, prefi
     if let Some(color) = properties
         .color
         .as_ref()
+        .filter(|_| !keeps_gradient)
         .and_then(|color| color_element(color, prefixes))
     {
         let position = base
@@ -1848,4 +1859,60 @@ fn slide_relationships_xml(part_path: &str, layout_part_path: &str) -> Vec<u8> {
                 .with_attribute("Target", relative_target(part_path, layout_part_path)),
         );
     serialize_xml(&root)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::ParseLimits;
+    use crate::drawing::parse_run_properties;
+    use crate::xml::{ParseBudget, parse_xml};
+
+    fn run_properties(xml: &[u8]) -> (XmlElement, Prefixes, RunProperties) {
+        let limits = ParseLimits::default();
+        let mut budget = ParseBudget::new(&limits);
+        let mut root = parse_xml(xml, "ppt/slides/slide1.xml", &mut budget).unwrap();
+        let prefixes = Prefixes::from_root(&mut root);
+        let properties = parse_run_properties(Some(&root));
+        (root, prefixes, properties)
+    }
+
+    /// A gradient the parser flattened must survive a save. Editing any paragraph rebuilds every
+    /// run in it, so without this an authored gradient would be rewritten as a flat colour.
+    #[test]
+    fn an_unedited_gradient_fill_survives_a_rewrite() {
+        let (mut element, prefixes, properties) = run_properties(
+            br#"<a:rPr xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" lang="en"><a:gradFill><a:gsLst><a:gs pos="0"><a:srgbClr val="FFFFFF"/></a:gs><a:gs pos="100000"><a:srgbClr val="FFFFFF"/></a:gs></a:gsLst></a:gradFill></a:rPr>"#,
+        );
+        assert!(
+            properties.color.is_some(),
+            "the gradient should flatten to a colour"
+        );
+        apply_run_properties(&mut element, &properties, &prefixes);
+        let serialized = String::from_utf8(serialize_xml(&element)).unwrap();
+        assert!(
+            serialized.contains("gradFill"),
+            "the authored gradient must be left alone"
+        );
+        assert!(
+            !serialized.contains("solidFill"),
+            "it must not be rewritten as a solid fill"
+        );
+    }
+
+    /// A colour the user actually changed still replaces the gradient.
+    #[test]
+    fn an_edited_colour_replaces_the_gradient() {
+        let (mut element, prefixes, mut properties) = run_properties(
+            br#"<a:rPr xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" lang="en"><a:gradFill><a:gsLst><a:gs pos="0"><a:srgbClr val="FFFFFF"/></a:gs></a:gsLst></a:gradFill></a:rPr>"#,
+        );
+        properties.color = Some(ColorValue {
+            rgb: Some("FF0000".to_owned()),
+            ..ColorValue::default()
+        });
+        apply_run_properties(&mut element, &properties, &prefixes);
+        let serialized = String::from_utf8(serialize_xml(&element)).unwrap();
+        assert!(!serialized.contains("gradFill"));
+        assert!(serialized.contains("solidFill"));
+    }
 }
