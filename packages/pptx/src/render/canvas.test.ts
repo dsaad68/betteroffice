@@ -206,4 +206,99 @@ describe('PPTX canvas replay', () => {
     expect(calls).toContain('fill');
     expect(calls).toContain('text:Q1');
   });
+
+  test('paints justified word starts at the engine caret positions', async () => {
+    const calls: Array<{ text: string; x: number }> = [];
+    const ctx = new Proxy(
+      {
+        fillText: (text: string, x: number) => calls.push({ text, x }),
+      } as Record<string, unknown>,
+      {
+        get(target, property) {
+          if (property in target) return target[property as string];
+          return () => undefined;
+        },
+        set(target, property, value) {
+          target[property as string] = value;
+          return true;
+        },
+      }
+    ) as unknown as CanvasRenderingContext2D;
+    const caretStops = [
+      { position: 0, x: 40 },
+      { position: 1, x: 50 },
+      { position: 2, x: 60 },
+      { position: 3, x: 70 },
+      { position: 4, x: 100 },
+      { position: 5, x: 110 },
+      { position: 6, x: 120 },
+      { position: 7, x: 130 },
+    ];
+    const glyphs = [
+      { glyphId: 1, cluster: 0, x: 40, advance: 10, xOffset: 0, yOffset: 68 },
+      { glyphId: 2, cluster: 1, x: 50, advance: 10, xOffset: 0, yOffset: 68 },
+      { glyphId: 3, cluster: 2, x: 60, advance: 10, xOffset: 0, yOffset: 68 },
+      { glyphId: 4, cluster: 3, x: 70, advance: 5, xOffset: 0, yOffset: 68 },
+      { glyphId: 5, cluster: 4, x: 100, advance: 10, xOffset: 0, yOffset: 68 },
+      { glyphId: 6, cluster: 5, x: 110, advance: 10, xOffset: 0, yOffset: 68 },
+      { glyphId: 7, cluster: 6, x: 120, advance: 10, xOffset: 0, yOffset: 68 },
+    ];
+    const list: SlideDisplayList = {
+      contractVersion: 1,
+      width: 320,
+      height: 180,
+      primitives: [
+        {
+          kind: 'textBox',
+          objectId: 1,
+          shapeId: 'shape:1',
+          storyId: 'story:1',
+          x: 40,
+          y: 50,
+          w: 240,
+          h: 80,
+          anchor: 'top',
+          paragraphs: [],
+          lines: [
+            {
+              x: 40,
+              y: 50,
+              width: 90,
+              height: 24,
+              baseline: 68,
+              start: 0,
+              end: 7,
+              caretStops,
+              runs: [
+                {
+                  text: 'one two',
+                  start: 0,
+                  end: 7,
+                  x: 40,
+                  width: 90,
+                  fontId: 1,
+                  fontFamily: 'Liberation Sans',
+                  fontSizePx: 20,
+                  bold: false,
+                  italic: false,
+                  underline: false,
+                  color: '#ffffff',
+                  glyphs,
+                },
+              ],
+            },
+          ],
+        },
+      ],
+    };
+
+    await paintSlide(ctx, list, 1);
+    const painted = calls.find((call) => call.text === 'two');
+    const engine = caretStops.find((stop) => stop.position === 4);
+    expect(painted?.x).toBe(engine?.x);
+    expect(calls).toEqual([
+      { text: 'one ', x: 40 },
+      { text: 'two', x: 100 },
+    ]);
+  });
 });

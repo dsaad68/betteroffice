@@ -234,10 +234,35 @@ function paintTextRun(
   const weight = run.bold ? 'bold ' : '';
   ctx.font = `${style}${weight}${run.fontSizePx}px ${quoteFamily(run.fontFamily)}`;
   ctx.fillStyle = run.color;
-  ctx.fillText(run.text, run.x, baseline);
+  for (const chunk of positionedTextChunks(run)) {
+    ctx.fillText(chunk.text, chunk.x, baseline);
+  }
   if (run.underline) {
     ctx.fillRect(run.x, baseline + run.fontSizePx * 0.08, run.width, Math.max(1, run.fontSizePx * 0.05));
   }
+}
+
+function positionedTextChunks(run: PositionedTextRun): Array<{ text: string; x: number }> {
+  if (run.glyphs.length < 2) return [{ text: run.text, x: run.x }];
+  const chunks: Array<{ text: string; x: number }> = [];
+  let textStart = 0;
+  let x = run.x;
+  let expectedX = run.glyphs[0].x;
+  for (const glyph of run.glyphs) {
+    const offset = glyph.cluster - run.start;
+    if (
+      offset > textStart &&
+      offset < run.text.length &&
+      Math.abs(glyph.x - expectedX) > 0.0001
+    ) {
+      chunks.push({ text: run.text.slice(textStart, offset), x });
+      textStart = offset;
+      x = glyph.x;
+    }
+    expectedX = Math.fround(Math.fround(glyph.x) + Math.fround(glyph.advance));
+  }
+  chunks.push({ text: run.text.slice(textStart), x });
+  return chunks;
 }
 
 function quoteFamily(family: string): string {

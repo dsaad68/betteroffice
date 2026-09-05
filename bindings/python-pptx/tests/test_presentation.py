@@ -115,6 +115,24 @@ def test_resize_shape(deck):
     assert (deck[0].shapes[0].width, deck[0].shapes[0].height) == (4000, 5000)
 
 
+def test_set_shape_rect_is_one_undo_step(deck):
+    shape = deck[0].shapes[0]
+    before = (shape.x, shape.y, shape.width, shape.height)
+
+    edit = deck.set_shape_rect(0, shape.id, 111, 222, 4000, 5000)
+
+    assert (edit.after.x, edit.after.y, edit.after.width, edit.after.height) == (
+        111,
+        222,
+        4000,
+        5000,
+    )
+    assert deck.undo() is True
+    restored = deck[0].shapes[0]
+    assert (restored.x, restored.y, restored.width, restored.height) == before
+    assert deck.can_undo is False
+
+
 def test_add_text_box_creates_an_editable_story(deck):
     before = len(deck[0].shapes)
     edit = deck.add_text_box(
@@ -557,6 +575,7 @@ ops = {
     "open": lambda: bo.Presentation.open(saved),
     "register_font": lambda: holder["deck"].register_font("Probe", heavy_font),
     "render_slide": lambda: holder["deck"].render_slide(0),
+    "render_png": lambda: holder["deck"].render_png(0),
     "save": lambda: holder["deck"].save(),
     "apply_update": lambda: holder["peer"].apply_update(holder["update"]),
 }

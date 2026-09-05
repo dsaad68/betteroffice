@@ -4,14 +4,16 @@ import { resolve } from 'node:path';
 import type {
   PresentationHandle,
   ShapePrimitive,
+  SlidePrimitive,
   StorySnapshot,
   TextBoxPrimitive,
 } from '../index';
-import { initWasm, openPresentation } from '../index';
+import { initWasm, openPresentation, paintSlide } from '../index';
 
 const root = resolve(import.meta.dir, '../../../..');
 let handle: PresentationHandle;
 let fixture: Uint8Array;
+let fontBytes: Uint8Array;
 
 beforeAll(async () => {
   const [wasm, pptx, font] = await Promise.all([
@@ -21,6 +23,7 @@ beforeAll(async () => {
   ]);
   await initWasm(wasm);
   fixture = pptx;
+  fontBytes = font;
   handle = openPresentation(pptx, {
     clientId: 9001,
     fonts: [{ family: 'Liberation Sans', bytes: font }],
@@ -155,6 +158,136 @@ describe('PPTX wasm boundary', () => {
     ).toThrow();
   });
 
+  test('sets a shape rectangle in one update and one undo step', () => {
+    const source = openPresentation(fixture, { clientId: 9011 });
+    const slide = source.snapshot().slides[0];
+    const shape = slide.shapes[0];
+    const before = {
+      x: shape.x,
+      y: shape.y,
+      width: shape.width,
+      height: shape.height,
+    };
+    const after = {
+      x: before.x + 120_000,
+      y: before.y + 80_000,
+      width: before.width + 300_000,
+      height: before.height + 200_000,
+    };
+    const updates: Uint8Array[] = [];
+    source.onUpdate((update, origin) => {
+      if (origin === 'local') updates.push(update);
+    });
+
+    expect(source.setShapeRect(slide.id, shape.id, after).after).toEqual(after);
+    expect(updates).toHaveLength(1);
+    expect(shapeSnapshotFrom(source, shape.id)).toMatchObject(after);
+    expect(source.undo().applied).toBe(true);
+    expect(shapeSnapshotFrom(source, shape.id)).toMatchObject(before);
+    expect(source.canUndo()).toBe(false);
+    source.dispose();
+  });
+
+  test('paints the non-justified demo deck with one call per text run', async () => {
+    const source = openPresentation(fixture, {
+      clientId: 9013,
+      fonts: [{ family: 'Liberation Sans', bytes: fontBytes }],
+    });
+    const calls: Array<{ text: string; x: number; y: number }> = [];
+    const expected: Array<{ text: string; x: number; y: number }> = [];
+    const ctx = new Proxy(
+      {
+        fillText: (text: string, x: number, y: number) => calls.push({ text, x, y }),
+      } as Record<string, unknown>,
+      {
+        get(target, property) {
+          if (property in target) return target[property as string];
+          return () => undefined;
+        },
+        set(target, property, value) {
+          target[property as string] = value;
+          return true;
+        },
+      }
+    ) as unknown as CanvasRenderingContext2D;
+    try {
+      for (let slideIndex = 0; slideIndex < source.snapshot().slides.length; slideIndex += 1) {
+        const frame = source.layoutSlide(slideIndex);
+        expected.push(...oneCallPerTextRun(frame.primitives));
+        await paintSlide(ctx, frame);
+      }
+
+      expect(expected).toHaveLength(62);
+      expect(calls).toHaveLength(expected.length);
+      expect(calls).toEqual(expected);
+    } finally {
+      source.dispose();
+    }
+  });
+
+  test('paints engine-produced justified word starts at caret positions', async () => {
+    const source = openPresentation(fixture, {
+      clientId: 9012,
+      fonts: [{ family: 'Liberation Sans', bytes: fontBytes }],
+    });
+    try {
+      const shape = source.snapshot().slides[0].shapes.find(
+        (candidate) => candidate.name === 'Subtitle'
+      );
+      const story = shape?.textStories[0];
+      if (!story) throw new Error('subtitle story is missing');
+      source.setParagraphAlignment(story.id, 0, story.length, 'just');
+      const frame = source.layoutSlide(0);
+      const textBox = frame.primitives.find(
+        (primitive): primitive is TextBoxPrimitive =>
+          primitive.kind === 'textBox' && primitive.storyId === story.id
+      );
+      if (!textBox) throw new Error('subtitle layout is missing');
+      expect(textBox.lines.length).toBeGreaterThan(1);
+
+      const calls: Array<{ text: string; x: number; y: number }> = [];
+      const ctx = new Proxy(
+        {
+          fillText: (text: string, x: number, y: number) => calls.push({ text, x, y }),
+        } as Record<string, unknown>,
+        {
+          get(target, property) {
+            if (property in target) return target[property as string];
+            return () => undefined;
+          },
+          set(target, property, value) {
+            target[property as string] = value;
+            return true;
+          },
+        }
+      ) as unknown as CanvasRenderingContext2D;
+      await paintSlide(ctx, { ...frame, background: undefined, primitives: [textBox] });
+
+      const first = textBox.lines[0];
+      const painted = calls.filter((call) => call.y === first.baseline);
+      expect(painted.length).toBeGreaterThan(1);
+      let position = first.start;
+      for (const call of painted) {
+        const caret = first.caretStops.find((stop) => stop.position === position);
+        if (!caret) throw new Error(`caret stop ${position} is missing`);
+        expect(call.x).toBe(caret.x);
+        position += call.text.length;
+      }
+      expect(position).toBe(first.end);
+
+      const last = textBox.lines[textBox.lines.length - 1];
+      expect(calls.filter((call) => call.y === last.baseline)).toEqual([
+        {
+          text: last.runs.map((run) => run.text).join(''),
+          x: last.runs[0].x,
+          y: last.baseline,
+        },
+      ]);
+    } finally {
+      source.dispose();
+    }
+  });
+
   test('inserts and styles preset shapes with undo and redo', () => {
     const slide = handle.snapshot().slides[0];
     const receipt = handle.addShape(slide.id, {
@@ -256,7 +389,11 @@ describe('PPTX wasm boundary', () => {
 });
 
 function shapeSnapshot(shapeId: string) {
-  const shape = handle.snapshot().slides[0].shapes.find((candidate) => candidate.id === shapeId);
+  return shapeSnapshotFrom(handle, shapeId);
+}
+
+function shapeSnapshotFrom(source: PresentationHandle, shapeId: string) {
+  const shape = source.snapshot().slides[0].shapes.find((candidate) => candidate.id === shapeId);
   if (!shape) throw new Error(`shape ${shapeId} was not found`);
   return shape;
 }
@@ -266,4 +403,26 @@ function firstStory(shapes: Array<{ textStories: StorySnapshot[]; children: unkn
     if (shape.textStories[0]) return shape.textStories[0];
   }
   throw new Error('fixture has no text story');
+}
+
+function oneCallPerTextRun(
+  primitives: SlidePrimitive[]
+): Array<{ text: string; x: number; y: number }> {
+  const calls: Array<{ text: string; x: number; y: number }> = [];
+  for (const primitive of primitives) {
+    if (primitive.kind === 'textBox') {
+      for (const line of primitive.lines) {
+        for (const run of line.runs) calls.push({ text: run.text, x: run.x, y: line.baseline });
+      }
+    } else if (primitive.kind === 'chart') {
+      calls.push(...oneCallPerTextRun(primitive.primitives));
+    } else if (primitive.kind === 'placeholder' && primitive.label) {
+      calls.push({
+        text: primitive.label,
+        x: primitive.x + primitive.w / 2,
+        y: primitive.y + primitive.h / 2,
+      });
+    }
+  }
+  return calls;
 }

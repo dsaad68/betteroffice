@@ -13,11 +13,12 @@ use pyo3::types::{PyBool, PyBytes, PyDict, PyInt};
 use python_common::{generated_client_id, map_io_error};
 
 use betteroffice_pptx::{
-    DeckSnapshot, EditCtx, EditError, EditOrigin, Error as CoreError, MAX_COLLABORATION_BYTES,
-    MAX_COLLABORATION_CLIENT_ID, ParagraphSnapshot, ParseLimits, Presentation as CorePresentation,
-    PresetShapeDraft, ShapeAdjustReceipt, ShapeDraft, ShapeFillReceipt, ShapeKind, ShapeReceipt,
-    ShapeRect, ShapeSnapshot, ShapeStroke, ShapeStrokeReceipt, SlideReceipt, SlideSnapshot,
-    StorySnapshot, TextReceipt, TextRunSnapshot, TextStyle, TextStylePatch, TransformReceipt,
+    Background, DeckSnapshot, EditCtx, EditError, EditOrigin, Error as CoreError,
+    MAX_COLLABORATION_BYTES, MAX_COLLABORATION_CLIENT_ID, ParagraphSnapshot, ParseLimits,
+    Presentation as CorePresentation, PresetShapeDraft, RenderOptions, ShapeAdjustReceipt,
+    ShapeDraft, ShapeFillReceipt, ShapeKind, ShapeReceipt, ShapeRect, ShapeSnapshot, ShapeStroke,
+    ShapeStrokeReceipt, SlideReceipt, SlideSnapshot, StorySnapshot, TextReceipt, TextRunSnapshot,
+    TextStyle, TextStylePatch, TransformReceipt,
 };
 
 create_exception!(
@@ -90,6 +91,17 @@ fn map_error(error: CoreError) -> PyErr {
         CoreError::Render(_) => RenderError::new_err(message),
         CoreError::Edit(edit) => map_edit_error(edit, message),
         _ => PptxError::new_err(message),
+    }
+}
+
+fn parse_background(value: &str) -> PyResult<Background> {
+    match value {
+        "slide" => Ok(Background::Slide),
+        "transparent" => Ok(Background::Transparent),
+        color if color.starts_with('#') => Ok(Background::Color(color.to_owned())),
+        other => Err(PyValueError::new_err(format!(
+            "background must be \"slide\", \"transparent\", or a #rrggbb color, not {other:?}"
+        ))),
     }
 }
 
@@ -636,8 +648,48 @@ impl PyMedia {
     }
 }
 
-/// A laid-out slide as the renderer's display list. There is no PPTX
-/// rasterizer yet, so this is the drawing contract rather than pixels.
+/// One rasterized slide.
+#[pyclass(module = "betteroffice_pptx", name = "Png", frozen)]
+pub struct PyPng {
+    data: Vec<u8>,
+    #[pyo3(get)]
+    width: u32,
+    #[pyo3(get)]
+    height: u32,
+    /// Pictures the backend could not draw: bytes missing from the package,
+    /// undecodable, or past its budget.
+    #[pyo3(get)]
+    skipped_images: usize,
+}
+
+#[pymethods]
+impl PyPng {
+    #[getter]
+    fn bytes<'py>(&self, py: Python<'py>) -> Bound<'py, PyBytes> {
+        PyBytes::new(py, &self.data)
+    }
+
+    fn write(&self, py: Python<'_>, path: PathBuf) -> PyResult<()> {
+        py.detach(|| fs::write(&path, &self.data))
+            .map_err(|error| map_io_error(&error, &path))
+    }
+
+    fn __len__(&self) -> usize {
+        self.data.len()
+    }
+
+    fn __repr__(&self) -> String {
+        format!(
+            "Png(width={}, height={}, bytes={})",
+            self.width,
+            self.height,
+            self.data.len()
+        )
+    }
+}
+
+/// A laid-out slide as the renderer's display list, for hosts that paint it
+/// themselves; [`PyPresentation::render_png`] rasterizes it here instead.
 #[pyclass(module = "betteroffice_pptx", name = "DisplayList", frozen)]
 pub struct PyDisplayList {
     payload: String,
@@ -1440,6 +1492,25 @@ impl PyPresentation {
         Ok(PyTransformEdit::from_core(receipt))
     }
 
+    fn set_shape_rect(
+        &self,
+        slide: &Bound<'_, PyAny>,
+        shape_id: &str,
+        x: i64,
+        y: i64,
+        width: i64,
+        height: i64,
+    ) -> PyResult<PyTransformEdit> {
+        let slide_id = self.resolve_slide_id(slide)?;
+        let receipt = self.committed(self.presentation.set_shape_rect(
+            &self.edit_ctx(),
+            &slide_id,
+            shape_id,
+            rect(x, y, width, height),
+        ))?;
+        Ok(PyTransformEdit::from_core(receipt))
+    }
+
     /// `index` is a UTF-16 offset into the story.
     #[pyo3(signature = (
         story_id, index, text, *,
@@ -1574,6 +1645,36 @@ impl PyPresentation {
         })
     }
 
+    /// Rasterize one slide to deterministic PNG bytes. Media resolves from the
+    /// package, so only fonts need registering; `background` is `"slide"`,
+    /// `"transparent"`, or a `#rrggbb` color painted under the slide's own.
+    #[pyo3(signature = (slide, *, scale = 1.0, background = "slide"))]
+    fn render_png(
+        &self,
+        py: Python<'_>,
+        slide: &Bound<'_, PyAny>,
+        scale: f32,
+        background: &str,
+    ) -> PyResult<PyPng> {
+        let index = self.resolve_slide_index(slide)?;
+        let options = RenderOptions {
+            scale,
+            background: parse_background(background)?,
+        };
+        let deck = DetachedDeck(&self.presentation);
+        py.detach(move || {
+            let deck = deck;
+            deck.0.render_png(index, &options)
+        })
+        .map(|rendered| PyPng {
+            data: rendered.bytes,
+            width: rendered.width,
+            height: rendered.height,
+            skipped_images: rendered.skipped_images,
+        })
+        .map_err(map_error)
+    }
+
     fn save<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyBytes>> {
         let bytes = self.saved_bytes(py)?;
         Ok(PyBytes::new(py, &bytes))
@@ -1685,6 +1786,7 @@ fn _betteroffice_pptx(module: &Bound<'_, PyModule>) -> PyResult<()> {
     module.add_class::<PyStroke>()?;
     module.add_class::<PyMedia>()?;
     module.add_class::<PyDisplayList>()?;
+    module.add_class::<PyPng>()?;
     module.add_class::<PySlideEdit>()?;
     module.add_class::<PyShapeEdit>()?;
     module.add_class::<PyTransformEdit>()?;
