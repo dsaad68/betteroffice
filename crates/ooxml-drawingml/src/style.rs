@@ -55,6 +55,8 @@ pub struct StyleReference {
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ShapeStyle {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub font_color: Option<ColorValue>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub fill: Option<StyleReference>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -71,7 +73,11 @@ fn is_false(value: &bool) -> bool {
 
 impl ShapeStyle {
     pub fn is_empty(&self) -> bool {
-        self.fill.is_none() && self.line.is_none() && !self.fill_disabled && !self.line_disabled
+        self.font_color.is_none()
+            && self.fill.is_none()
+            && self.line.is_none()
+            && !self.fill_disabled
+            && !self.line_disabled
     }
 }
 

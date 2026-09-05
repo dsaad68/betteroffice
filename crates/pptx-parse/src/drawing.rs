@@ -143,13 +143,6 @@ fn parse_shape_children(
     Ok(shapes)
 }
 
-fn parse_shape_style(element: Option<&XmlElement>) -> Option<ShapeStyle> {
-    let font_color = element?.child("fontRef").and_then(parse_color_container);
-    font_color.map(|color| ShapeStyle {
-        font_color: Some(color),
-    })
-}
-
 fn parse_shape(
     element: &XmlElement,
     part: &str,
@@ -159,7 +152,6 @@ fn parse_shape(
     let properties = element.child("spPr");
     let transform = properties.and_then(|value| value.child("xfrm"));
     Ok(Shape {
-        style: parse_shape_style(element.child("style")).map(Box::new),
         base: parse_base(
             element
                 .child("nvSpPr")
@@ -170,7 +162,7 @@ fn parse_shape(
         adjust_values: parse_adjust_values(properties, parse_shape_extent(transform)),
         fill: properties.and_then(parse_fill),
         outline: properties.and_then(parse_outline),
-        style: parse_shape_style(element.child("style"), properties),
+        style: parse_shape_style(element.child("style"), properties).map(Box::new),
         text: element
             .child("txBody")
             .map(|body| parse_text_body(body, part, budget))
@@ -208,7 +200,7 @@ fn parse_picture(
         adjust_values: parse_adjust_values(properties, parse_shape_extent(transform)),
         fill: properties.and_then(parse_fill),
         outline: properties.and_then(parse_outline),
-        style: parse_shape_style(element.child("style"), properties),
+        style: parse_shape_style(element.child("style"), properties).map(Box::new),
     })
 }
 
@@ -618,6 +610,9 @@ fn parse_shape_style(
         })
     };
     let style = ShapeStyle {
+        font_color: element
+            .and_then(|value| value.child("fontRef"))
+            .and_then(parse_color_container),
         fill: reference("fillRef"),
         line: reference("lnRef"),
         fill_disabled: unsupported(
@@ -1105,7 +1100,7 @@ mod tests {
     }
 
     #[test]
-    fn a_font_ref_without_a_colour_leaves_the_shape_unstyled() {
+    fn a_font_ref_without_a_colour_leaves_the_text_colour_unset() {
         let limits = ParseLimits::default();
         let mut budget = ParseBudget::new(&limits);
         let root = parse_xml(
@@ -1126,7 +1121,10 @@ mod tests {
         let ShapeNode::Shape(shape) = &data.shapes[0] else {
             panic!("expected a shape");
         };
-        assert!(shape.style.is_none());
+        let style = shape.style.as_ref().unwrap();
+        assert!(style.font_color.is_none());
+        assert_eq!(style.fill.as_ref().unwrap().index, 1);
+        assert_eq!(style.line.as_ref().unwrap().index, 2);
     }
 
     #[test]

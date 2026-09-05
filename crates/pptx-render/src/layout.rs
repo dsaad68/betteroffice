@@ -1961,8 +1961,8 @@ fn node_fill(node: &ShapeNode) -> Option<&ShapeFill> {
 
 fn node_style(node: &ShapeNode) -> Option<&ShapeStyle> {
     match node {
-        ShapeNode::Shape(shape) => shape.style.as_ref(),
-        ShapeNode::Picture(picture) => picture.style.as_ref(),
+        ShapeNode::Shape(shape) => shape.style.as_deref(),
+        ShapeNode::Picture(picture) => picture.style.as_deref(),
         _ => None,
     }
 }
