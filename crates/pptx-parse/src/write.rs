@@ -679,10 +679,9 @@ impl Prefixes {
 
 // --- slide patching ---------------------------------------------------------
 
+/// Must list exactly what `parse_shape_children` accepts: a shape's ordinal is resolved
+/// against this filter, so a mismatch writes edits into the wrong element.
 fn is_shape_element(local: &str) -> bool {
-    // Must list exactly what parse_shape_children accepts: a shape's id encodes its ordinal
-    // among these elements, and the save path resolves that ordinal against this filter. A
-    // mismatch silently writes edits into the wrong element.
     matches!(local, "sp" | "cxnSp" | "pic" | "graphicFrame" | "grpSp")
 }
 
@@ -1859,10 +1858,6 @@ mod tests {
 
     #[test]
     fn the_writer_recognises_exactly_what_the_parser_reads() {
-        // A shape's id encodes its ordinal among these elements, and the save path resolves
-        // that ordinal against is_shape_element. If this list ever disagrees with the one
-        // parse_shape_children dispatches on, edits are written into the wrong element from
-        // the first mismatch onwards, without any error.
         for local in ["sp", "cxnSp", "pic", "graphicFrame", "grpSp"] {
             assert!(
                 is_shape_element(local),

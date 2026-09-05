@@ -107,8 +107,6 @@ fn parse_shape_children(
     let mut shapes = Vec::new();
     for child in parent.child_elements() {
         let shape = match child.local_name() {
-            // A connector carries the same spPr as a shape, so it parses the same way; only
-            // its non-visual container is named differently.
             "sp" | "cxnSp" => Some(ShapeNode::Shape(parse_shape(child, part, budget)?)),
             "pic" => Some(ShapeNode::Picture(parse_picture(
                 child,
@@ -972,8 +970,6 @@ mod tests {
         .unwrap();
         let data = common_slide_data(&root, &[], "ppt/slides/slide1.xml", &mut budget).unwrap();
 
-        // The connector must occupy its own slot, or every later shape's index shifts and the
-        // save path writes edits into the wrong element.
         assert_eq!(data.shapes.len(), 3);
         let ShapeNode::Shape(connector) = &data.shapes[1] else {
             panic!("expected the connector to parse as a shape");
@@ -981,10 +977,12 @@ mod tests {
         assert_eq!(connector.base.id, 3);
         assert_eq!(connector.base.name, "Straight Connector 2");
         assert_eq!(connector.geometry, "line");
-        // A zero-width connector is a vertical line, not something to discard.
         assert_eq!(connector.base.transform.width, 0);
         assert_eq!(connector.base.transform.height, 500);
-        let outline = connector.outline.as_ref().expect("connector has an outline");
+        let outline = connector
+            .outline
+            .as_ref()
+            .expect("connector has an outline");
         assert_eq!(
             outline.color.as_ref().unwrap().rgb.as_deref(),
             Some("FF0000")
