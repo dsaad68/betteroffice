@@ -1,3 +1,7 @@
+import io
+import re
+import zipfile
+
 import pytest
 
 import betteroffice_pptx as bo
@@ -53,6 +57,28 @@ def test_render_png_accepts_a_slide_id(deck):
 def test_render_png_renders_every_slide(deck):
     for index in range(len(deck)):
         assert deck.render_png(index).bytes[:8] == PNG_MAGIC
+
+
+def test_render_png_counts_a_picture_without_a_media_reference(sample_bytes, font_bytes):
+    buffer = io.BytesIO()
+    with zipfile.ZipFile(io.BytesIO(sample_bytes)) as source, zipfile.ZipFile(buffer, "w") as target:
+        for part in source.infolist():
+            data = source.read(part.filename)
+            if part.filename == "ppt/slides/slide1.xml":
+                data, removed = re.subn(rb'\s+r:embed="[^"]+"', b"", data)
+                assert removed == 1
+            target.writestr(part, data)
+
+    presentation = bo.Presentation.open(buffer.getvalue())
+    presentation.register_font("Arial", font_bytes)
+    pictures = [
+        primitive
+        for primitive in presentation.render_slide(0).to_dict()["primitives"]
+        if primitive["kind"] == "image"
+    ]
+    assert len(pictures) == 1
+    assert pictures[0].get("assetId") is None
+    assert presentation.render_png(0).skipped_images == 1
 
 
 def test_render_png_is_deterministic(deck):

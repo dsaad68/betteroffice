@@ -400,8 +400,8 @@ impl Painter<'_, '_> {
         clip: Option<&Mask>,
     ) -> Result<(), String> {
         let frame = frame_rect(x, y, w, h);
-        if let (Some(asset_id), Ok(frame)) = (asset_id, frame.as_ref()) {
-            match self.decode(asset_id) {
+        if let Ok(frame) = frame.as_ref() {
+            match asset_id.and_then(|asset_id| self.decode(asset_id)) {
                 Some(source) => {
                     let fit = Transform::from_row(
                         frame.width() / source.width() as f32,
@@ -854,26 +854,28 @@ mod tests {
     fn a_missing_asset_is_skipped_and_counted() {
         let fonts = FontStore::new();
         let images = AssetMap::default();
-        let mut list = empty_list(100.0, 100.0);
-        list.primitives.push(Primitive::Image {
-            object_id: 1,
-            shape_id: None,
-            name: "picture".into(),
-            x: 0.0,
-            y: 0.0,
-            w: 50.0,
-            h: 50.0,
-            asset_id: Some("ppt/media/image1.png".into()),
-            stroke: None,
-            transform: SlideTransform::default(),
-        });
-        let rendered = render_slide(
-            &list,
-            &resources(&fonts, &images),
-            &RenderOptions::default(),
-        )
-        .expect("render");
-        assert_eq!(rendered.skipped_images, 1);
+        for asset_id in [None, Some("ppt/media/image1.png")] {
+            let mut list = empty_list(100.0, 100.0);
+            list.primitives.push(Primitive::Image {
+                object_id: 1,
+                shape_id: None,
+                name: "picture".into(),
+                x: 0.0,
+                y: 0.0,
+                w: 50.0,
+                h: 50.0,
+                asset_id: asset_id.map(str::to_owned),
+                stroke: None,
+                transform: SlideTransform::default(),
+            });
+            let rendered = render_slide(
+                &list,
+                &resources(&fonts, &images),
+                &RenderOptions::default(),
+            )
+            .expect("render");
+            assert_eq!(rendered.skipped_images, 1, "asset_id: {asset_id:?}");
+        }
     }
 
     #[test]
