@@ -139,11 +139,7 @@ function drawCropped(
   if (keptX <= 0 || keptY <= 0) return;
   if (masked) {
     ctx.save();
-    if (image.path) buildPath(ctx, image.path, image.x, image.y, image.w, image.h);
-    else {
-      ctx.beginPath();
-      ctx.rect(image.x, image.y, image.w, image.h);
-    }
+    buildImageOutline(ctx, image);
     ctx.clip();
   }
   const width = sourceWidth(source);
@@ -164,6 +160,15 @@ function drawCropped(
     ctx.drawImage(source, image.x, image.y, image.w, image.h);
   }
   if (masked) ctx.restore();
+}
+
+/** The picture's own outline when it has one, else its frame. */
+function buildImageOutline(ctx: CanvasRenderingContext2D, image: ImagePrimitive): void {
+  if (image.path) buildPath(ctx, image.path, image.x, image.y, image.w, image.h);
+  else {
+    ctx.beginPath();
+    ctx.rect(image.x, image.y, image.w, image.h);
+  }
 }
 
 /** `a:srcRect` also encodes outsets as negatives, which canvas cannot express. */
@@ -270,8 +275,7 @@ async function paintImage(
     if (source) drawCropped(ctx, source, image);
   }
   if (image.stroke) {
-    ctx.beginPath();
-    ctx.rect(image.x, image.y, image.w, image.h);
+    buildImageOutline(ctx, image);
     strokeCurrentPath(ctx, image.stroke);
   }
 }
