@@ -58,7 +58,7 @@ pub struct SlideRenderer {
     fonts: FontStore,
     faces: HashMap<(String, bool, bool), FontFace>,
     fallback: Option<FontFace>,
-    /// Normalized family of the first registration, used as a style-aware fallback.
+    /// Normalized fallback family.
     fallback_family: Option<String>,
     font_count: usize,
 }
@@ -124,8 +124,7 @@ impl SlideRenderer {
         &self.fonts
     }
 
-    /// The first face registered, which text falls back to when no family
-    /// matches.
+    /// First registered face for placeholder labels.
     pub fn fallback_font(&self) -> Option<FontId> {
         self.fallback.as_ref().map(|face| face.id)
     }
@@ -254,19 +253,29 @@ impl SlideRenderer {
         italic: bool,
     ) -> Result<FontFace, RenderError> {
         let requested = normalize_family(family);
-        // Degrade the family before the style so a missing family keeps its weight.
-        let styles = [(bold, italic), (bold, false), (false, italic), (false, false)];
-        for name in [Some(&requested), self.fallback_family.as_ref()]
-            .into_iter()
-            .flatten()
-        {
-            for (bold, italic) in styles {
-                if let Some(face) = self.faces.get(&(name.clone(), bold, italic)) {
-                    return Ok(face.clone());
-                }
+        let styles = [
+            (bold, italic),
+            (bold, false),
+            (false, italic),
+            (false, false),
+        ];
+        for (bold, italic) in styles {
+            if let Some(face) = self.faces.get(&(requested.clone(), bold, italic)) {
+                return Ok(face.clone());
             }
         }
-        self.fallback.clone().ok_or(RenderError::NoFont)
+        self.faces
+            .iter()
+            .filter(|((name, _, _), _)| Some(name) == self.fallback_family.as_ref())
+            .min_by_key(|((_, face_bold, face_italic), _)| {
+                (
+                    2 * u8::from(*face_bold != bold) + u8::from(*face_italic != italic),
+                    *face_bold,
+                    *face_italic,
+                )
+            })
+            .map(|(_, face)| face.clone())
+            .ok_or(RenderError::NoFont)
     }
 }
 
@@ -2123,6 +2132,12 @@ mod tests {
     const FIXTURE: &[u8] = include_bytes!("../../../apps/demo/public/betteroffice-demo.pptx");
     const CHART_FIXTURE: &[u8] = include_bytes!("../../pptx-parse/tests/fixtures/chart-deck.pptx");
     const FONT: &[u8] = include_bytes!("../../ooxml-text/tests/fonts/LiberationSans-Regular.ttf");
+    const BOLD_FONT: &[u8] =
+        include_bytes!("../../../packages/fonts/assets/LiberationSans-Bold.ttf");
+    const ITALIC_FONT: &[u8] =
+        include_bytes!("../../../packages/fonts/assets/LiberationSans-Italic.ttf");
+    const BOLD_ITALIC_FONT: &[u8] =
+        include_bytes!("../../../packages/fonts/assets/LiberationSans-BoldItalic.ttf");
 
     fn renderer() -> SlideRenderer {
         let mut renderer = SlideRenderer::new();
@@ -2298,46 +2313,131 @@ mod tests {
 
     #[test]
     fn an_unregistered_family_keeps_its_weight_through_the_fallback() {
-        let renderer = renderer();
-        let regular = renderer.resolve_face("Arial", false, false).unwrap();
-        let bold = renderer.resolve_face("Arial", true, false).unwrap();
-        assert_ne!(regular.id, bold.id, "the fixture must register two distinct faces");
+        let mut renderer = SlideRenderer::new();
+        renderer.register_font("Arial", false, false, FONT).unwrap();
+        let bold = renderer
+            .register_font("Arial", true, false, BOLD_FONT)
+            .unwrap();
 
         let resolved = renderer.resolve_face("Segoe UI", true, false).unwrap();
-        assert_eq!(resolved.id, bold.id);
+        assert_eq!(resolved.id.to_u32(), bold);
+        assert_eq!(renderer.fonts.font_bytes(resolved.id).unwrap(), BOLD_FONT);
     }
 
     #[test]
     fn an_unregistered_family_keeps_its_slant_through_the_fallback() {
         let mut renderer = SlideRenderer::new();
         renderer.register_font("Arial", false, false, FONT).unwrap();
-        renderer.register_font("Arial", false, true, FONT).unwrap();
-        let italic = renderer.resolve_face("Arial", false, true).unwrap();
+        let italic = renderer
+            .register_font("Arial", false, true, ITALIC_FONT)
+            .unwrap();
 
         let resolved = renderer.resolve_face("Segoe UI", false, true).unwrap();
-        assert_eq!(resolved.id, italic.id);
+        assert_eq!(resolved.id.to_u32(), italic);
+        assert_eq!(renderer.fonts.font_bytes(resolved.id).unwrap(), ITALIC_FONT);
     }
 
     #[test]
-    fn a_registered_family_wins_over_the_fallback_family() {
+    fn fallback_keeps_combined_style_and_prefers_a_registered_family() {
         let mut renderer = SlideRenderer::new();
-        renderer.register_font("Arial", false, false, FONT).unwrap();
-        renderer.register_font("Arial", true, false, FONT).unwrap();
-        renderer.register_font("Georgia", false, false, FONT).unwrap();
-        let georgia = renderer.resolve_face("Georgia", false, false).unwrap();
+        let regular = renderer.register_font("Arial", false, false, FONT).unwrap();
+        renderer
+            .register_font("ARIAL", true, false, BOLD_FONT)
+            .unwrap();
+        renderer
+            .register_font("Arial", false, true, ITALIC_FONT)
+            .unwrap();
+        let bold_italic = renderer
+            .register_font(" arial ", true, true, BOLD_ITALIC_FONT)
+            .unwrap();
+        let georgia = renderer
+            .register_font("Georgia", false, false, FONT)
+            .unwrap();
 
-        let resolved = renderer.resolve_face("Georgia", true, false).unwrap();
-        assert_eq!(resolved.id, georgia.id);
-    }
-
-    #[test]
-    fn the_fallback_family_degrades_style_when_nothing_matches() {
-        let mut renderer = SlideRenderer::new();
-        renderer.register_font("Arial", false, false, FONT).unwrap();
-        let regular = renderer.resolve_face("Arial", false, false).unwrap();
-
+        let resolved = renderer.resolve_face(" geORGia ", true, true).unwrap();
+        assert_eq!(resolved.id.to_u32(), georgia);
         let resolved = renderer.resolve_face("Segoe UI", true, true).unwrap();
-        assert_eq!(resolved.id, regular.id);
+        assert_eq!(resolved.id.to_u32(), bold_italic);
+        assert_eq!(renderer.fallback_font().unwrap().to_u32(), regular);
+    }
+
+    #[test]
+    fn fallback_with_only_bold_and_italic_is_independent_of_registration_order() {
+        fn substitute_family(shapes: &mut [ShapeSnapshot]) {
+            for shape in shapes {
+                for story in &mut shape.text_stories {
+                    for paragraph in &mut story.paragraphs {
+                        for run in &mut paragraph.runs {
+                            run.style.font_family = Some("Segoe UI".to_owned());
+                        }
+                    }
+                }
+                substitute_family(&mut shape.children);
+            }
+        }
+
+        fn normalize_font_ids(primitives: &mut [Primitive], bold_id: u32) {
+            for primitive in primitives {
+                match primitive {
+                    Primitive::TextBox { lines, .. } => {
+                        for run in lines.iter_mut().flat_map(|line| &mut line.runs) {
+                            run.font_id = u32::from(run.font_id != bold_id);
+                        }
+                    }
+                    Primitive::Chart { primitives, .. } => normalize_font_ids(primitives, bold_id),
+                    _ => {}
+                }
+            }
+        }
+
+        assert!(matches!(
+            SlideRenderer::new().resolve_face("Segoe UI", false, false),
+            Err(RenderError::NoFont)
+        ));
+        let package = pptx_parse::parse_pptx(FIXTURE).unwrap();
+        let session = DeckSession::open(FIXTURE, 8_010).unwrap();
+        let mut snapshot = session.snapshot().unwrap();
+        for slide in &mut snapshot.slides {
+            substitute_family(&mut slide.shapes);
+        }
+        let mut outputs = Vec::new();
+        let mut renderers = Vec::new();
+        for reverse in [false, true] {
+            let mut renderer = SlideRenderer::new();
+            let mut faces = [(true, false, BOLD_FONT), (false, true, ITALIC_FONT)];
+            if reverse {
+                faces.reverse();
+            }
+            for (bold, italic, bytes) in faces {
+                renderer
+                    .register_font("Arial", bold, italic, bytes)
+                    .unwrap();
+            }
+            let bold_id = renderer.resolve_face("Arial", true, false).unwrap().id;
+            let mut slides = Vec::new();
+            for index in 0..snapshot.slides.len() {
+                let mut rendered = renderer.layout_slide(&package, &snapshot, index).unwrap();
+                normalize_font_ids(&mut rendered.display_list.primitives, bold_id.to_u32());
+                slides.push(rendered.display_list);
+            }
+            outputs.push(serde_json::to_vec(&slides).unwrap());
+            renderers.push(renderer);
+        }
+        assert!(outputs[0] == outputs[1], "fallback display lists differ");
+        for renderer in renderers {
+            for (bold, italic, expected) in [
+                (false, false, ITALIC_FONT),
+                (true, false, BOLD_FONT),
+                (false, true, ITALIC_FONT),
+                (true, true, BOLD_FONT),
+            ] {
+                let resolved = renderer.resolve_face("Segoe UI", bold, italic).unwrap();
+                assert!(
+                    renderer.fonts.font_bytes(resolved.id).unwrap() == expected,
+                    "wrong fallback for bold={bold}, italic={italic}"
+                );
+            }
+        }
     }
 
     #[test]
