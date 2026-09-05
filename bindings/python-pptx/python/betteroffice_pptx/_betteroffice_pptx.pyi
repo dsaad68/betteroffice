@@ -442,7 +442,7 @@ class Presentation:
     ) -> CommentEdit:
         """Modern comments only; legacy comments carry no replies."""
     def set_comment_status(self, comment_id: str, resolved: bool = ...) -> CommentEdit:
-        """Modern comments only; on a legacy deck, resolving means removing."""
+        """Resolve or reopen a modern comment."""
     def remove_comment(self, comment_id: str) -> CommentEdit: ...
     def comments(self) -> list[Comment]: ...
     @property

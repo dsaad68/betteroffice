@@ -711,8 +711,7 @@ pub(crate) fn fingerprint_from_doc(doc: &Doc) -> EditResult<String> {
         .ok_or_else(|| EditError::InvalidState("missing fingerprint".to_owned()))
 }
 
-/// Rewrites a hydrated older document into the current schema and stamps it, so
-/// the next snapshot this session writes is a v2 one.
+/// Migrates a hydrated document to the current schema.
 pub(crate) fn migrate_doc(doc: &Doc) -> EditResult<()> {
     let package = {
         let txn = doc.transact();

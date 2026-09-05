@@ -20,8 +20,9 @@ reply list nor a status, and are rejected on a legacy deck. `removeComment`
 takes a thread root's replies with it, and dropping a slide's last comment
 removes its part, its relationship and its content-type override. Comment
 positions cross the API in EMU. Legacy comments convert to 1/576-inch master
-units; modern comments store EMU directly. Timestamps are caller-supplied, so the engine stays clock-free
-and two peers replaying the same edits converge byte for byte.
+units; modern comments store EMU directly. Timestamps are caller-supplied, so the
+engine stays clock-free and two peers replaying the same edits converge byte for
+byte.
 
 Minor rather than patch: `DeckSnapshot` gains `comments` and `commentFlavor`,
 `ParseLimits` gains `max_comments`, `DeckWrite` gains `comments`, and `EditError`

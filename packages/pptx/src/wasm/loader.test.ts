@@ -439,7 +439,6 @@ describe('PPTX wasm boundary', () => {
       })
     ).toThrow();
     expect(() => deck.setCommentStatus(receipt.commentId, true)).toThrow();
-    // The flavour is fixed once a deck carries a comment.
     expect(() => deck.setCommentFlavor('modern')).toThrow();
 
     deck.dispose();
