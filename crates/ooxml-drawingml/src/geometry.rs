@@ -35,7 +35,7 @@ pub fn preset_geometry_default_adjustments(shape_type: &str) -> HashMap<String, 
         .collect()
 }
 
-/// Adjust values are fractions of the shortest side: the ECMA-376 guide value over 100000.
+/// Adjustments use ECMA-376 guide values divided by 100000.
 pub fn preset_geometry_to_path(
     shape_type: &str,
     adjustments: &HashMap<String, f64>,
@@ -241,14 +241,12 @@ pub fn preset_geometry_to_path(
     Some(result)
 }
 
-/// `pin 0 adj maxAdj` with `maxAdj = 100000 * w / ss`, then `ss * a / 100000` as a fraction of
-/// the width, as the chevron and homePlate preset definitions do.
+/// Pins to `w / ss`, then converts from shortest-side to width units.
 fn shortest_side_adjustment(adjustment: Option<f64>, fallback: f64, aspect_ratio: f64) -> f64 {
     let width = width_in_shortest_sides(aspect_ratio);
     pin(adjustment, fallback, width) / width
 }
 
-/// `w / ss`: the width measured in shortest sides.
 fn width_in_shortest_sides(aspect_ratio: f64) -> f64 {
     if aspect_ratio.is_finite() && aspect_ratio > 0.0 {
         aspect_ratio.max(1.0)
@@ -357,7 +355,6 @@ fn clamp_fraction(value: Option<f64>, fallback: f64) -> f64 {
     pin(value, fallback, 1.0)
 }
 
-/// `pin 0 value max`, with `fallback` standing in for a missing or non-finite value.
 fn pin(value: Option<f64>, fallback: f64, max: f64) -> f64 {
     value
         .filter(|value| value.is_finite())
@@ -477,8 +474,7 @@ mod tests {
         (rx, ry)
     }
 
-    /// The x of the first line command, which is where a chevron's or home plate's leading
-    /// edge stops before the point begins.
+    /// Where the leading edge stops before the point begins.
     fn leading_edge(shape: &str, adjust: Option<f64>, aspect_ratio: f64) -> f64 {
         let mut adjustments = HashMap::new();
         if let Some(value) = adjust {
@@ -493,18 +489,14 @@ mod tests {
 
     #[test]
     fn an_adjust_value_is_a_fraction_of_the_shortest_side() {
-        // On a square the shortest side is the width, so the notch is the adjust value itself.
         assert_close(1.0 - leading_edge("chevron", Some(0.5), 1.0), 0.5);
 
-        // On the banner measured in the report, 171.3 x 55.6, the notch must be half the
-        // height expressed against the width, not half the width.
         let aspect = 171.3 / 55.6;
         assert_close(
             1.0 - leading_edge("chevron", Some(0.5), aspect),
             0.5 / aspect,
         );
 
-        // Home plate takes the same adjust value, and used to ignore it entirely.
         assert_close(1.0 - leading_edge("homePlate", Some(0.5), 1.0), 0.5);
         let aspect = 280.9 / 37.5;
         assert_close(
@@ -533,9 +525,10 @@ mod tests {
     }
 
     #[test]
-    fn square_adjustments_above_half_reach_past_the_middle() {
+    fn an_adjust_value_above_half_is_honoured() {
         for shape in ["chevron", "homePlate"] {
-            assert_close(leading_edge(shape, Some(0.75), 1.0), 0.25);
+            assert_close(1.0 - leading_edge(shape, Some(0.75), 1.0), 0.75);
+            assert_close(1.0 - leading_edge(shape, Some(1.0), 1.0), 1.0);
         }
     }
 
