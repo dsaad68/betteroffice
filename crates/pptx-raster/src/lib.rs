@@ -4,6 +4,7 @@
 #[cfg(target_arch = "wasm32")]
 compile_error!("betteroffice-pptx-raster is server-side only");
 
+mod blur;
 mod font;
 
 pub use font::GlyphCache;
@@ -14,8 +15,8 @@ use std::io::Cursor;
 use ooxml_drawingml::GeometryPathCommand;
 use ooxml_text::{FontId, FontStore};
 use pptx_render::{
-    GradientType, ImageCrop, Paint as SlidePaint, Primitive, Stroke as SlideStroke,
-    SurfaceDisplayList, Transform as SlideTransform,
+    GradientType, ImageCrop, Paint as SlidePaint, Primitive, Shadow as SlideShadow,
+    Stroke as SlideStroke, SurfaceDisplayList, Transform as SlideTransform,
 };
 use tiny_skia::{
     Color, ColorU8, FillRule, FilterQuality, GradientStop, IntSize, LinearGradient, Mask, Paint,
@@ -249,6 +250,7 @@ impl Painter<'_, '_> {
                 path,
                 fill,
                 stroke,
+                shadow,
                 ..
             } => self.paint_shape(
                 *x,
@@ -258,6 +260,7 @@ impl Painter<'_, '_> {
                 path,
                 fill.as_ref(),
                 stroke.as_ref(),
+                shadow.as_ref(),
                 transform,
                 clip,
             ),
@@ -383,12 +386,16 @@ impl Painter<'_, '_> {
         commands: &[GeometryPathCommand],
         fill: Option<&SlidePaint>,
         stroke: Option<&SlideStroke>,
+        shadow: Option<&SlideShadow>,
         transform: Transform,
         clip: Option<&Mask>,
     ) -> Result<(), String> {
         let Some(path) = geometry_path(commands, x, y, w, h) else {
             return Ok(());
         };
+        if let Some(shadow) = shadow {
+            self.paint_shadow(&path, shadow, transform, clip)?;
+        }
         if let Some(fill) = fill {
             let paint = shader_paint(fill, x, y, w, h)?;
             self.pixmap
@@ -510,6 +517,62 @@ impl Painter<'_, '_> {
             transform,
             clip,
         )
+    }
+
+    /// Paints the shape's own path offset, tinted and blurred, under the shape.
+    fn paint_shadow(
+        &mut self,
+        path: &Path,
+        shadow: &SlideShadow,
+        transform: Transform,
+        clip: Option<&Mask>,
+    ) -> Result<(), String> {
+        let color = parse_color(&shadow.color)?;
+        if color.alpha() == 0.0 {
+            return Ok(());
+        }
+        let mut paint = Paint::default();
+        paint.set_color(color);
+        paint.anti_alias = true;
+        let placed = Transform::from_translate(shadow.dx, shadow.dy).pre_concat(transform);
+        let radius = blur::box_radius(shadow.blur / 2.0);
+        if radius == 0 {
+            self.pixmap
+                .fill_path(path, &paint, FillRule::Winding, placed, clip);
+            return Ok(());
+        }
+        let Some(placed_path) = path.clone().transform(placed) else {
+            return Ok(());
+        };
+        let margin = blur::spread(radius) as f32 + 1.0;
+        let bounds = placed_path.bounds();
+        let surface_width = self.pixmap.width() as f32;
+        let surface_height = self.pixmap.height() as f32;
+        let left = (bounds.left() - margin).floor().clamp(0.0, surface_width);
+        let top = (bounds.top() - margin).floor().clamp(0.0, surface_height);
+        let right = (bounds.right() + margin).ceil().clamp(0.0, surface_width);
+        let bottom = (bounds.bottom() + margin).ceil().clamp(0.0, surface_height);
+        let (width, height) = ((right - left) as u32, (bottom - top) as u32);
+        let Some(mut scratch) = Pixmap::new(width, height) else {
+            return Ok(());
+        };
+        scratch.fill_path(
+            &placed_path,
+            &paint,
+            FillRule::Winding,
+            Transform::from_translate(-left, -top),
+            None,
+        );
+        blur::blur(&mut scratch, radius);
+        self.pixmap.draw_pixmap(
+            left as i32,
+            top as i32,
+            scratch.as_ref(),
+            &PixmapPaint::default(),
+            Transform::identity(),
+            clip,
+        );
+        Ok(())
     }
 
     fn stroke_path(
@@ -871,6 +934,74 @@ mod tests {
     }
 
     #[test]
+    fn a_shadow_lays_soft_ink_outside_the_shape_it_belongs_to() {
+        let fonts = FontStore::new();
+        let images = AssetMap::default();
+        let square = |shadow: Option<SlideShadow>| Primitive::Shape {
+            object_id: 1,
+            shape_id: None,
+            name: "card".into(),
+            x: 40.0,
+            y: 40.0,
+            w: 40.0,
+            h: 40.0,
+            geometry: "rect".into(),
+            path: vec![
+                GeometryPathCommand::Move { x: 0.0, y: 0.0 },
+                GeometryPathCommand::Line { x: 1.0, y: 0.0 },
+                GeometryPathCommand::Line { x: 1.0, y: 1.0 },
+                GeometryPathCommand::Line { x: 0.0, y: 1.0 },
+                GeometryPathCommand::Close,
+            ],
+            adjust_values: Default::default(),
+            fill: Some(SlidePaint::Solid {
+                color: "#4472C4".into(),
+            }),
+            stroke: None,
+            shadow,
+            transform: SlideTransform::default(),
+        };
+        let render = |primitive| {
+            let mut list = empty_list(160.0, 160.0);
+            list.primitives.push(primitive);
+            let rendered = render_slide(
+                &list,
+                &resources(&fonts, &images),
+                &RenderOptions::default(),
+            )
+            .expect("render");
+            Pixmap::decode_png(&rendered.bytes).expect("decode")
+        };
+        let ink = |pixmap: &Pixmap, x: u32, y: u32| {
+            255 - pixmap
+                .pixel(x, y)
+                .expect("inside the surface")
+                .demultiply()
+                .red()
+        };
+
+        let plain = render(square(None));
+        let shadowed = render(square(Some(SlideShadow {
+            color: "#00000066".into(),
+            blur: 8.0,
+            dx: 6.0,
+            dy: 6.0,
+        })));
+
+        assert_eq!(ink(&plain, 84, 84), 0);
+        let near = ink(&shadowed, 84, 84);
+        let far = ink(&shadowed, 92, 92);
+        assert!(near > 0, "the shadow should reach past the shape");
+        assert!(far < near, "the shadow should fade outwards");
+        assert_eq!(ink(&shadowed, 20, 20), 0);
+        assert_eq!(
+            shadowed.pixel(60, 60).unwrap().demultiply(),
+            plain.pixel(60, 60).unwrap().demultiply(),
+            "the shape itself paints over its own shadow"
+        );
+    }
+
+    #[test]
     fn a_slide_past_the_surface_cap_is_refused_before_allocating() {
         let fonts = FontStore::new();
         let images = AssetMap::default();
@@ -1059,6 +1190,7 @@ mod tests {
                     color: "#ff0000".into(),
                 }),
                 stroke: None,
+                shadow: None,
                 transform: SlideTransform::default(),
             }],
             transform: SlideTransform::default(),

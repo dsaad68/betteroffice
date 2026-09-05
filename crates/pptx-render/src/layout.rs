@@ -2,7 +2,7 @@ use std::collections::{BTreeMap, HashMap, HashSet};
 
 use ooxml_drawingml::chart::PlotRect;
 use ooxml_drawingml::{
-    ColorValue, LineEnd, ShapeFill, ShapeOutline, Theme, preset_geometry_to_path,
+    ColorValue, LineEnd, ShapeEffects, ShapeFill, ShapeOutline, Theme, preset_geometry_to_path,
     resolve_color_value_to_hex_with_theme, resolve_color_value_to_rgba_hex, resolve_theme_font_ref,
 };
 use ooxml_text::{CompatFlags, FontId, FontStore, break_opportunities, shape, single_line_box};
@@ -18,12 +18,13 @@ use thiserror::Error;
 use crate::chart::{ChartFrame, ChartText, chart_primitive};
 use crate::{
     CONTRACT_VERSION, CaretStop, GradientStop, GradientType, ImageCrop, Paint, PositionedGlyph,
-    PositionedTextLine, PositionedTextRun, Primitive, Stroke, StrokeEnd, SurfaceDisplayList,
-    TextAlign, TextAnchor, TextParagraph, TextRun, Transform,
+    PositionedTextLine, PositionedTextRun, Primitive, Shadow, Stroke, StrokeEnd,
+    SurfaceDisplayList, TextAlign, TextAnchor, TextParagraph, TextRun, Transform,
 };
 
 const EMU_PER_CSS_PIXEL: f32 = 9_525.0;
 const LINE_END_MIN_BASE_PX: f32 = 0.7 / 25.4 * 96.0;
+const ANGLE_UNITS_PER_DEGREE: f64 = 60_000.0;
 const DEFAULT_INSET_HORIZONTAL_EMU: i64 = 91_440;
 const DEFAULT_INSET_VERTICAL_EMU: i64 = 45_720;
 const DEFAULT_FONT_SIZE_PT: f32 = 18.0;
@@ -414,6 +415,13 @@ impl<'a> LayoutBuilder<'a> {
             .as_ref()
             .or(node_outline)
             .and_then(|outline| stroke(outline, self.theme));
+        let node_effects = original
+            .and_then(node_effects)
+            .or_else(|| layout_node.and_then(node_effects))
+            .or_else(|| master_node.and_then(node_effects));
+        let shadow = node_effects
+            .filter(|_| shape.kind == ShapeKind::Shape && fill.is_some())
+            .and_then(|effects| shadow(effects, self.theme, space));
         let transform = Transform {
             rotation_deg: shape.rotation_deg as f32,
             flip_h: shape.flip_h,
@@ -442,6 +450,7 @@ impl<'a> LayoutBuilder<'a> {
                         .collect(),
                     fill,
                     stroke: outline,
+                    shadow,
                     transform,
                 });
             }
@@ -533,6 +542,12 @@ impl<'a> LayoutBuilder<'a> {
         };
         match shape {
             ShapeNode::Shape(value) => {
+                let fill = value.fill.as_ref().and_then(|fill| paint(fill, self.theme));
+                let shadow = value
+                    .effects
+                    .as_ref()
+                    .filter(|_| fill.is_some())
+                    .and_then(|effects| shadow(effects, self.theme, space));
                 self.primitives.push(Primitive::Shape {
                     object_id: base.id,
                     shape_id: Some(stable_id.to_owned()),
@@ -552,11 +567,12 @@ impl<'a> LayoutBuilder<'a> {
                         .iter()
                         .map(|(name, value)| (name.clone(), *value as f32))
                         .collect(),
-                    fill: value.fill.as_ref().and_then(|fill| paint(fill, self.theme)),
+                    fill,
                     stroke: value
                         .outline
                         .as_ref()
                         .and_then(|outline| stroke(outline, self.theme)),
+                    shadow,
                     transform,
                 });
             }
@@ -1902,6 +1918,14 @@ fn node_outline(node: &ShapeNode) -> Option<&ShapeOutline> {
     }
 }
 
+fn node_effects(node: &ShapeNode) -> Option<&ShapeEffects> {
+    match node {
+        ShapeNode::Shape(shape) => shape.effects.as_ref(),
+        ShapeNode::Picture(shape) => shape.effects.as_ref(),
+        ShapeNode::GraphicFrame(_) | ShapeNode::Group(_) => None,
+    }
+}
+
 fn node_text(node: &ShapeNode) -> Option<&TextBody> {
     match node {
         ShapeNode::Shape(shape) => shape.text.as_ref(),
@@ -2091,6 +2115,23 @@ fn line_end_scale(size: Option<&str>) -> f32 {
         Some("lg") => 5.0,
         _ => 3.0,
     }
+}
+
+/// `a:outerShdw` in surface pixels, or `None` when it would paint nothing.
+fn shadow(effects: &ShapeEffects, theme: &Theme, space: Space) -> Option<Shadow> {
+    let outer = effects.outer_shadow.as_ref()?;
+    let color = resolve_paint_color(outer.color.as_ref(), theme)?;
+    if color.len() == 9 && color.ends_with("00") {
+        return None;
+    }
+    let direction = (outer.direction as f64 / ANGLE_UNITS_PER_DEGREE).to_radians();
+    let distance = outer.distance as f64;
+    Some(Shadow {
+        color,
+        blur: safe_geometry(outer.blur_radius as f32 * (space.scale_x + space.scale_y) / 2.0),
+        dx: safe_geometry((distance * direction.cos()) as f32 * space.scale_x),
+        dy: safe_geometry((distance * direction.sin()) as f32 * space.scale_y),
+    })
 }
 
 fn stroke(outline: &ShapeOutline, theme: &Theme) -> Option<Stroke> {
@@ -2291,6 +2332,7 @@ mod tests {
             adjust_values: BTreeMap::new(),
             fill: None,
             outline: None,
+            effects: None,
         };
         let rect = PxRect {
             x: 0.0,
@@ -2755,6 +2797,34 @@ mod tests {
         assert_eq!(
             stroke(&outline(None), &theme).map(|stroke| stroke.color),
             Some("#112233".to_owned())
+        );
+    }
+
+    #[test]
+    fn an_outer_shadow_resolves_to_translucent_pixels_offset_along_its_direction() {
+        let theme = Theme::default();
+        let effects = |alpha| ShapeEffects {
+            outer_shadow: Some(ooxml_drawingml::OuterShadow {
+                color: Some(ColorValue {
+                    rgb: Some("000000".to_owned()),
+                    alpha: Some(alpha),
+                    ..ColorValue::default()
+                }),
+                blur_radius: 76_200,
+                distance: 38_100,
+                direction: 2_700_000,
+            }),
+        };
+        let resolved = shadow(&effects(0.4), &theme, Space::root()).expect("a painted shadow");
+        assert_eq!(resolved.color, "#00000066");
+        assert!((resolved.blur - 8.0).abs() < 0.01);
+        assert!((resolved.dx - 2.828).abs() < 0.01);
+        assert!((resolved.dy - 2.828).abs() < 0.01);
+
+        assert_eq!(shadow(&effects(0.0), &theme, Space::root()), None);
+        assert_eq!(
+            shadow(&ShapeEffects::default(), &theme, Space::root()),
+            None
         );
     }
 
@@ -3295,6 +3365,7 @@ mod tests {
             adjust_values: BTreeMap::new(),
             fill: None,
             outline: None,
+            effects: None,
             text: None,
         });
         let resolved = resolved_transform_value(&snapshot, None, Some(&layout_shape), None);

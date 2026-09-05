@@ -1,6 +1,9 @@
 use std::collections::BTreeMap;
 
-use ooxml_drawingml::{ColorValue, GradientFill, GradientStop, LineEnd, ShapeFill, ShapeOutline};
+use ooxml_drawingml::{
+    ColorValue, GradientFill, GradientStop, LineEnd, OuterShadow, ShapeEffects, ShapeFill,
+    ShapeOutline,
+};
 
 use crate::PptxError;
 use crate::model::*;
@@ -167,6 +170,7 @@ fn parse_shape(
         adjust_values: parse_adjust_values(properties, parse_shape_extent(transform)),
         fill: properties.and_then(parse_fill),
         outline: properties.and_then(parse_outline),
+        effects: properties.and_then(parse_effects),
         text: element
             .child("txBody")
             .map(|body| parse_text_body(body, part, budget))
@@ -204,6 +208,7 @@ fn parse_picture(
         adjust_values: parse_adjust_values(properties, parse_shape_extent(transform)),
         fill: properties.and_then(parse_fill),
         outline: properties.and_then(parse_outline),
+        effects: properties.and_then(parse_effects),
     })
 }
 
@@ -699,6 +704,24 @@ fn parse_outline(element: &XmlElement) -> Option<ShapeOutline> {
             .map(|value| value.local_name().to_owned()),
         head_end: line.child("headEnd").map(parse_line_end),
         tail_end: line.child("tailEnd").map(parse_line_end),
+    })
+}
+
+fn parse_effects(element: &XmlElement) -> Option<ShapeEffects> {
+    let shadow = element
+        .child("effectLst")
+        .and_then(|list| list.child("outerShdw"))?;
+    Some(ShapeEffects {
+        outer_shadow: Some(OuterShadow {
+            color: parse_color_container(shadow),
+            blur_radius: numeric_attribute(Some(shadow), "blurRad")
+                .unwrap_or_default()
+                .max(0),
+            distance: numeric_attribute(Some(shadow), "dist")
+                .unwrap_or_default()
+                .max(0),
+            direction: numeric_attribute(Some(shadow), "dir").unwrap_or_default(),
+        }),
     })
 }
 
@@ -1505,5 +1528,45 @@ mod tests {
         let actual = values.get(name).unwrap();
         assert_eq!(actual.value, expected);
         assert_eq!(actual.extent_power, expected_power);
+    }
+
+    #[test]
+    fn an_outer_shadow_reaches_the_model_with_its_colour_and_geometry() {
+        let limits = ParseLimits::default();
+        let mut budget = ParseBudget::new(&limits);
+        let root = parse_xml(
+            br#"<p:sld><p:cSld><p:spTree><p:sp><p:nvSpPr><p:cNvPr id="2" name="Shadowed"/><p:nvPr/></p:nvSpPr><p:spPr><a:effectLst><a:outerShdw blurRad="25400" dist="38100" dir="2700000" rotWithShape="0"><a:schemeClr val="bg1"><a:lumMod val="50000"/><a:alpha val="40000"/></a:schemeClr></a:outerShdw></a:effectLst></p:spPr></p:sp><p:sp><p:nvSpPr><p:cNvPr id="3" name="Plain"/><p:nvPr/></p:nvSpPr><p:spPr><a:solidFill><a:srgbClr val="FF0000"/></a:solidFill></p:spPr></p:sp><p:sp><p:nvSpPr><p:cNvPr id="4" name="Hidden effects only"/><p:nvPr/></p:nvSpPr><p:spPr><a:extLst><a:ext uri="{909E8E84-426E-40DD-AFC4-6F175D3DCCD1}"><a14:hiddenEffects xmlns:a14="http://schemas.microsoft.com/office/drawing/2010/main"><a:effectLst><a:outerShdw blurRad="12700"><a:srgbClr val="000000"/></a:outerShdw></a:effectLst></a14:hiddenEffects></a:ext></a:extLst></p:spPr></p:sp></p:spTree></p:cSld></p:sld>"#,
+            "ppt/slides/slide1.xml",
+            &mut budget,
+        )
+        .unwrap();
+        let data = common_slide_data(
+            &root,
+            &[],
+            "ppt/slides/slide1.xml",
+            &mut budget,
+            ShapeElements::WithConnectors,
+        )
+        .unwrap();
+        let effects_of = |node: &ShapeNode| match node {
+            ShapeNode::Shape(shape) => shape.effects.clone(),
+            _ => panic!("expected a shape"),
+        };
+
+        let shadow = effects_of(&data.shapes[0])
+            .expect("the shape should have effects")
+            .outer_shadow
+            .expect("the effects should carry an outer shadow");
+        assert_eq!(
+            (shadow.blur_radius, shadow.distance, shadow.direction),
+            (25_400, 38_100, 2_700_000)
+        );
+        let color = shadow.color.expect("the shadow should have a colour");
+        assert_eq!(color.theme_color.as_deref(), Some("background1"));
+        assert_eq!(color.luminance_modulation, Some(0.5));
+        assert_eq!(color.alpha, Some(0.4));
+
+        assert_eq!(effects_of(&data.shapes[1]), None);
+        assert_eq!(effects_of(&data.shapes[2]), None);
     }
 }

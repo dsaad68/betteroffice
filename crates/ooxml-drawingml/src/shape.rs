@@ -57,6 +57,28 @@ pub struct ShapeOutline {
     pub tail_end: Option<LineEnd>,
 }
 
+/// `a:effectLst`, limited to the effects a renderer can paint today.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ShapeEffects {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub outer_shadow: Option<OuterShadow>,
+}
+
+/// `a:outerShdw`, in OOXML units: EMU lengths, 60000ths of a degree.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct OuterShadow {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub color: Option<ColorValue>,
+    #[serde(default)]
+    pub blur_radius: i64,
+    #[serde(default)]
+    pub distance: i64,
+    #[serde(default)]
+    pub direction: i64,
+}
+
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct LineEnd {
     #[serde(rename = "type")]

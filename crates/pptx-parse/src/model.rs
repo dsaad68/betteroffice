@@ -1,6 +1,6 @@
 use std::collections::BTreeMap;
 
-use ooxml_drawingml::{ColorValue, ShapeFill, ShapeOutline, Theme};
+use ooxml_drawingml::{ColorValue, ShapeEffects, ShapeFill, ShapeOutline, Theme};
 use serde::{Deserialize, Serialize};
 
 use crate::relationships::Relationship;
@@ -233,6 +233,8 @@ pub struct Shape {
     pub adjust_values: BTreeMap<String, f64>,
     pub fill: Option<ShapeFill>,
     pub outline: Option<ShapeOutline>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub effects: Option<ShapeEffects>,
     pub text: Option<TextBody>,
 }
 
@@ -260,6 +262,8 @@ pub struct Picture {
     pub adjust_values: BTreeMap<String, f64>,
     pub fill: Option<ShapeFill>,
     pub outline: Option<ShapeOutline>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub effects: Option<ShapeEffects>,
 }
 
 fn rect_geometry() -> String {

@@ -691,3 +691,66 @@ describe('PPTX picture cropping', () => {
     expect(calls.some((call) => call.startsWith('draw:'))).toBe(false);
   });
 });
+
+describe('PPTX shape shadows', () => {
+  function harness() {
+    const calls: string[] = [];
+    const state: Record<string, unknown> = {
+      fill: () => calls.push(`fill:${state.shadowColor},${state.shadowBlur},${state.shadowOffsetX},${state.shadowOffsetY}`),
+      stroke: () =>
+        calls.push(`stroke:${state.shadowColor},${state.shadowBlur},${state.shadowOffsetX},${state.shadowOffsetY}`),
+    };
+    const ctx = new Proxy(state, {
+      get(target, property) {
+        if (property in target) return target[property as string];
+        return () => undefined;
+      },
+      set(target, property, value) {
+        target[property as string] = value;
+        return true;
+      },
+    }) as unknown as CanvasRenderingContext2D;
+    return { calls, ctx };
+  }
+
+  function list(shadow: Record<string, number | string> | undefined): SlideDisplayList {
+    return {
+      contractVersion: 1,
+      width: 160,
+      height: 160,
+      primitives: [
+        {
+          kind: 'shape',
+          objectId: 1,
+          name: 'card',
+          x: 40,
+          y: 40,
+          w: 40,
+          h: 40,
+          geometry: 'rect',
+          path: [
+            { type: 'move', x: 0, y: 0 },
+            { type: 'line', x: 1, y: 0 },
+            { type: 'line', x: 1, y: 1 },
+            { type: 'close' },
+          ],
+          fill: { kind: 'solid', color: '#4472c4' },
+          stroke: { color: '#10235b', width: 2 },
+          ...(shadow ? { shadow } : {}),
+        },
+      ],
+    } as SlideDisplayList;
+  }
+
+  test('a shadowed shape fills under a shadow scaled to the device and strokes without one', async () => {
+    const { calls, ctx } = harness();
+    await paintSlide(ctx, list({ color: '#00000066', blur: 8, dx: 6, dy: 6 }), 2, 1.5);
+    expect(calls).toEqual(['fill:#00000066,24,18,18', 'stroke:transparent,0,0,0']);
+  });
+
+  test('an unshadowed shape leaves the shadow state alone', async () => {
+    const { calls, ctx } = harness();
+    await paintSlide(ctx, list(undefined), 1, 1);
+    expect(calls).toEqual(['fill:undefined,undefined,undefined,undefined', 'stroke:undefined,undefined,undefined,undefined']);
+  });
+});

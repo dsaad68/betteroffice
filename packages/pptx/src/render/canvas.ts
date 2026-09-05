@@ -5,6 +5,7 @@ import type {
   Paint,
   PlaceholderPrimitive,
   PositionedTextRun,
+  Shadow,
   ShapePrimitive,
   SlideDisplayList,
   SlidePrimitive,
@@ -54,7 +55,8 @@ export async function paintSlide(
       ctx.fillStyle = paintStyle(ctx, list.background, 0, 0, list.width, list.height);
       ctx.fillRect(0, 0, list.width, list.height);
     }
-    for (const primitive of list.primitives) await paintPrimitive(ctx, primitive, options);
+    for (const primitive of list.primitives)
+      await paintPrimitive(ctx, primitive, options, dpr * scale);
   } finally {
     ctx.restore();
   }
@@ -63,14 +65,15 @@ export async function paintSlide(
 async function paintPrimitive(
   ctx: CanvasRenderingContext2D,
   primitive: SlidePrimitive,
-  options: PaintSlideOptions
+  options: PaintSlideOptions,
+  deviceScale: number
 ): Promise<void> {
   ctx.save();
   try {
     applyTransform(ctx, primitive);
     switch (primitive.kind) {
       case 'shape':
-        paintShape(ctx, primitive);
+        paintShape(ctx, primitive, deviceScale);
         break;
       case 'image':
         await paintImage(ctx, primitive, options.resolveImage);
@@ -82,7 +85,7 @@ async function paintPrimitive(
         paintPlaceholder(ctx, primitive);
         break;
       case 'chart':
-        await paintChart(ctx, primitive, options);
+        await paintChart(ctx, primitive, options, deviceScale);
         break;
     }
   } finally {
@@ -93,12 +96,14 @@ async function paintPrimitive(
 async function paintChart(
   ctx: CanvasRenderingContext2D,
   chart: ChartPrimitive,
-  options: PaintSlideOptions
+  options: PaintSlideOptions,
+  deviceScale: number
 ): Promise<void> {
   ctx.beginPath();
   ctx.rect(chart.x, chart.y, chart.w, chart.h);
   ctx.clip();
-  for (const primitive of chart.primitives) await paintPrimitive(ctx, primitive, options);
+  for (const primitive of chart.primitives)
+    await paintPrimitive(ctx, primitive, options, deviceScale);
 }
 
 function applyTransform(
@@ -115,11 +120,17 @@ function applyTransform(
   ctx.translate(-centerX, -centerY);
 }
 
-function paintShape(ctx: CanvasRenderingContext2D, shape: ShapePrimitive): void {
+function paintShape(
+  ctx: CanvasRenderingContext2D,
+  shape: ShapePrimitive,
+  deviceScale: number
+): void {
   buildPath(ctx, shape.path, shape.x, shape.y, shape.w, shape.h);
   if (shape.fill) {
+    if (shape.shadow) applyShadow(ctx, shape.shadow, deviceScale);
     ctx.fillStyle = paintStyle(ctx, shape.fill, shape.x, shape.y, shape.w, shape.h);
     ctx.fill();
+    if (shape.shadow) clearShadow(ctx);
   }
   if (shape.stroke) {
     strokeCurrentPath(ctx, shape.stroke);
@@ -219,6 +230,21 @@ function paintLineEnd(
       ctx.fill();
       break;
   }
+}
+
+/** Canvas shadow offsets and blur ignore the current transform, so they carry the device scale. */
+function applyShadow(ctx: CanvasRenderingContext2D, shadow: Shadow, deviceScale: number): void {
+  ctx.shadowColor = shadow.color;
+  ctx.shadowBlur = (shadow.blur ?? 0) * deviceScale;
+  ctx.shadowOffsetX = (shadow.dx ?? 0) * deviceScale;
+  ctx.shadowOffsetY = (shadow.dy ?? 0) * deviceScale;
+}
+
+function clearShadow(ctx: CanvasRenderingContext2D): void {
+  ctx.shadowColor = 'transparent';
+  ctx.shadowBlur = 0;
+  ctx.shadowOffsetX = 0;
+  ctx.shadowOffsetY = 0;
 }
 
 /** Draws the cropped source through the picture's outline. */

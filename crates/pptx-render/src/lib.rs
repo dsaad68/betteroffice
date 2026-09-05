@@ -189,6 +189,7 @@ fn compile(slide: ComposedSlide) -> SurfaceDisplayList {
                     adjust_values,
                     fill,
                     stroke: stroke.map(Into::into),
+                    shadow: None,
                     transform,
                 });
                 if let Some(text) = text {
