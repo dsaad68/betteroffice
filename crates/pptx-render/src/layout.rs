@@ -766,7 +766,6 @@ struct BodyCascade<'a> {
     master: Option<&'a TextBody>,
     master_slide: Option<&'a SlideMaster>,
     placeholder: Option<&'a Placeholder>,
-    /// `p:style/a:fontRef`: above the master's `txStyles`, below every inherited body.
     style_color: Option<&'a ColorValue>,
 }
 
@@ -2893,5 +2892,82 @@ mod tests {
             }
         }
         assert!(failures.is_empty(), "{}", failures.join("\n"));
+    }
+
+    fn assert_style_colours(rendered: &RenderedSlide, prefix: &str, expected: &[(&str, &str)]) {
+        let mut paragraphs = Vec::new();
+        let mut positioned = Vec::new();
+        for primitive in &rendered.display_list.primitives {
+            if let Primitive::TextBox {
+                shape_id: Some(id),
+                paragraphs: text,
+                lines,
+                ..
+            } = primitive
+                && id.starts_with(prefix)
+            {
+                paragraphs.extend(text.iter().flat_map(|paragraph| {
+                    paragraph
+                        .runs
+                        .iter()
+                        .map(|run| (run.text.as_str(), run.color.as_str()))
+                }));
+                positioned.extend(lines.iter().flat_map(|line| {
+                    line.runs
+                        .iter()
+                        .map(|run| (run.text.as_str(), run.color.as_str()))
+                }));
+            }
+        }
+        assert_eq!(paragraphs, expected);
+        assert_eq!(positioned, expected);
+    }
+
+    #[test]
+    fn placeholder_colours_outrank_font_refs_per_paragraph() {
+        let session = DeckSession::open(STYLE_FIXTURE, 8_011).unwrap();
+        let snapshot = session.snapshot().unwrap();
+        let renderer = renderer();
+        let layout_placeholder = renderer
+            .layout_slide(session.package(), &snapshot, 4)
+            .unwrap();
+        assert_style_colours(
+            &layout_placeholder,
+            "slide:",
+            &[("layout title 0070C0", "#0070C0")],
+        );
+        let master_placeholder = renderer
+            .layout_slide(session.package(), &snapshot, 9)
+            .unwrap();
+        assert_style_colours(
+            &master_placeholder,
+            "slide:",
+            &[
+                ("master placeholder", "#7030A0"),
+                ("paragraph default", "#0070C0"),
+                ("explicit run", "#00B050"),
+            ],
+        );
+    }
+
+    #[test]
+    fn font_ref_scheme_colours_follow_the_slides_layout_master_and_theme() {
+        let session = DeckSession::open(STYLE_FIXTURE, 8_012).unwrap();
+        let snapshot = session.snapshot().unwrap();
+        let renderer = renderer();
+        let first_theme = renderer
+            .layout_slide(session.package(), &snapshot, 0)
+            .unwrap();
+        assert_style_colours(&first_theme, "slide:", &[("fontRef lt1", "#EEEEEE")]);
+        let second_theme = renderer
+            .layout_slide(session.package(), &snapshot, 8)
+            .unwrap();
+        for (prefix, expected) in [
+            ("slide:", ("second theme", "#123456")),
+            ("layout:", ("layout theme", "#234567")),
+            ("master:", ("master theme", "#345678")),
+        ] {
+            assert_style_colours(&second_theme, prefix, &[expected]);
+        }
     }
 }
