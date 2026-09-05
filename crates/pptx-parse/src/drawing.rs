@@ -259,7 +259,6 @@ fn parse_group(
     budget.charge_shape(part)?;
     let own_fill = element.child("grpSpPr").and_then(parse_fill);
     let mut children = parse_shape_children(element, relationships, part, budget)?;
-    // A group whose own fill is itself inherited leaves the markers in place for its ancestor.
     if let Some(fill) = own_fill
         .as_ref()
         .filter(|fill| fill.fill_type != GROUP_FILL)
@@ -595,9 +594,8 @@ fn parse_fill(element: &XmlElement) -> Option<ShapeFill> {
     None
 }
 
-/// Marker left by `<a:grpFill/>`: this shape takes the fill of the group that contains it.
-/// It survives until an ancestor group resolves it, so a group nested inside a filled group
-/// needs no second pass; the tree root clears whatever is left so no consumer ever sees it.
+/// Marker left by `<a:grpFill/>`, standing until an ancestor group resolves it or the tree
+/// root clears it.
 const GROUP_FILL: &str = "group";
 
 fn fill_slot(node: &mut ShapeNode) -> Option<&mut Option<ShapeFill>> {
@@ -608,10 +606,8 @@ fn fill_slot(node: &mut ShapeNode) -> Option<&mut Option<ShapeFill>> {
     }
 }
 
-/// Hand `fill` to every descendant still waiting on `<a:grpFill/>`, or clear the marker when
-/// there is no group left to inherit from. Groups resolve their own children first, so a nested
-/// group that declares a fill has already claimed its subtree and only the shapes still carrying
-/// the marker are touched here.
+/// Hands `fill` to every descendant still waiting on `<a:grpFill/>`, or clears the marker when
+/// there is no group left to inherit from.
 fn resolve_group_fill(children: &mut [ShapeNode], fill: Option<&ShapeFill>) {
     for child in children {
         if let Some(slot) = fill_slot(child)
