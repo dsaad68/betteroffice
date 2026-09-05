@@ -1,84 +1,92 @@
 {
-  "fill-alpha-modifier-ignored": {
-    "branch": "fix/pptx-fill-alpha",
-    "number": 274,
-    "pr": 275,
-    "pr_url": "https://github.com/openooxml/betteroffice/pull/275",
-    "state": "pr-open",
-    "url": "https://github.com/openooxml/betteroffice/issues/274"
-  },
-  "fill-grpfill-not-resolved": {
-    "branch": "fix/pptx-grpfill",
-    "number": 270,
-    "pr": 271,
-    "pr_url": "https://github.com/openooxml/betteroffice/pull/271",
-    "state": "pr-open",
-    "url": "https://github.com/openooxml/betteroffice/issues/270"
-  },
-  "geometry-custom-collapses-to-bbox": {
-    "branch": "fix/pptx-custom-geometry",
-    "number": 284,
-    "pr": 285,
-    "pr_url": "https://github.com/openooxml/betteroffice/pull/285",
-    "state": "pr-open",
-    "url": "https://github.com/openooxml/betteroffice/issues/284"
-  },
-  "geometry-preset-adj-values-wrong": {
-    "branch": "fix/pptx-preset-adjust",
-    "number": 278,
-    "pr": 279,
-    "pr_url": "https://github.com/openooxml/betteroffice/pull/279",
-    "state": "pr-open",
-    "url": "https://github.com/openooxml/betteroffice/issues/278"
-  },
-  "hidden-shape-drawn-anyway": {
-    "branch": "fix/pptx-hidden-shapes",
-    "number": 268,
-    "pr": 269,
-    "pr_url": "https://github.com/openooxml/betteroffice/pull/269",
-    "state": "pr-open",
-    "url": "https://github.com/openooxml/betteroffice/issues/268"
-  },
-  "line-arrowheads-not-drawn": {
-    "branch": "fix/pptx-line-arrowheads",
-    "note": "raster half held on fix/pptx-line-arrowheads-full until pull request 264 lands",
-    "number": 280,
-    "pr": 281,
-    "pr_url": "https://github.com/openooxml/betteroffice/pull/281",
-    "state": "pr-open",
-    "url": "https://github.com/openooxml/betteroffice/issues/280"
-  },
-  "line-zero-extent-skipped": {
-    "branch": "fix/pptx-connectors",
-    "number": 272,
-    "pr": 273,
-    "pr_url": "https://github.com/openooxml/betteroffice/pull/273",
-    "state": "pr-open",
-    "url": "https://github.com/openooxml/betteroffice/issues/272"
-  },
-  "text-run-props-bold-ignored": {
-    "branch": "fix/pptx-font-fallback-style",
-    "number": 266,
-    "pr": 267,
-    "pr_url": "https://github.com/openooxml/betteroffice/pull/267",
-    "state": "pr-open",
-    "url": "https://github.com/openooxml/betteroffice/issues/266"
-  },
-  "text-slidenum-field-not-evaluated": {
-    "branch": "fix/pptx-slidenum-field",
-    "number": 276,
-    "pr": 277,
-    "pr_url": "https://github.com/openooxml/betteroffice/pull/277",
-    "state": "pr-open",
-    "url": "https://github.com/openooxml/betteroffice/issues/276"
-  },
-  "theme-color-scheme-color-resolution-broken": {
-    "branch": "fix/pptx-shape-style-fontref",
-    "note": "fontRef half only; clrMap/clrMapOvr half still open",
-    "number": 282,
-    "pr": 283,
-    "pr_url": "https://github.com/openooxml/betteroffice/pull/283",
-    "state": "pr-open",
-    "url": "https://github.com/openooxml/betteroffice/issues/282"
-  }
+ "fill-alpha-modifier-ignored": {
+  "branch": "fix/pptx-fill-alpha",
+  "number": 274,
+  "pr": 275,
+  "pr_url": "https://github.com/openooxml/betteroffice/pull/275",
+  "state": "pr-open",
+  "url": "https://github.com/openooxml/betteroffice/issues/274"
+ },
+ "fill-grpfill-not-resolved": {
+  "branch": "fix/pptx-grpfill",
+  "number": 270,
+  "pr": 271,
+  "pr_url": "https://github.com/openooxml/betteroffice/pull/271",
+  "state": "pr-open",
+  "url": "https://github.com/openooxml/betteroffice/issues/270"
+ },
+ "geometry-custom-collapses-to-bbox": {
+  "branch": "fix/pptx-custom-geometry",
+  "number": 284,
+  "pr": 285,
+  "pr_url": "https://github.com/openooxml/betteroffice/pull/285",
+  "state": "pr-open",
+  "url": "https://github.com/openooxml/betteroffice/issues/284"
+ },
+ "geometry-preset-adj-values-wrong": {
+  "branch": "fix/pptx-preset-adjust",
+  "number": 278,
+  "pr": 279,
+  "pr_url": "https://github.com/openooxml/betteroffice/pull/279",
+  "state": "pr-open",
+  "url": "https://github.com/openooxml/betteroffice/issues/278"
+ },
+ "hidden-shape-drawn-anyway": {
+  "branch": "fix/pptx-hidden-shapes",
+  "number": 268,
+  "pr": 269,
+  "pr_url": "https://github.com/openooxml/betteroffice/pull/269",
+  "state": "pr-open",
+  "url": "https://github.com/openooxml/betteroffice/issues/268"
+ },
+ "line-arrowheads-not-drawn": {
+  "branch": "fix/pptx-line-arrowheads",
+  "note": "raster half held on fix/pptx-line-arrowheads-full until pull request 264 lands",
+  "number": 280,
+  "pr": 281,
+  "pr_url": "https://github.com/openooxml/betteroffice/pull/281",
+  "state": "pr-open",
+  "url": "https://github.com/openooxml/betteroffice/issues/280"
+ },
+ "line-zero-extent-skipped": {
+  "branch": "fix/pptx-connectors",
+  "number": 272,
+  "pr": 273,
+  "pr_url": "https://github.com/openooxml/betteroffice/pull/273",
+  "state": "pr-open",
+  "url": "https://github.com/openooxml/betteroffice/issues/272"
+ },
+ "text-run-props-bold-ignored": {
+  "branch": "fix/pptx-font-fallback-style",
+  "number": 266,
+  "pr": 267,
+  "pr_url": "https://github.com/openooxml/betteroffice/pull/267",
+  "state": "pr-open",
+  "url": "https://github.com/openooxml/betteroffice/issues/266"
+ },
+ "text-slidenum-field-not-evaluated": {
+  "branch": "fix/pptx-slidenum-field",
+  "number": 276,
+  "pr": 277,
+  "pr_url": "https://github.com/openooxml/betteroffice/pull/277",
+  "state": "pr-open",
+  "url": "https://github.com/openooxml/betteroffice/issues/276"
+ },
+ "theme-color-scheme-color-resolution-broken": {
+  "branch": "fix/pptx-shape-style-fontref",
+  "note": "fontRef half only; clrMap/clrMapOvr half still open",
+  "number": 282,
+  "pr": 283,
+  "pr_url": "https://github.com/openooxml/betteroffice/pull/283",
+  "state": "pr-open",
+  "url": "https://github.com/openooxml/betteroffice/issues/282"
+ },
+ "picture-srcrect-crop-ignored": {
+  "number": 287,
+  "url": "https://github.com/openooxml/betteroffice/issues/287",
+  "pr": 288,
+  "pr_url": "https://github.com/openooxml/betteroffice/pull/288",
+  "branch": "fix/pptx-picture-crop",
+  "state": "pr-open"
+ }
 }
