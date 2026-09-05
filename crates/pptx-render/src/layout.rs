@@ -2,8 +2,8 @@ use std::collections::{BTreeMap, HashMap, HashSet};
 
 use ooxml_drawingml::chart::PlotRect;
 use ooxml_drawingml::{
-    ShapeFill, ShapeOutline, Theme, preset_geometry_to_path, resolve_color_value_to_hex_with_theme,
-    resolve_theme_font_ref,
+    ColorValue, ShapeFill, ShapeOutline, Theme, preset_geometry_to_path,
+    resolve_color_value_to_hex_with_theme, resolve_color_value_to_rgba_hex, resolve_theme_font_ref,
 };
 use ooxml_text::{CompatFlags, FontId, FontStore, break_opportunities, shape, single_line_box};
 use pptx_edit::{DeckSnapshot, ShapeKind, ShapeSnapshot, StorySnapshot, TextStyle};
@@ -1988,6 +1988,15 @@ fn resolved_transform_value(
     }
 }
 
+/// A fill or stroke colour, widened to `#RRGGBBAA` only when it is actually translucent.
+fn resolve_paint_color(color: Option<&ColorValue>, theme: &Theme) -> Option<String> {
+    let rgba = resolve_color_value_to_rgba_hex(color, Some(theme))?;
+    match rgba.strip_suffix("FF") {
+        Some(opaque) if rgba.len() == 9 => Some(opaque.to_owned()),
+        _ => Some(rgba),
+    }
+}
+
 fn paint(fill: &ShapeFill, theme: &Theme) -> Option<Paint> {
     if fill.fill_type == "none" {
         return None;
@@ -2005,7 +2014,7 @@ fn paint(fill: &ShapeFill, theme: &Theme) -> Option<Paint> {
             .filter_map(|stop| {
                 Some(GradientStop {
                     position: (stop.position as f32 / 100_000.0).clamp(0.0, 1.0),
-                    color: resolve_color_value_to_hex_with_theme(Some(&stop.color), Some(theme))?,
+                    color: resolve_paint_color(Some(&stop.color), theme)?,
                 })
             })
             .collect::<Vec<_>>();
@@ -2017,12 +2026,11 @@ fn paint(fill: &ShapeFill, theme: &Theme) -> Option<Paint> {
             });
         }
     }
-    resolve_color_value_to_hex_with_theme(fill.color.as_ref(), Some(theme))
-        .map(|color| Paint::Solid { color })
+    resolve_paint_color(fill.color.as_ref(), theme).map(|color| Paint::Solid { color })
 }
 
 fn stroke(outline: &ShapeOutline, theme: &Theme) -> Option<Stroke> {
-    let color = resolve_color_value_to_hex_with_theme(outline.color.as_ref(), Some(theme))?;
+    let color = resolve_paint_color(outline.color.as_ref(), theme)?;
     Some(Stroke {
         color,
         width: outline
@@ -2282,6 +2290,92 @@ mod tests {
             assert_eq!(parse_align(Some(alignment)), TextAlign::Justify);
             assert!(!is_full_justification(Some(alignment)));
         }
+    }
+
+    #[test]
+    fn a_translucent_fill_carries_its_alpha_into_the_display_list() {
+        let theme = Theme::default();
+        let translucent = ShapeFill {
+            fill_type: "solid".to_owned(),
+            color: Some(ColorValue {
+                rgb: Some("112233".to_owned()),
+                alpha: Some(0.5),
+                ..ColorValue::default()
+            }),
+            gradient: None,
+        };
+        assert_eq!(
+            paint(&translucent, &theme),
+            Some(Paint::Solid {
+                color: "#11223380".to_owned()
+            })
+        );
+
+        let opaque = ShapeFill {
+            color: Some(ColorValue {
+                rgb: Some("112233".to_owned()),
+                ..ColorValue::default()
+            }),
+            ..translucent
+        };
+        assert_eq!(
+            paint(&opaque, &theme),
+            Some(Paint::Solid {
+                color: "#112233".to_owned()
+            })
+        );
+    }
+
+    #[test]
+    fn a_translucent_gradient_stop_and_outline_carry_their_alpha() {
+        let theme = Theme::default();
+        let color = |rgb: &str, alpha: Option<f64>| ColorValue {
+            rgb: Some(rgb.to_owned()),
+            alpha,
+            ..ColorValue::default()
+        };
+
+        let gradient = ShapeFill {
+            fill_type: "gradient".to_owned(),
+            color: None,
+            gradient: Some(ooxml_drawingml::GradientFill {
+                gradient_type: "linear".to_owned(),
+                angle: None,
+                stops: vec![
+                    ooxml_drawingml::GradientStop {
+                        position: 0.0,
+                        color: color("112233", Some(0.5)),
+                    },
+                    ooxml_drawingml::GradientStop {
+                        position: 100_000.0,
+                        color: color("445566", None),
+                    },
+                ],
+            }),
+        };
+        let Some(Paint::Gradient { stops, .. }) = paint(&gradient, &theme) else {
+            panic!("expected a gradient paint");
+        };
+        assert_eq!(
+            stops
+                .iter()
+                .map(|stop| stop.color.as_str())
+                .collect::<Vec<_>>(),
+            ["#11223380", "#445566"]
+        );
+
+        let outline = |alpha| ShapeOutline {
+            color: Some(color("112233", alpha)),
+            ..ShapeOutline::default()
+        };
+        assert_eq!(
+            stroke(&outline(Some(0.5)), &theme).map(|stroke| stroke.color),
+            Some("#11223380".to_owned())
+        );
+        assert_eq!(
+            stroke(&outline(None), &theme).map(|stroke| stroke.color),
+            Some("#112233".to_owned())
+        );
     }
 
     #[test]
