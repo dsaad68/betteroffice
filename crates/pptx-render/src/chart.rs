@@ -2,8 +2,8 @@
 
 use ooxml_drawingml::GeometryPathCommand;
 use ooxml_drawingml::chart::{
-    ChartSpace, PlotChart, PlotDataLabels, PlotFont, PlotOp, PlotRect, PlotSink, chart_aria_label,
-    plot_chart_into,
+    ChartSpace, PlotChart, PlotDataLabels, PlotFont, PlotOp, PlotRect, PlotSink, PlotTextAlign,
+    chart_aria_label, plot_chart_into,
 };
 
 use crate::{Paint, Primitive, RenderError, Stroke, Transform};
@@ -26,6 +26,7 @@ pub(crate) struct ChartText<'a> {
     pub width: f64,
     pub font: PlotFont,
     pub color: &'a str,
+    pub align: PlotTextAlign,
 }
 
 /// The chart primitive for `space`, with at most `budget` parts.
@@ -184,6 +185,7 @@ impl PlotSink for ChartSink<'_> {
                 width,
                 font,
                 color,
+                align,
             } => {
                 let request = ChartText {
                     object_id: self.object_id,
@@ -193,6 +195,7 @@ impl PlotSink for ChartSink<'_> {
                     width,
                     font,
                     color: &color,
+                    align,
                 };
                 match (self.text)(request) {
                     Ok(primitive) => primitive,

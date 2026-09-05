@@ -8006,6 +8006,8 @@ impl PlotSink for PrimitiveSink<'_> {
                 fill,
                 attrs: attrs.clone(),
             })),
+            // `TextRunPrimitive` has no alignment, so a `Center` op still lays
+            // out from `x`; a docx chart title stays left-aligned for now.
             PlotOp::Text {
                 text,
                 x,
@@ -8013,6 +8015,7 @@ impl PlotSink for PrimitiveSink<'_> {
                 width,
                 font,
                 color,
+                align: _,
             } => prims.push(Primitive::Text(TextRunPrimitive {
                 text,
                 x: px(x),
