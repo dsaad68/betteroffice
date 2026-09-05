@@ -10,6 +10,8 @@ use crate::xml::{ParseBudget, XmlElement};
 const MAX_SAFE_EMU: i64 = 1_000_000_000_000_000;
 const ANGLE_UNITS_PER_DEGREE: f64 = 60_000.0;
 const ADJUSTMENT_SCALE: f64 = 100_000.0;
+/// `ST_TextPoint` bound: hundredths of a point, +/- 4000pt.
+const MAX_TEXT_SPACING_HUNDREDTHS: f64 = 400_000.0;
 
 #[derive(Clone, Copy)]
 struct GuideValue {
@@ -924,6 +926,11 @@ pub(crate) fn parse_run_properties(element: Option<&XmlElement>) -> RunPropertie
             .and_then(|value| value.parse::<f64>().ok())
             .filter(|value| value.is_finite())
             .map(|value| value / 100.0),
+        spacing_pt: element
+            .attribute("spc")
+            .and_then(|value| value.parse::<f64>().ok())
+            .filter(|value| value.is_finite() && value.abs() <= MAX_TEXT_SPACING_HUNDREDTHS)
+            .map(|value| value / 100.0),
         bold: element.attribute("b").map(parse_bool),
         italic: element.attribute("i").map(parse_bool),
         underline: element.attribute("u").map(str::to_owned),
@@ -1005,6 +1012,23 @@ mod tests {
                 .font_size_pt,
             Some(24.0)
         );
+    }
+
+    #[test]
+    fn reads_run_spacing_as_points_and_rejects_out_of_range_values() {
+        let spacing = |attributes: &str| {
+            let limits = ParseLimits::default();
+            let mut budget = ParseBudget::new(&limits);
+            let xml = format!("<a:rPr {attributes}/>");
+            let root = parse_xml(xml.as_bytes(), "ppt/slides/slide1.xml", &mut budget).unwrap();
+            parse_run_properties(Some(&root)).spacing_pt
+        };
+
+        assert_eq!(spacing(r#"spc="600""#), Some(6.0));
+        assert_eq!(spacing(r#"spc="-100""#), Some(-1.0));
+        assert_eq!(spacing(r#"spc="0""#), Some(0.0));
+        assert_eq!(spacing(r#"spc="900000""#), None);
+        assert_eq!(spacing(r#"sz="1800""#), None);
     }
 
     #[test]

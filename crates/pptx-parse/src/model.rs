@@ -354,6 +354,8 @@ pub struct TextRun {
 #[serde(rename_all = "camelCase")]
 pub struct RunProperties {
     pub font_size_pt: Option<f64>,
+    #[serde(default)]
+    pub spacing_pt: Option<f64>,
     pub bold: Option<bool>,
     pub italic: Option<bool>,
     pub underline: Option<String>,

@@ -89,6 +89,7 @@ describe('PPTX canvas replay', () => {
                   italic: false,
                   underline: false,
                   color: '#ffffff',
+                  letterSpacingPx: 0,
                   glyphs: [],
                 },
               ],
@@ -104,6 +105,75 @@ describe('PPTX canvas replay', () => {
     expect(calls).toContain('fill');
     expect(calls).toContain('stroke');
     expect(calls).toContain('text:Hello');
+  });
+
+  test('sets the run letter spacing while painting a tracked run', async () => {
+    const calls: string[] = [];
+    const state: Record<string, unknown> = {
+      fillText: (text: string) => calls.push(`text:${text}@${state.letterSpacing}`),
+    };
+    const ctx = new Proxy(state, {
+      get(target, property) {
+        if (property in target) return target[property as string];
+        return () => undefined;
+      },
+      set(target, property, value) {
+        target[property as string] = value;
+        return true;
+      },
+    }) as unknown as CanvasRenderingContext2D;
+    const run = {
+      text: 'WIDE',
+      start: 0,
+      end: 4,
+      x: 10,
+      width: 80,
+      fontId: 1,
+      fontFamily: 'Liberation Sans',
+      fontSizePx: 20,
+      bold: false,
+      italic: false,
+      underline: false,
+      color: '#101828',
+      glyphs: [],
+    };
+    const list: SlideDisplayList = {
+      contractVersion: 1,
+      width: 320,
+      height: 180,
+      primitives: [
+        {
+          kind: 'textBox',
+          objectId: 1,
+          shapeId: 'shape:1',
+          x: 0,
+          y: 0,
+          w: 320,
+          h: 180,
+          anchor: 'top',
+          paragraphs: [],
+          lines: [
+            {
+              x: 10,
+              y: 10,
+              width: 80,
+              height: 24,
+              baseline: 30,
+              start: 0,
+              end: 4,
+              caretStops: [],
+              runs: [
+                { ...run, letterSpacingPx: 8 },
+                { ...run, text: 'PLAIN', start: 4, end: 9, letterSpacingPx: 0 },
+              ],
+            },
+          ],
+        },
+      ],
+    };
+
+    await paintSlide(ctx, list, 1);
+    expect(calls).toEqual(['text:WIDE@8px', 'text:PLAIN@0px']);
   });
 
   test('paints chart parts clipped to the chart rectangle', async () => {
@@ -190,6 +260,7 @@ describe('PPTX canvas replay', () => {
                       italic: false,
                       underline: false,
                       color: '#222222',
+                      letterSpacingPx: 0,
                       glyphs: [],
                     },
                   ],

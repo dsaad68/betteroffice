@@ -928,6 +928,8 @@ struct ResolvedStyle {
     face: FontFace,
     family: String,
     font_size_pt: f32,
+    /// `spc`: tracking added after every cluster, in points.
+    spacing_pt: f32,
     bold: bool,
     italic: bool,
     underline: bool,
@@ -1063,10 +1065,18 @@ fn resolve_style(
         .filter(|value| value.is_finite() && *value > 0.0)
         .unwrap_or(DEFAULT_FONT_SIZE_PT)
         .min(4_096.0);
+    let spacing_pt = direct
+        .spacing_pt
+        .or_else(|| fallback.and_then(|value| value.spacing_pt))
+        .map(|value| value as f32)
+        .filter(|value| value.is_finite())
+        .unwrap_or(0.0)
+        .clamp(-4_096.0, 4_096.0);
     Ok(ResolvedStyle {
         family: face.family.clone(),
         face,
         font_size_pt,
+        spacing_pt,
         bold,
         italic,
         underline: direct
@@ -1125,6 +1135,7 @@ fn chart_text_primitive(
         italic: false,
         underline: false,
         color: text.color.to_owned(),
+        letter_spacing_px: 0.0,
         glyphs,
     };
     let width = run.width;
@@ -1233,7 +1244,7 @@ fn layout_paragraph(
     let mut line_y = y;
     for (line_index, (start, end)) in ranges.into_iter().enumerate() {
         let slice = &clusters[start..end];
-        let natural_width = slice.iter().map(|cluster| cluster.width).sum::<f32>();
+        let natural_width = line_advance(slice);
         let stretchable = paragraph.justify
             && line_index + 1 < line_count
             && !slice.last().is_some_and(|cluster| cluster.mandatory);
@@ -1264,7 +1275,10 @@ fn layout_paragraph(
                 }
             })
             .collect::<Vec<_>>();
-        let line_width = advances.iter().sum::<f32>();
+        let line_width = advances.iter().sum::<f32>()
+            - slice[..visible]
+                .last()
+                .map_or(0.0, |cluster| cluster.tracking);
         let line_x = match paragraph.align {
             TextAlign::Center => x + ((width - natural_width) / 2.0).max(0.0),
             TextAlign::Right => x + (width - natural_width).max(0.0),
@@ -1315,7 +1329,10 @@ struct ShapedCluster {
     text: String,
     start: u32,
     end: u32,
+    /// Glyph advances plus `tracking`.
     width: f32,
+    /// Part of `width` that is the gap after the cluster, dropped at a line's end.
+    tracking: f32,
     run_index: usize,
     style: ResolvedStyle,
     glyphs: Vec<ClusterGlyph>,
@@ -1373,6 +1390,7 @@ fn shape_paragraph(
                 start,
                 end: start + 1,
                 width: 0.0,
+                tracking: 0.0,
                 run_index,
                 style: run.style.clone(),
                 glyphs: Vec::new(),
@@ -1428,6 +1446,7 @@ fn add_shaped_segment(
         return Ok(());
     }
     let size_px = points_to_px(run.style.font_size_pt * scale);
+    let tracking = points_to_px(run.style.spacing_pt * scale);
     let shaped = shape(fonts, run.style.face.id, text, size_px, &[])
         .map_err(|error| RenderError::Font(error.to_string()))?;
     let mut starts = shaped
@@ -1468,7 +1487,8 @@ fn add_shaped_segment(
             text: text[start_byte..end_byte].to_owned(),
             start: source_start,
             end: source_end,
-            width: glyph_x.max(0.0),
+            width: (glyph_x + tracking).max(0.0),
+            tracking,
             run_index,
             style: run.style.clone(),
             glyphs,
@@ -1477,6 +1497,13 @@ fn add_shaped_segment(
         });
     }
     Ok(())
+}
+
+/// A line measures `n - 1` tracking gaps: the gap after its last cluster is not
+/// ink, and counting it would shift every centred and right-aligned line.
+fn line_advance(clusters: &[ShapedCluster]) -> f32 {
+    clusters.iter().map(|cluster| cluster.width).sum::<f32>()
+        - clusters.last().map_or(0.0, |cluster| cluster.tracking)
 }
 
 fn wrap_clusters(clusters: &[ShapedCluster], width: f32) -> Vec<(usize, usize)> {
@@ -1489,7 +1516,7 @@ fn wrap_clusters(clusters: &[ShapedCluster], width: f32) -> Vec<(usize, usize)> 
         let mut end = clusters.len();
         while cursor < clusters.len() {
             let cluster = &clusters[cursor];
-            if line_width + cluster.width > width && cursor > start {
+            if line_width + cluster.width - cluster.tracking > width && cursor > start {
                 end = last_break
                     .filter(|candidate| *candidate > start)
                     .unwrap_or(cursor);
@@ -1526,6 +1553,7 @@ fn positioned_runs(
 ) -> Vec<PositionedTextRun> {
     let mut output: Vec<PositionedTextRun> = Vec::new();
     let mut cursor_x = line_x;
+    let mut trailing_tracking = 0.0_f32;
     for (index, cluster) in clusters.iter().enumerate() {
         if cluster.text == "\n" {
             continue;
@@ -1534,6 +1562,9 @@ fn positioned_runs(
             run.end == cluster.start && run.font_id == cluster.style.face.id.to_u32()
         });
         if !append {
+            if let Some(previous) = output.last_mut() {
+                previous.width -= trailing_tracking;
+            }
             output.push(PositionedTextRun {
                 text: String::new(),
                 start: cluster.start,
@@ -1547,6 +1578,7 @@ fn positioned_runs(
                 italic: cluster.style.italic,
                 underline: cluster.style.underline,
                 color: cluster.style.color.clone(),
+                letter_spacing_px: cluster.tracking,
                 glyphs: Vec::new(),
             });
         }
@@ -1568,6 +1600,10 @@ fn positioned_runs(
         let advance = advances.get(index).copied().unwrap_or(cluster.width);
         run.width += advance;
         cursor_x += advance;
+        trailing_tracking = cluster.tracking;
+    }
+    if let Some(last) = output.last_mut() {
+        last.width -= trailing_tracking;
     }
     output
 }
@@ -2018,6 +2054,9 @@ fn merge_run_properties(target: &mut RunProperties, source: &RunProperties) {
     if source.language.is_some() {
         target.language.clone_from(&source.language);
     }
+    if source.spacing_pt.is_some() {
+        target.spacing_pt = source.spacing_pt;
+    }
 }
 
 fn style_from_properties(properties: &RunProperties, theme: &Theme) -> TextStyle {
@@ -2028,6 +2067,7 @@ fn style_from_properties(properties: &RunProperties, theme: &Theme) -> TextStyle
         color: resolve_color_value_to_hex_with_theme(properties.color.as_ref(), Some(theme)),
         font_family: properties.font_family.clone(),
         underline: properties.underline.clone(),
+        spacing_pt: properties.spacing_pt,
     }
 }
 
@@ -2184,7 +2224,7 @@ fn utf16_len(value: &str) -> u32 {
 
 #[cfg(test)]
 mod tests {
-    use pptx_edit::{DeckSession, EditCtx};
+    use pptx_edit::{DeckSession, EditCtx, TextStylePatch};
 
     use super::*;
 
@@ -2231,6 +2271,7 @@ mod tests {
                     italic: false,
                     underline: false,
                     color: "#000000".to_owned(),
+                    spacing_pt: 0.0,
                 },
             }],
         }
@@ -2577,6 +2618,102 @@ mod tests {
                 ..
             }) if hit_story == story_id
         ));
+    }
+
+    /// The demo deck's first text shape, sized to `width_emu`, with `spacing_pt`
+    /// of tracking and `align` applied across its whole story.
+    fn tracked_text_box(
+        seed: u64,
+        spacing_pt: Option<f64>,
+        align: Option<&str>,
+        width_emu: i64,
+    ) -> Vec<PositionedTextLine> {
+        let package = pptx_parse::parse_pptx(FIXTURE).unwrap();
+        let session = DeckSession::open(FIXTURE, seed).unwrap();
+        let initial = session.snapshot().unwrap();
+        let slide_id = initial.slides[0].id.clone();
+        let shape = initial.slides[0]
+            .shapes
+            .iter()
+            .find(|shape| !shape.text_stories.is_empty())
+            .unwrap();
+        let shape_id = shape.id.clone();
+        let story_id = shape.text_stories[0].id.clone();
+        let context = EditCtx::local("test");
+        session
+            .resize_shape(&context, &slide_id, &shape_id, width_emu, 3_000_000)
+            .unwrap();
+        let end = session.story(&story_id).unwrap().length.saturating_sub(1);
+        session
+            .format_text(
+                &context,
+                &story_id,
+                0,
+                end,
+                &TextStylePatch {
+                    spacing_pt,
+                    ..TextStylePatch::default()
+                },
+            )
+            .unwrap();
+        session
+            .set_paragraph_alignment(&context, &story_id, 0, end, align)
+            .unwrap();
+        renderer()
+            .layout_slide(&package, &session.snapshot().unwrap(), 0)
+            .unwrap()
+            .display_list
+            .primitives
+            .iter()
+            .find_map(|primitive| match primitive {
+                Primitive::TextBox {
+                    shape_id: Some(id),
+                    lines,
+                    ..
+                } if id == &shape_id => Some(lines.clone()),
+                _ => None,
+            })
+            .unwrap()
+    }
+
+    #[test]
+    fn run_spacing_tracks_the_line_and_keeps_it_centred() {
+        let wide = 5_000_000;
+        let plain = tracked_text_box(9_001, None, Some("ctr"), wide);
+        let tracked = tracked_text_box(9_002, Some(6.0), Some("ctr"), wide);
+        assert_eq!(plain.len(), 1);
+        assert_eq!(tracked.len(), 1);
+
+        // n - 1 gaps of 6pt, so the line grows but stays on the same centre
+        let gaps = (plain[0].end - plain[0].start - 1) as f32;
+        let gap_px = points_to_px(6.0);
+        assert!(
+            (tracked[0].width - plain[0].width - gaps * gap_px).abs() < 0.5,
+            "{} vs {}",
+            tracked[0].width,
+            plain[0].width
+        );
+        let centre = |line: &PositionedTextLine| line.x + line.width / 2.0;
+        assert!((centre(&tracked[0]) - centre(&plain[0])).abs() < 0.5);
+
+        // the caret keeps the full advance: the next character typed lands after
+        // the trailing gap, even though the gap is not part of the line's width
+        let caret = tracked[0].caret_stops.last().unwrap().x;
+        assert!((caret - (tracked[0].x + tracked[0].width + gap_px)).abs() < 0.5);
+    }
+
+    #[test]
+    fn run_spacing_moves_the_wrap_point() {
+        let plain = tracked_text_box(9_003, None, None, 1_500_000);
+        let tracked = tracked_text_box(9_004, Some(6.0), None, 1_500_000);
+
+        assert!(
+            tracked.len() > plain.len(),
+            "{} vs {}",
+            tracked.len(),
+            plain.len()
+        );
+        assert!(tracked[0].end < plain[0].end);
     }
 
     /// The demo deck's first text shape, narrowed until its text wraps, with `spacing`

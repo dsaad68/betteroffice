@@ -169,6 +169,7 @@ fn text_style(
         color,
         font_family,
         underline,
+        spacing_pt: None,
     }
 }
 
@@ -180,6 +181,7 @@ fn text_style_patch(style: TextStyle) -> TextStylePatch {
         color: style.color,
         font_family: style.font_family,
         underline: style.underline,
+        spacing_pt: style.spacing_pt,
     }
 }
 

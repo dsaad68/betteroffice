@@ -240,6 +240,10 @@ pub struct PositionedTextRun {
     pub italic: bool,
     pub underline: bool,
     pub color: String,
+    /// `spc` tracking already folded into the glyph positions; backends that
+    /// draw the whole run in one call need it to match those positions.
+    #[serde(default)]
+    pub letter_spacing_px: f32,
     pub glyphs: Vec<PositionedGlyph>,
 }
 

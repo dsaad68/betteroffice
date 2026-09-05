@@ -47,6 +47,7 @@ pub(crate) fn validate_style_values(
     underline: Option<&str>,
     color: Option<&str>,
     font_size_pt: Option<f64>,
+    spacing_pt: Option<f64>,
 ) -> EditResult<()> {
     if let Some(font_family) = font_family {
         validate_xml_text(font_family)?;
@@ -71,6 +72,13 @@ pub(crate) fn validate_style_values(
     {
         return Err(EditError::InvalidText(format!(
             "font size {size}pt is outside the 1-4000pt range"
+        )));
+    }
+    if let Some(spacing) = spacing_pt
+        && (!spacing.is_finite() || !(-4_000.0..=4_000.0).contains(&spacing))
+    {
+        return Err(EditError::InvalidText(format!(
+            "letter spacing {spacing}pt is outside the -4000-4000pt range"
         )));
     }
     Ok(())
@@ -217,6 +225,7 @@ impl DeckSession {
             style.underline.as_deref(),
             style.color.as_deref(),
             style.font_size_pt,
+            style.spacing_pt,
         )?;
         let mut txn = self.transact_for(context);
         let story = story_ref(&txn, story_id)?;
@@ -274,6 +283,7 @@ impl DeckSession {
             patch.underline.as_deref(),
             patch.color.as_deref(),
             patch.font_size_pt,
+            patch.spacing_pt,
         )?;
         let mut txn = self.transact_for(context);
         let story = story_ref(&txn, story_id)?;
@@ -584,7 +594,7 @@ fn insert_styled_text(
     }
 }
 
-fn style_values(style: &TextStyle) -> [(&'static str, Any); 6] {
+fn style_values(style: &TextStyle) -> [(&'static str, Any); 7] {
     [
         ("bold", style.bold.map(Any::Bool).unwrap_or(Any::Null)),
         ("italic", style.italic.map(Any::Bool).unwrap_or(Any::Null)),
@@ -612,6 +622,10 @@ fn style_values(style: &TextStyle) -> [(&'static str, Any); 6] {
                 .map(Any::from)
                 .unwrap_or(Any::Null),
         ),
+        (
+            "spacing",
+            style.spacing_pt.map(Any::Number).unwrap_or(Any::Null),
+        ),
     ]
 }
 
@@ -631,6 +645,7 @@ fn attrs_from_patch(patch: &TextStylePatch) -> Attrs {
         "underline",
         patch.underline.as_deref().map(Any::from),
     );
+    insert_option(&mut attrs, "spacing", patch.spacing_pt.map(Any::Number));
     attrs
 }
 
@@ -648,6 +663,7 @@ fn style_from_run_properties(properties: &RunProperties, theme: Option<&Theme>) 
         color: resolve_color_value_to_hex_with_theme(properties.color.as_ref(), theme),
         font_family: properties.font_family.clone(),
         underline: properties.underline.clone(),
+        spacing_pt: properties.spacing_pt,
     }
 }
 
@@ -659,6 +675,7 @@ fn style_from_attrs(attrs: Option<&Attrs>) -> TextStyle {
         color: attrs.and_then(|attrs| any_string(attrs.get("color"))),
         font_family: attrs.and_then(|attrs| any_string(attrs.get("fontFamily"))),
         underline: attrs.and_then(|attrs| any_string(attrs.get("underline"))),
+        spacing_pt: attrs.and_then(|attrs| any_number(attrs.get("spacing"))),
     }
 }
 

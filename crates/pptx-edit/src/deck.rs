@@ -342,6 +342,7 @@ impl DeckSession {
             draft.style.underline.as_deref(),
             draft.style.color.as_deref(),
             draft.style.font_size_pt,
+            draft.style.spacing_pt,
         )?;
         let shape_id = self.next_id("shape");
         let story_id = format!("story:{shape_id}:0");

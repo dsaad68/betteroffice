@@ -1373,7 +1373,7 @@ fn run_segments(runs: &[RunWrite]) -> Vec<RunSegment<'_>> {
 /// Whether a source run element already carries the segment: same text and
 /// the same modeled styling once colours are resolved against the theme.
 /// Reused elements keep everything the model does not carry — hyperlinks,
-/// field bindings, spacing, strikethrough.
+/// field bindings, strikethrough.
 fn segment_matches(element: &XmlElement, segment: &RunSegment<'_>, theme: Option<&Theme>) -> bool {
     if element.local_name() == "br" {
         return segment.line_break;
@@ -1393,6 +1393,7 @@ fn segment_matches(element: &XmlElement, segment: &RunSegment<'_>, theme: Option
     source.bold == target.bold
         && source.italic == target.italic
         && source.font_size_pt == target.font_size_pt
+        && source.spacing_pt == target.spacing_pt
         && source.underline == target.underline
         && source.font_family == target.font_family
         && resolve_color_value_to_hex_with_theme(source.color.as_ref(), theme)
@@ -1516,12 +1517,18 @@ const POST_LATIN_ELEMENTS: [&str; 7] = [
 ];
 
 /// Overwrites the modeled styling on a cloned source `rPr`, leaving what the
-/// model does not carry (hyperlinks, strike, spacing, language) in place.
+/// model does not carry (hyperlinks, strike, language) in place.
 fn apply_run_properties(base: &mut XmlElement, properties: &RunProperties, prefixes: &Prefixes) {
     match properties.font_size_pt {
         Some(size) => base.set_attribute("sz", format_fixed(size * 100.0)),
         None => {
             base.attributes.remove("sz");
+        }
+    }
+    match properties.spacing_pt {
+        Some(spacing) => base.set_attribute("spc", format_fixed(spacing * 100.0)),
+        None => {
+            base.attributes.remove("spc");
         }
     }
     let toggles = [("b", properties.bold), ("i", properties.italic)];
@@ -1673,6 +1680,10 @@ fn run_properties_element(properties: &RunProperties, prefixes: &Prefixes) -> Op
     }
     if let Some(size) = properties.font_size_pt {
         element.set_attribute("sz", format_fixed(size * 100.0));
+        present = true;
+    }
+    if let Some(spacing) = properties.spacing_pt {
+        element.set_attribute("spc", format_fixed(spacing * 100.0));
         present = true;
     }
     if let Some(bold) = properties.bold {

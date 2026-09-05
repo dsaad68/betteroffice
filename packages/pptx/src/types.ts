@@ -5,6 +5,7 @@ export interface TextStyle {
   color?: string;
   fontFamily?: string;
   underline?: string;
+  spacingPt?: number;
 }
 
 export type TextStylePatch = TextStyle;
@@ -16,6 +17,7 @@ export interface TextStyleSnapshot {
   color: string | null;
   fontFamily: string | null;
   underline: string | null;
+  spacingPt: number | null;
 }
 
 export interface TextRunSnapshot {
@@ -277,6 +279,7 @@ export interface PositionedTextRun {
   italic: boolean;
   underline: boolean;
   color: string;
+  letterSpacingPx: number;
   glyphs: PositionedGlyph[];
 }
 
