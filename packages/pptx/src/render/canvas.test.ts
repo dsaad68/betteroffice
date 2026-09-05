@@ -445,7 +445,6 @@ describe('PPTX picture cropping', () => {
     expect(calls).toContain('save');
     expect(calls).toContain('clip');
     expect(calls).toContain('restore');
-    // source y = 0.1*300, source height = (1 - 0.1 - 0.2)*300, drawn into the whole frame
     expect(calls).toContain('draw:0,30,400,210,10,20,200,100');
   });
 

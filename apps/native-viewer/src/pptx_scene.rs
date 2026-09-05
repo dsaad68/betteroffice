@@ -1173,7 +1173,6 @@ mod tests {
             maps(affine, (102.4, 204.8), (100.0, 50.0))
                 && maps(affine, (716.8, 921.6), (300.0, 150.0))
         }));
-        // Four cubics clip the photo to the ellipse and four more outline it.
         let cubics = encoding
             .path_tags
             .iter()

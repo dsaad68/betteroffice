@@ -69,8 +69,7 @@ pub struct Transform {
     pub flip_v: bool,
 }
 
-/// The fraction of a source bitmap each edge discards, from `a:srcRect`. All zero means the
-/// whole source is drawn, which is what a picture without a crop serializes as.
+/// Source fractions discarded by `a:srcRect`.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ImageCrop {

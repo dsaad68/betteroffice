@@ -123,8 +123,7 @@ function paintShape(ctx: CanvasRenderingContext2D, shape: ShapePrimitive): void 
   if (shape.stroke) strokeCurrentPath(ctx, shape.stroke);
 }
 
-/** Draw the kept sub-rectangle of the source into the frame, masked to the frame or to the
- *  picture's own outline. Without the mask a cropped source would spill past its frame. */
+/** Draws the cropped source through the picture's outline. */
 function drawCropped(
   ctx: CanvasRenderingContext2D,
   source: CanvasImageSource,

@@ -214,8 +214,7 @@ pub struct Picture {
     pub relationship_id: Option<String>,
     pub media_part_path: Option<String>,
     pub crop: PictureCrop,
-    /// The preset the picture is masked to. Absent means the frame rectangle, which is also how
-    /// every picture serialized before it had a geometry.
+    /// Preset mask; defaults to the frame rectangle.
     #[serde(default = "rect_geometry", skip_serializing_if = "is_rect")]
     pub geometry: String,
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]

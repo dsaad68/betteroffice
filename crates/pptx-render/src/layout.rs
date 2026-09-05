@@ -2045,9 +2045,7 @@ fn stroke(outline: &ShapeOutline, theme: &Theme) -> Option<Stroke> {
     })
 }
 
-/// The parsed picture behind a snapshot shape. A crop and a picture's preset mask are not
-/// editable, so the parsed model is the only place they can come from and the snapshot never
-/// needs to carry them.
+/// Looks up a snapshot picture's parsed source.
 fn picture_source(shape: Option<&ShapeNode>) -> Option<&Picture> {
     match shape? {
         ShapeNode::Picture(picture) => Some(picture),
@@ -2055,9 +2053,7 @@ fn picture_source(shape: Option<&ShapeNode>) -> Option<&Picture> {
     }
 }
 
-/// `a:srcRect` gives each edge in thousandths of a percent of the source. Negative values are
-/// outsets, which no backend can draw, and a crop that keeps nothing would divide by zero; both
-/// fall back to drawing the whole source.
+/// Clamps outsets and discards empty crops.
 fn image_crop(crop: &PictureCrop) -> ImageCrop {
     let fraction = |value: i32| (value as f32 / 100_000.0).clamp(0.0, 1.0);
     let cropped = ImageCrop {
@@ -2074,8 +2070,7 @@ fn image_crop(crop: &PictureCrop) -> ImageCrop {
     }
 }
 
-/// The outline a picture is masked to by its own `spPr` geometry. `rect` needs no mask: the
-/// frame already is the rectangle.
+/// Resolves a picture's nonrectangular preset mask.
 fn picture_mask(
     picture: &Picture,
     rect: PxRect,
@@ -2183,8 +2178,6 @@ mod tests {
                 bottom: 0.167_2,
             }
         );
-        // A negative edge is an outset, which no backend can express; it clamps to no crop on
-        // that edge alone and leaves the others intact.
         assert_eq!(
             image_crop(&PictureCrop {
                 left: -5_000,
@@ -2196,7 +2189,6 @@ mod tests {
                 ..ImageCrop::default()
             }
         );
-        // Keeping nothing would divide by zero when the fit transform is built.
         assert_eq!(
             image_crop(&PictureCrop {
                 left: 60_000,
@@ -2234,7 +2226,75 @@ mod tests {
         };
         assert!(picture_mask(&picture, rect).is_none());
         picture.geometry = "ellipse".to_owned();
-        assert!(picture_mask(&picture, rect).is_some_and(|path| !path.is_empty()));
+        let path = picture_mask(&picture, rect).unwrap();
+        assert_eq!(path.len(), 6);
+        assert_eq!(
+            path[0],
+            ooxml_drawingml::GeometryPathCommand::Move { x: 1.0, y: 0.5 }
+        );
+        assert!(
+            path[1..5].iter().all(|command| matches!(
+                command,
+                ooxml_drawingml::GeometryPathCommand::Cubic { .. }
+            ))
+        );
+        assert_eq!(path[5], ooxml_drawingml::GeometryPathCommand::Close);
+    }
+
+    #[test]
+    fn a_fixture_picture_keeps_its_crop_mask_and_outline_through_layout() {
+        let session = DeckSession::open(
+            include_bytes!("../tests/fixtures/picture-crop-mask.pptx"),
+            288,
+        )
+        .unwrap();
+        let rendered = renderer()
+            .layout_slide(session.package(), &session.snapshot().unwrap(), 0)
+            .unwrap();
+        let image = rendered
+            .display_list
+            .primitives
+            .iter()
+            .find(|primitive| matches!(primitive, Primitive::Image { object_id: 90, .. }))
+            .unwrap();
+        let Primitive::Image {
+            x,
+            y,
+            w,
+            h,
+            crop,
+            path,
+            stroke,
+            ..
+        } = image
+        else {
+            unreachable!()
+        };
+        assert_eq!((*x, *y, *w, *h), (100.0, 50.0, 200.0, 100.0));
+        assert_eq!(
+            *crop,
+            ImageCrop {
+                left: 0.1,
+                top: 0.2,
+                right: 0.3,
+                bottom: 0.1
+            }
+        );
+        let path = path.as_ref().unwrap();
+        assert_eq!(path.len(), 6);
+        assert_eq!(
+            path[0],
+            ooxml_drawingml::GeometryPathCommand::Move { x: 1.0, y: 0.5 }
+        );
+        assert!(
+            path[1..5].iter().all(|command| matches!(
+                command,
+                ooxml_drawingml::GeometryPathCommand::Cubic { .. }
+            ))
+        );
+        let stroke = stroke.as_ref().unwrap();
+        assert_eq!(stroke.width, 2.0);
+        assert_eq!(stroke.color, "#FF00FF");
     }
 
     fn renderer() -> SlideRenderer {
