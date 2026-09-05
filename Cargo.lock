@@ -224,6 +224,7 @@ version = "0.1.0"
 dependencies = [
  "betteroffice-drawingml",
  "betteroffice-ooxml-text",
+ "betteroffice-opc",
  "betteroffice-pptx-edit",
  "betteroffice-pptx-parse",
  "serde",
