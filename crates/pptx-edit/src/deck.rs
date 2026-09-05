@@ -1308,7 +1308,7 @@ mod tests {
     }
 
     #[test]
-    fn legacy_migrations_commit_v3_before_v4() {
+    fn legacy_migrations_commit_v3_then_v4_then_v8() {
         use std::sync::Mutex;
         use yrs::Update;
         use yrs::updates::decoder::Decode;
@@ -1317,13 +1317,13 @@ mod tests {
         const V2: &[u8] = include_bytes!("../tests/fixtures/deck-schema-v2-connectors.update.bin");
         const V3: &[u8] =
             include_bytes!("../tests/fixtures/deck-schema-v3-legacy-connectors.update.bin");
-        for (update, expected_versions) in
-            [(V1, vec![3.0, 4.0]), (V2, vec![3.0, 4.0]), (V3, vec![4.0])]
-        {
+        for (update, expected_versions) in [
+            (V1, vec![3.0, 4.0, 8.0]),
+            (V2, vec![3.0, 4.0, 8.0]),
+            (V3, vec![4.0, 8.0]),
+        ] {
             let doc = crate::doc_with_client_id(920);
-            doc.transact_mut()
-                .apply_update(Update::decode_v1(update).unwrap())
-                .unwrap();
+            crate::hydrate_doc(&doc, update).unwrap();
             let before = snapshot_doc(&doc, &package_from_doc(&doc).unwrap()).unwrap();
             let observed = Arc::new(Mutex::new(Vec::new()));
             let events = observed.clone();
