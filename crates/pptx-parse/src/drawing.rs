@@ -151,7 +151,7 @@ fn parse_shape(
     let properties = element.child("spPr");
     let transform = properties.and_then(|value| value.child("xfrm"));
     Ok(Shape {
-        style: parse_shape_style(element.child("style")),
+        style: parse_shape_style(element.child("style")).map(Box::new),
         base: parse_base(element.child("nvSpPr"), transform),
         geometry: parse_geometry(properties),
         adjust_values: parse_adjust_values(properties, parse_shape_extent(transform)),

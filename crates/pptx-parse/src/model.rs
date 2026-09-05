@@ -201,7 +201,7 @@ pub struct Shape {
     pub geometry: String,
     /// `p:style`, the shape's own defaults for text and outline.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub style: Option<ShapeStyle>,
+    pub style: Option<Box<ShapeStyle>>,
     #[serde(default)]
     pub adjust_values: BTreeMap<String, f64>,
     pub fill: Option<ShapeFill>,
