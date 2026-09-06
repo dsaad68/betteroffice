@@ -12,10 +12,11 @@ use crate::PptxError;
 use crate::comments::{CommentFlavor, CommentSlide, CommentsWrite, authors_xml, comments_xml};
 use crate::drawing::parse_run_properties;
 use crate::model::{Bullet, PptxPackage, RunProperties, ShapeElements, SlideReference};
-use crate::xml::{ParseBudget, ParseLimits, XmlElement, XmlNode, parse_xml, serialize_xml};
+use crate::xml::{
+    DRAWINGML_NS, PRESENTATIONML_NS, ParseBudget, ParseLimits, XmlElement, XmlNode,
+    alternate_content_branch_index, parse_xml, serialize_xml,
+};
 
-const DRAWINGML_NS: &str = "http://schemas.openxmlformats.org/drawingml/2006/main";
-const PRESENTATIONML_NS: &str = "http://schemas.openxmlformats.org/presentationml/2006/main";
 const OFFICE_RELATIONSHIPS_NS: &str =
     "http://schemas.openxmlformats.org/officeDocument/2006/relationships";
 const SLIDE_RELATIONSHIP_TYPE: &str =
@@ -1174,6 +1175,13 @@ fn max_shape_id(root: &XmlElement) -> u32 {
         .unwrap_or(1)
 }
 
+/// A parsed shape's source element: a direct child of the tree, or one the
+/// `mc:AlternateContent` at `position` contributes through `path`.
+struct ShapeSlot {
+    position: usize,
+    path: Vec<usize>,
+}
+
 /// Rebuilds the shape run in place: non-shape siblings keep their slots
 /// relative to the shape that follows them, and elements trailing the last
 /// shape (`p:extLst` in particular) stay last.
@@ -1190,17 +1198,9 @@ fn patch_shape_children(
         .into_iter()
         .map(Some)
         .collect();
-    let shape_slots: Vec<usize> = slots
-        .iter()
-        .enumerate()
-        .filter_map(|(position, slot)| match slot {
-            Some(XmlNode::Element(element)) if elements.contains(element.local_name()) => {
-                Some(position)
-            }
-            _ => None,
-        })
-        .collect();
+    let shape_slots = shape_slots(&slots, elements);
     let mut children = Vec::with_capacity(slots.len());
+    let mut hosts: BTreeMap<usize, usize> = BTreeMap::new();
     let first_ext_list = |slots: &[Option<XmlNode>]| {
         slots
             .iter()
@@ -1211,7 +1211,7 @@ fn patch_shape_children(
     };
     let prologue_end = shape_slots
         .first()
-        .copied()
+        .map(|slot| slot.position)
         .unwrap_or_else(|| first_ext_list(&slots));
     emit_sibling_slots(&mut slots, &mut children, prologue_end, elements);
     let last_kept = writes
@@ -1220,22 +1220,27 @@ fn patch_shape_children(
     for (index, write) in writes.iter().enumerate() {
         match write {
             ShapeWrite::Keep { source_index } | ShapeWrite::Patch { source_index, .. } => {
-                let position = *shape_slots.get(*source_index).ok_or_else(|| {
+                let slot = shape_slots.get(*source_index).ok_or_else(|| {
                     write_error(part, format!("shape index {source_index} is not available"))
                 })?;
-                emit_sibling_slots(&mut slots, &mut children, position, elements);
-                let mut element = match slots[position].take() {
-                    Some(XmlNode::Element(element)) => element,
-                    _ => {
-                        return Err(write_error(
+                emit_sibling_slots(&mut slots, &mut children, slot.position, elements);
+                let target = emit_source_element(&mut slots, &mut children, &mut hosts, slot)
+                    .ok_or_else(|| {
+                        write_error(
                             part,
                             format!("shape index {source_index} was already written"),
-                        ));
-                    }
-                };
+                        )
+                    })?;
                 if let ShapeWrite::Patch { patch, .. } = write {
+                    let element =
+                        element_at_path(&mut children[target], &slot.path).ok_or_else(|| {
+                            write_error(
+                                part,
+                                format!("shape index {source_index} is not available"),
+                            )
+                        })?;
                     patch_shape(
-                        &mut element,
+                        element,
                         patch,
                         next_shape_id,
                         theme,
@@ -1244,7 +1249,6 @@ fn patch_shape_children(
                         elements,
                     )?;
                 }
-                children.push(XmlNode::Element(element));
             }
             ShapeWrite::Add(add) => {
                 // A trailing add goes on top: after every remaining sibling
@@ -1269,6 +1273,92 @@ fn patch_shape_children(
     }
     parent.children = children;
     Ok(())
+}
+
+/// Source ordinals in the order [`common_slide_data`] parses them.
+fn shape_slots(slots: &[Option<XmlNode>], elements: ShapeElements) -> Vec<ShapeSlot> {
+    let mut found = Vec::new();
+    for (position, slot) in slots.iter().enumerate() {
+        let Some(XmlNode::Element(element)) = slot else {
+            continue;
+        };
+        if elements.contains(element.local_name()) {
+            found.push(ShapeSlot {
+                position,
+                path: Vec::new(),
+            });
+        } else if element.local_name() == "AlternateContent" {
+            collect_branch_slots(element, position, &mut Vec::new(), elements, &mut found);
+        }
+    }
+    found
+}
+
+fn collect_branch_slots(
+    alternate: &XmlElement,
+    position: usize,
+    path: &mut Vec<usize>,
+    elements: ShapeElements,
+    found: &mut Vec<ShapeSlot>,
+) {
+    let Some(index) = alternate_content_branch_index(alternate) else {
+        return;
+    };
+    let XmlNode::Element(branch) = &alternate.children[index] else {
+        return;
+    };
+    path.push(index);
+    for (index, child) in branch.children.iter().enumerate() {
+        let XmlNode::Element(child) = child else {
+            continue;
+        };
+        path.push(index);
+        if elements.contains(child.local_name()) {
+            found.push(ShapeSlot {
+                position,
+                path: path.clone(),
+            });
+        } else if child.local_name() == "AlternateContent" {
+            collect_branch_slots(child, position, path, elements, found);
+        }
+        path.pop();
+    }
+    path.pop();
+}
+
+/// Moves a shape's source element into `children`, or reuses the
+/// `mc:AlternateContent` already moved there for an earlier nested shape.
+fn emit_source_element(
+    slots: &mut [Option<XmlNode>],
+    children: &mut Vec<XmlNode>,
+    hosts: &mut BTreeMap<usize, usize>,
+    slot: &ShapeSlot,
+) -> Option<usize> {
+    if let Some(host) = hosts.get(&slot.position) {
+        return Some(*host);
+    }
+    let XmlNode::Element(element) = slots[slot.position].take()? else {
+        return None;
+    };
+    children.push(XmlNode::Element(element));
+    if !slot.path.is_empty() {
+        hosts.insert(slot.position, children.len() - 1);
+    }
+    Some(children.len() - 1)
+}
+
+fn element_at_path<'a>(node: &'a mut XmlNode, path: &[usize]) -> Option<&'a mut XmlElement> {
+    let XmlNode::Element(element) = node else {
+        return None;
+    };
+    let mut current = element;
+    for index in path {
+        match current.children.get_mut(*index)? {
+            XmlNode::Element(child) => current = child,
+            XmlNode::Text(_) => return None,
+        }
+    }
+    Some(current)
 }
 
 /// Emits the not-yet-written non-shape nodes that precede `position`.
@@ -2514,6 +2604,51 @@ mod tests {
             crate::drawing::parse_outline_element(line).as_ref(),
             Some(outline)
         );
+    }
+
+    #[test]
+    fn source_ordinals_cover_the_shapes_an_alternate_content_contributes() {
+        let limits = ParseLimits::default();
+        let mut budget = ParseBudget::new(&limits);
+        let part = "ppt/slides/slide1.xml";
+        let mut root = parse_xml(
+            br#"<p:sld><p:cSld><p:spTree><p:sp><p:nvSpPr><p:cNvPr id="2" name="one"/></p:nvSpPr></p:sp><mc:AlternateContent><mc:Choice xmlns:p14="http://schemas.microsoft.com/office/powerpoint/2010/main" Requires="p14"><p:sp><p:nvSpPr><p:cNvPr id="3" name="choice"/></p:nvSpPr></p:sp></mc:Choice><mc:Fallback><p:sp><p:nvSpPr><p:cNvPr id="4" name="two"/></p:nvSpPr></p:sp><p:pic><p:nvPicPr><p:cNvPr id="5" name="three"/></p:nvPicPr></p:pic></mc:Fallback></mc:AlternateContent><p:sp><p:nvSpPr><p:cNvPr id="6" name="four"/></p:nvSpPr></p:sp></p:spTree></p:cSld></p:sld>"#,
+            part,
+            &mut budget,
+        )
+        .unwrap();
+        let parsed = crate::drawing::common_slide_data(
+            &root,
+            &[],
+            part,
+            &mut budget,
+            ShapeElements::WithConnectors,
+        )
+        .unwrap();
+        let tree = root
+            .child_mut("cSld")
+            .and_then(|common| common.child_mut("spTree"))
+            .unwrap();
+        let slots: Vec<Option<XmlNode>> = std::mem::take(&mut tree.children)
+            .into_iter()
+            .map(Some)
+            .collect();
+
+        let found = shape_slots(&slots, ShapeElements::WithConnectors);
+
+        assert_eq!(found.len(), parsed.shapes.len());
+        let names: Vec<String> = found
+            .iter()
+            .map(|slot| {
+                let mut node = slots[slot.position].clone().unwrap();
+                let element = element_at_path(&mut node, &slot.path).unwrap();
+                element.descendants_named("cNvPr")[0]
+                    .attribute("name")
+                    .unwrap()
+                    .to_owned()
+            })
+            .collect();
+        assert_eq!(names, ["one", "two", "three", "four"]);
     }
 
     fn run_properties(xml: &[u8]) -> (XmlElement, Prefixes, RunProperties) {
