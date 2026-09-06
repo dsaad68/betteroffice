@@ -126,12 +126,25 @@ fn vertical_direction_cascades_and_explicit_horizontal_wins() {
 #[test]
 fn horizontal_text_preserves_the_original_rotation() {
     let slide = render(2);
-    for (id, rotation) in [(20, -15.0), (21, 390.0), (22, 0.0), (23, 0.0)] {
+    for (id, rotation) in [(20, -15.0), (21, 390.0), (22, 0.0)] {
         let Primitive::TextBox { transform, .. } = text(&slide, id) else {
             unreachable!()
         };
         assert_eq!(transform.rotation_deg, rotation, "shape {id}");
     }
+}
+
+#[test]
+fn east_asian_vertical_turns_the_control_shape() {
+    let slide = render(2);
+    let Primitive::TextBox {
+        transform, lines, ..
+    } = text(&slide, 23)
+    else {
+        unreachable!()
+    };
+    assert_eq!(transform.rotation_deg, 90.0);
+    assert_eq!(lines.len(), 4);
 }
 
 #[test]
