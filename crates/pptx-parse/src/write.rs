@@ -2,7 +2,7 @@
 //! through byte for byte; edited slides are patched at the XML level so
 //! unmodeled markup survives.
 
-use std::collections::{BTreeMap, HashMap, HashSet};
+use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 
 use ooxml_drawingml::{
     ColorValue, GradientFill, ShapeFill, ShapeOutline, Theme, resolve_color_value_to_hex_with_theme,
@@ -1199,6 +1199,23 @@ fn patch_shape_children(
         .map(Some)
         .collect();
     let shape_slots = shape_slots(&slots, elements);
+    // A wrapper whose every nested shape was deleted must go with them: it is not a shape element,
+    // so the sibling flush would otherwise carry it through and the shapes would come back.
+    let mut orphaned: BTreeSet<usize> = shape_slots
+        .iter()
+        .filter(|slot| !slot.path.is_empty())
+        .map(|slot| slot.position)
+        .collect();
+    for write in writes {
+        if let ShapeWrite::Keep { source_index } | ShapeWrite::Patch { source_index, .. } = write
+            && let Some(slot) = shape_slots.get(*source_index)
+        {
+            orphaned.remove(&slot.position);
+        }
+    }
+    for position in &orphaned {
+        slots[*position] = None;
+    }
     let mut children = Vec::with_capacity(slots.len());
     let mut hosts: BTreeMap<usize, usize> = BTreeMap::new();
     let first_ext_list = |slots: &[Option<XmlNode>]| {

@@ -45,3 +45,20 @@ fn a_save_without_edits_leaves_the_alternate_content_untouched() {
     let session = DeckSession::open(FIXTURE, 333).unwrap();
     assert_eq!(slide_xml(&session.save().unwrap()), slide_xml(FIXTURE));
 }
+
+#[test]
+fn deleting_the_only_shape_in_a_branch_removes_the_wrapper() {
+    let session = DeckSession::open(FIXTURE, 334).unwrap();
+    let context = EditCtx::local("test");
+    let snapshot = session.snapshot().unwrap();
+    let slide = &snapshot.slides[0];
+    // shapes[2] is the p:sp inside the mc:Fallback, and the only shape in it.
+    session
+        .remove_shape(&context, &slide.id, &slide.shapes[2].id)
+        .unwrap();
+    let xml = slide_xml(&session.save().unwrap());
+    assert!(
+        !xml.contains(r#"name="fallback""#),
+        "the deleted shape came back with its wrapper"
+    );
+}
