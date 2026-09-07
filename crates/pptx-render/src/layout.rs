@@ -1465,6 +1465,7 @@ struct ResolvedParagraph {
     justify: bool,
     level: u32,
     margin_left_px: f32,
+    margin_right_px: f32,
     line_spacing: Option<LineSpacing>,
     compat_line_spacing: bool,
     indent_px: f32,
@@ -1574,6 +1575,7 @@ fn resolve_content(
             justify: is_full_justification(alignment),
             level: paragraph.level,
             margin_left_px: emu_to_px(properties.margin_left.unwrap_or_default()),
+            margin_right_px: emu_to_px(properties.margin_right.unwrap_or_default()),
             line_spacing: properties.line_spacing,
             compat_line_spacing,
             indent_px: emu_to_px(properties.indent.unwrap_or_default()),
@@ -1821,7 +1823,9 @@ fn layout_content(
     let mut y = rect.y;
     for paragraph in &content.paragraphs {
         let paragraph_x = rect.x + paragraph.margin_left_px.max(0.0);
-        let paragraph_width = (rect.w - paragraph.margin_left_px.max(0.0)).max(1.0);
+        let paragraph_width =
+            (rect.w - paragraph.margin_left_px.max(0.0) - paragraph.margin_right_px.max(0.0))
+                .max(1.0);
         let mut paragraph_lines = layout_paragraph(
             fonts,
             paragraph,
@@ -1991,6 +1995,7 @@ fn prepend_bullet(
         justify: false,
         level: paragraph.level,
         margin_left_px: 0.0,
+        margin_right_px: 0.0,
         line_spacing: None,
         compat_line_spacing: false,
         indent_px: 0.0,
@@ -2863,6 +2868,9 @@ fn merge_paragraph_properties(target: &mut ParagraphProperties, source: &Paragra
     }
     if source.margin_left.is_some() {
         target.margin_left = source.margin_left;
+    }
+    if source.margin_right.is_some() {
+        target.margin_right = source.margin_right;
     }
     if source.indent.is_some() {
         target.indent = source.indent;
@@ -3877,6 +3885,7 @@ mod tests {
             justify: is_full_justification(Some(alignment)),
             level: 0,
             margin_left_px: 0.0,
+            margin_right_px: 0.0,
             line_spacing: None,
             compat_line_spacing: false,
             indent_px: 0.0,
@@ -4134,6 +4143,7 @@ mod tests {
                 justify: false,
                 level: 0,
                 margin_left_px: 0.0,
+                margin_right_px: 0.0,
                 line_spacing: None,
                 compat_line_spacing: false,
                 indent_px: 0.0,
@@ -4205,6 +4215,7 @@ mod tests {
                 justify: true,
                 level: 0,
                 margin_left_px: 0.0,
+                margin_right_px: 0.0,
                 line_spacing: None,
                 compat_line_spacing: false,
                 indent_px: 0.0,
@@ -4262,6 +4273,7 @@ mod tests {
                 justify: false,
                 level: 0,
                 margin_left_px: 0.0,
+                margin_right_px: 0.0,
                 line_spacing: None,
                 compat_line_spacing: false,
                 indent_px: 0.0,
