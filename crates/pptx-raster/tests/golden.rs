@@ -102,6 +102,8 @@ fn rect_path() -> Vec<ooxml_drawingml::GeometryPathCommand> {
 
 fn shape(x: f32, y: f32, w: f32, h: f32, fill: Option<Paint>, stroke: Option<Stroke>) -> Primitive {
     Primitive::Shape {
+        clip: None,
+        even_odd: false,
         object_id: 1,
         shape_id: Some("shape-1".into()),
         name: "rect".into(),
@@ -114,6 +116,7 @@ fn shape(x: f32, y: f32, w: f32, h: f32, fill: Option<Paint>, stroke: Option<Str
         adjust_values: BTreeMap::new(),
         fill,
         stroke,
+        shadow: None,
         transform: Transform::default(),
     }
 }
@@ -174,6 +177,7 @@ fn text_box(x: f32, y: f32, text: &str, size_px: f32, underline: bool) -> Primit
                 underline,
                 color: "#1b2733".into(),
                 baseline_offset_px: 0.0,
+                letter_spacing_px: 0.0,
                 glyphs,
             }],
             caret_stops: vec![CaretStop { position: 0, x }],

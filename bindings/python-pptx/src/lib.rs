@@ -184,6 +184,7 @@ fn text_style(
         color,
         font_family,
         underline,
+        spacing_pt: None,
         baseline_pct: None,
     }
 }
@@ -196,6 +197,7 @@ fn text_style_patch(style: TextStyle) -> TextStylePatch {
         color: style.color,
         font_family: style.font_family,
         underline: style.underline,
+        spacing_pt: style.spacing_pt,
         baseline_pct: style.baseline_pct,
     }
 }
@@ -1847,6 +1849,7 @@ impl PyPresentation {
         let options = RenderOptions {
             scale,
             background: parse_background(background)?,
+            ..RenderOptions::default()
         };
         let deck = DetachedDeck(&self.presentation);
         py.detach(move || {

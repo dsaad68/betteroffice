@@ -249,6 +249,8 @@ impl ChartSink<'_> {
         stroke: Option<Stroke>,
     ) -> Primitive {
         Primitive::Shape {
+            clip: None,
+            even_odd: false,
             object_id: self.object_id,
             shape_id: None,
             name: String::new(),
@@ -261,6 +263,7 @@ impl ChartSink<'_> {
             adjust_values: Default::default(),
             fill,
             stroke,
+            shadow: None,
             transform: Transform::default(),
         }
     }
