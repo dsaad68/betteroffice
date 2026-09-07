@@ -1065,6 +1065,8 @@ mod tests {
                 }
             } else {
                 Primitive::Shape {
+                    clip: None,
+                    even_odd: false,
                     shadow: None,
                     object_id: 1,
                     shape_id: None,
@@ -1236,6 +1238,7 @@ mod tests {
                     color: "#ff0000".into(),
                 }),
                 stroke: None,
+                shadow: None,
                 transform: SlideTransform {
                     rotation_deg: if rotated { 90.0 } else { 0.0 },
                     ..Default::default()
@@ -1280,6 +1283,8 @@ mod tests {
         let mut list = empty_list(256.0, 256.0);
         for object_id in 0..8 {
             list.primitives.push(Primitive::Shape {
+                clip: None,
+                even_odd: false,
                 object_id,
                 shape_id: None,
                 name: "card".into(),
@@ -1333,6 +1338,8 @@ mod tests {
         let fonts = FontStore::new();
         let images = AssetMap::default();
         let square = |shadow: Option<SlideShadow>| Primitive::Shape {
+            clip: None,
+            even_odd: false,
             object_id: 1,
             shape_id: None,
             name: "card".into(),
@@ -1407,6 +1414,8 @@ mod tests {
     ) -> SurfaceDisplayList {
         let mut list = empty_list(160.0, 160.0);
         list.primitives.push(Primitive::Shape {
+            clip: None,
+            even_odd: false,
             object_id: 1,
             shape_id: None,
             name: "shadow probe".into(),
