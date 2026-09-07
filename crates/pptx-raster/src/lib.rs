@@ -267,6 +267,7 @@ impl Painter<'_, '_> {
                 w,
                 h,
                 asset_id,
+                effects,
                 crop,
                 path,
                 stroke,
@@ -277,6 +278,7 @@ impl Painter<'_, '_> {
                 *w,
                 *h,
                 asset_id.as_deref(),
+                effects,
                 *crop,
                 path.as_deref(),
                 stroke.as_ref(),
@@ -284,13 +286,24 @@ impl Painter<'_, '_> {
                 clip,
             ),
             Primitive::TextBox {
-                x, y, w, h, lines, ..
+                x,
+                y,
+                w,
+                h,
+                lines,
+                overflow,
+                ..
             } => {
                 if lines.is_empty() {
                     return Ok(());
                 }
-                let Some(inner) = self.clipped(clip, *x, *y, *w, *h, transform)? else {
-                    return Ok(());
+                let inner = if *overflow {
+                    None
+                } else {
+                    let Some(inner) = self.clipped(clip, *x, *y, *w, *h, transform)? else {
+                        return Ok(());
+                    };
+                    Some(inner)
                 };
                 font::paint_lines(
                     self.pixmap,
@@ -298,7 +311,7 @@ impl Painter<'_, '_> {
                     self.glyphs,
                     lines,
                     transform,
-                    Some(&inner),
+                    inner.as_ref().or(clip),
                 )
             }
             Primitive::Placeholder {
@@ -395,7 +408,7 @@ impl Painter<'_, '_> {
                 .fill_path(&path, &paint, FillRule::Winding, transform, clip);
         }
         if let Some(stroke) = stroke {
-            self.stroke_path(&path, stroke, transform, clip)?;
+            self.stroke_path(&path, stroke, [x, y, w, h], transform, clip)?;
         }
         Ok(())
     }
@@ -408,6 +421,7 @@ impl Painter<'_, '_> {
         w: f32,
         h: f32,
         asset_id: Option<&str>,
+        effects: &[pptx_render::ImageEffect],
         crop: ImageCrop,
         commands: Option<&[GeometryPathCommand]>,
         stroke: Option<&SlideStroke>,
@@ -434,7 +448,7 @@ impl Painter<'_, '_> {
             } else {
                 None
             };
-            match asset_id.and_then(|asset_id| self.decode(asset_id)) {
+            match asset_id.and_then(|asset_id| self.decode(asset_id, effects)) {
                 Some(source) => {
                     let fit = Transform::from_row(
                         frame.width() / (source.width() as f32 * kept_x),
@@ -460,7 +474,7 @@ impl Painter<'_, '_> {
             }
         }
         if let Some(stroke) = stroke {
-            self.stroke_path(&outline, stroke, transform, clip)?;
+            self.stroke_path(&outline, stroke, [x, y, w, h], transform, clip)?;
         }
         Ok(())
     }
@@ -516,10 +530,11 @@ impl Painter<'_, '_> {
         &mut self,
         path: &Path,
         stroke: &SlideStroke,
+        bounds: [f32; 4],
         transform: Transform,
         clip: Option<&Mask>,
     ) -> Result<(), String> {
-        let Some(paint) = stroke_paint(stroke)? else {
+        let Some(paint) = stroke_paint(stroke, bounds)? else {
             return Ok(());
         };
         let (paint, stroke) = paint;
@@ -528,9 +543,9 @@ impl Painter<'_, '_> {
         Ok(())
     }
 
-    fn decode(&mut self, asset_id: &str) -> Option<Pixmap> {
+    fn decode(&mut self, asset_id: &str, effects: &[pptx_render::ImageEffect]) -> Option<Pixmap> {
         let bytes = self.resources.images.get(asset_id)?;
-        self.images.decode(bytes)
+        self.images.decode(bytes, effects)
     }
 }
 
@@ -732,13 +747,21 @@ fn gradient_paint(
 
 /// The dash pattern mirrors `strokeCurrentPath` in the canvas backend, so a
 /// dashed outline breaks at the same places in both.
-fn stroke_paint(stroke: &SlideStroke) -> Result<Option<(Paint<'static>, Stroke)>, String> {
+fn stroke_paint(
+    stroke: &SlideStroke,
+    [x, y, w, h]: [f32; 4],
+) -> Result<Option<(Paint<'static>, Stroke)>, String> {
     if !stroke.width.is_finite() || stroke.width <= 0.0 {
         return Ok(None);
     }
-    let mut paint = Paint::default();
-    paint.set_color(parse_color(&stroke.color)?);
-    paint.anti_alias = true;
+    let paint = if let Some(paint) = &stroke.paint {
+        shader_paint(paint, x, y, w, h)?
+    } else {
+        let mut paint = Paint::default();
+        paint.set_color(parse_color(&stroke.color)?);
+        paint.anti_alias = true;
+        paint
+    };
     let dash = stroke.dashed.then(|| {
         StrokeDash::new(
             vec![3.0_f32.max(stroke.width * 2.0), 2.0_f32.max(stroke.width)],
@@ -768,7 +791,7 @@ impl ImageCache {
     /// it cannot decode, an image past [`MAX_IMAGE_PIXELS`], or one the slide
     /// has no budget left for. Declared pixels are charged before the decoder
     /// allocates, so a stream that fails late still costs what it claimed.
-    fn decode(&mut self, bytes: &[u8]) -> Option<Pixmap> {
+    fn decode(&mut self, bytes: &[u8], effects: &[pptx_render::ImageEffect]) -> Option<Pixmap> {
         use image::ImageDecoder as _;
 
         let mut decoder = image::ImageReader::new(Cursor::new(bytes))
@@ -794,6 +817,7 @@ impl ImageCache {
         decoded.apply_orientation(orientation);
         let size = IntSize::from_wh(decoded.width(), decoded.height())?;
         let mut data = decoded.into_rgba8().into_raw();
+        pptx_render::apply_image_effects(&mut data, effects);
         let (pixels, _) = data.as_chunks_mut::<4>();
         for pixel in pixels {
             let color = ColorU8::from_rgba(pixel[0], pixel[1], pixel[2], pixel[3]).premultiply();
@@ -841,6 +865,78 @@ fn parse_hex_color(hex: &str) -> Option<Color> {
 mod tests {
     use super::*;
 
+    #[test]
+    fn gradient_outlines_paint_shapes_images_and_zero_height_lines() {
+        let fonts = FontStore::new();
+        let images = AssetMap::new();
+        for kind in ["line", "rect", "image"] {
+            let mut list = empty_list(240.0, 160.0);
+            let stroke = SlideStroke {
+                color: "#00FF00".into(),
+                width: 8.0,
+                dashed: false,
+                head_end: None,
+                tail_end: None,
+                paint: Some(SlidePaint::Gradient {
+                    gradient_type: GradientType::Linear,
+                    angle_deg: Some(0.0),
+                    stops: vec![
+                        pptx_render::GradientStop {
+                            position: 0.0,
+                            color: "#FF0000".into(),
+                        },
+                        pptx_render::GradientStop {
+                            position: 1.0,
+                            color: "#0000FF".into(),
+                        },
+                    ],
+                }),
+            };
+            let h = if kind == "line" { 0.0 } else { 80.0 };
+            list.primitives.push(if kind == "image" {
+                Primitive::Image {
+                    object_id: 1,
+                    shape_id: None,
+                    name: kind.into(),
+                    x: 20.0,
+                    y: 40.0,
+                    w: 200.0,
+                    h,
+                    asset_id: None,
+                    effects: Vec::new(),
+                    crop: ImageCrop::default(),
+                    path: None,
+                    stroke: Some(stroke),
+                    transform: SlideTransform::default(),
+                }
+            } else {
+                Primitive::Shape {
+                    object_id: 1,
+                    shape_id: None,
+                    name: kind.into(),
+                    x: 20.0,
+                    y: 40.0,
+                    w: 200.0,
+                    h,
+                    geometry: kind.into(),
+                    adjust_values: Default::default(),
+                    path: ooxml_drawingml::preset_geometry_to_path(kind, &Default::default(), 2.5)
+                        .unwrap(),
+                    fill: None,
+                    stroke: Some(stroke),
+                    transform: SlideTransform::default(),
+                }
+            });
+            let resources = RenderResources::new(&fonts, &images);
+            let rendered = render_slide(&list, &resources, &RenderOptions::default()).unwrap();
+            let pixmap = Pixmap::decode_png(&rendered.bytes).unwrap();
+            let left = pixmap.pixel(30, 40).unwrap().demultiply();
+            let right = pixmap.pixel(210, 40).unwrap().demultiply();
+            assert!(left.red() > 225 && left.blue() < 30, "{kind}: {left:?}");
+            assert!(right.blue() > 225 && right.red() < 30, "{kind}: {right:?}");
+        }
+    }
+
     fn empty_list(width: f32, height: f32) -> SurfaceDisplayList {
         SurfaceDisplayList {
             contract_version: pptx_render::CONTRACT_VERSION,
@@ -853,6 +949,37 @@ mod tests {
 
     fn resources<'a>(fonts: &'a FontStore, images: &'a AssetMap<'a>) -> RenderResources<'a> {
         RenderResources::new(fonts, images)
+    }
+
+    #[test]
+    fn blip_effects_run_before_premultiplication() {
+        let mut bytes = Vec::new();
+        {
+            let mut encoder = png::Encoder::new(&mut bytes, 2, 1);
+            encoder.set_color(png::ColorType::Rgba);
+            encoder.set_depth(png::BitDepth::Eight);
+            encoder
+                .write_header()
+                .unwrap()
+                .write_image_data(&[3, 167, 223, 128, 255, 255, 255, 0])
+                .unwrap();
+        }
+        let image = ImageCache::default()
+            .decode(
+                &bytes,
+                &[pptx_render::ImageEffect::BiLevel { threshold: 0.25 }],
+            )
+            .unwrap();
+        assert_eq!(
+            image.pixel(0, 0).unwrap(),
+            ColorU8::from_rgba(255, 255, 255, 128).premultiply()
+        );
+        assert_eq!(image.pixel(1, 0).unwrap().alpha(), 0);
+        let source = ImageCache::default().decode(&bytes, &[]).unwrap();
+        assert_eq!(
+            source.pixel(0, 0).unwrap(),
+            ColorU8::from_rgba(3, 167, 223, 128).premultiply()
+        );
     }
 
     #[test]
@@ -971,6 +1098,7 @@ mod tests {
                     w: 200.0,
                     h: 100.0,
                     asset_id: Some("photo".into()),
+                    effects: Vec::new(),
                     crop: ImageCrop {
                         left: 0.1,
                         top: 0.2,
@@ -986,6 +1114,7 @@ mod tests {
                         color: "#ff00ff".into(),
                         width: 2.0,
                         dashed: false,
+                        paint: None,
                         head_end: None,
                         tail_end: None,
                     }),
@@ -1058,6 +1187,7 @@ mod tests {
                 w: 50.0,
                 h: 50.0,
                 asset_id: asset_id.map(str::to_owned),
+                effects: Vec::new(),
                 crop: ImageCrop::default(),
                 path: None,
                 stroke: None,

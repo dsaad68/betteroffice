@@ -248,12 +248,22 @@ impl PptxImages {
         Self { assets }
     }
 
-    fn get(&self, asset_id: &str) -> Result<&ImageData, String> {
-        match self.assets.get(asset_id) {
-            Some(PptxImage::Decoded(image)) => Ok(image),
-            Some(PptxImage::Failed(reason)) => Err(reason.clone()),
-            None => Err(format!("image asset {asset_id} is missing")),
+    fn get(
+        &self,
+        asset_id: &str,
+        effects: &[pptx_render::ImageEffect],
+    ) -> Result<ImageData, String> {
+        let mut image = match self.assets.get(asset_id) {
+            Some(PptxImage::Decoded(image)) => image.clone(),
+            Some(PptxImage::Failed(reason)) => return Err(reason.clone()),
+            None => return Err(format!("image asset {asset_id} is missing")),
+        };
+        if !effects.is_empty() {
+            let mut pixels = image.data.data().to_vec();
+            pptx_render::apply_image_effects(&mut pixels, effects);
+            image.data = Blob::from(pixels);
         }
+        Ok(image)
     }
 }
 
@@ -371,6 +381,7 @@ impl Translator<'_> {
                 w,
                 h,
                 asset_id,
+                effects,
                 crop,
                 path,
                 stroke,
@@ -381,6 +392,7 @@ impl Translator<'_> {
                     frame,
                     PictureSource {
                         asset_id: asset_id.as_deref(),
+                        effects,
                         crop: *crop,
                         path: path.as_deref(),
                     },
@@ -396,6 +408,7 @@ impl Translator<'_> {
                 h,
                 paragraphs,
                 lines,
+                overflow,
                 transform,
                 ..
             } => Frame::new(*x, *y, *w, *h).and_then(|frame| {
@@ -406,6 +419,7 @@ impl Translator<'_> {
                         .flat_map(|paragraph| &paragraph.runs)
                         .any(|run| !run.text.is_empty()),
                     lines,
+                    *overflow,
                     *transform,
                     parent,
                 )
@@ -473,15 +487,17 @@ impl Translator<'_> {
         let fill = fill
             .map(|paint| prepare_paint(paint, frame.rect))
             .transpose()?;
-        let stroke = stroke.map(prepare_stroke).transpose()?;
+        let stroke = stroke
+            .map(|stroke| prepare_stroke(stroke, frame.rect))
+            .transpose()?;
         let affine = frame.transform(transform, parent)?;
         if let Some(fill) = fill {
             fill.fill(&mut self.scene, affine, &path);
         }
-        if let Some((style, color)) = stroke
+        if let Some((style, paint)) = stroke
             && style.width > 0.0
         {
-            self.scene.stroke(&style, affine, color, None, &path);
+            paint.stroke(&mut self.scene, &style, affine, &path);
         }
         Ok(())
     }
@@ -497,11 +513,13 @@ impl Translator<'_> {
         let asset_id = source
             .asset_id
             .ok_or_else(|| "image has no asset id".to_owned())?;
-        let image = self.images.get(asset_id)?;
+        let image = self.images.get(asset_id, source.effects)?;
         if image.width == 0 || image.height == 0 {
             return Err(format!("image asset {asset_id} has no pixels"));
         }
-        let stroke = stroke.map(prepare_stroke).transpose()?;
+        let stroke = stroke
+            .map(|stroke| prepare_stroke(stroke, frame.rect))
+            .transpose()?;
         let affine = frame.transform(transform, parent)?;
         let outline = image_outline(frame, source.path)?;
         let mapping = image_mapping(frame, image.width, image.height, source.crop)?;
@@ -509,10 +527,10 @@ impl Translator<'_> {
         self.scene
             .draw_image(&ImageBrush::new(image.clone()), affine * mapping);
         self.scene.pop_layer();
-        if let Some((style, color)) = stroke
+        if let Some((style, paint)) = stroke
             && style.width > 0.0
         {
-            self.scene.stroke(&style, affine, color, None, &outline);
+            paint.stroke(&mut self.scene, &style, affine, &outline);
         }
         Ok(())
     }
@@ -522,6 +540,7 @@ impl Translator<'_> {
         frame: Frame,
         has_text: bool,
         lines: &[PositionedTextLine],
+        overflow: bool,
         transform: Transform,
         parent: Affine,
     ) -> Result<(), String> {
@@ -536,8 +555,10 @@ impl Translator<'_> {
                 prepared.push(self.prepare_text_run(line, run)?);
             }
         }
-        self.scene
-            .push_clip_layer(Fill::NonZero, affine, &frame.rect);
+        if !overflow {
+            self.scene
+                .push_clip_layer(Fill::NonZero, affine, &frame.rect);
+        }
         for run in prepared {
             self.scene
                 .draw_glyphs(&run.font)
@@ -558,7 +579,9 @@ impl Translator<'_> {
                     .fill(Fill::NonZero, affine, run.color, None, &underline);
             }
         }
-        self.scene.pop_layer();
+        if !overflow {
+            self.scene.pop_layer();
+        }
         Ok(())
     }
 
@@ -705,6 +728,7 @@ impl Translator<'_> {
 
 struct PictureSource<'a> {
     asset_id: Option<&'a str>,
+    effects: &'a [pptx_render::ImageEffect],
     crop: ImageCrop,
     path: Option<&'a [GeometryPathCommand]>,
 }
@@ -766,6 +790,19 @@ enum PreparedPaint {
 }
 
 impl PreparedPaint {
+    fn stroke(
+        &self,
+        scene: &mut Scene,
+        style: &Stroke,
+        transform: Affine,
+        shape: &impl vello::kurbo::Shape,
+    ) {
+        match self {
+            Self::Solid(color) => scene.stroke(style, transform, *color, None, shape),
+            Self::Gradient(gradient) => scene.stroke(style, transform, gradient, None, shape),
+        }
+    }
+
     fn fill(&self, scene: &mut Scene, transform: Affine, shape: &impl vello::kurbo::Shape) {
         match self {
             Self::Solid(color) => scene.fill(Fill::NonZero, transform, *color, None, shape),
@@ -855,7 +892,7 @@ fn prepare_paint(paint: &Paint, bounds: Rect) -> Result<PreparedPaint, String> {
     }
 }
 
-fn prepare_stroke(stroke: &DisplayStroke) -> Result<(Stroke, Color), String> {
+fn prepare_stroke(stroke: &DisplayStroke, bounds: Rect) -> Result<(Stroke, PreparedPaint), String> {
     let width = nonnegative(stroke.width, "stroke width")?;
     let mut style = Stroke::new(f64::from(width));
     if stroke.dashed && width > 0.0 {
@@ -864,7 +901,23 @@ fn prepare_stroke(stroke: &DisplayStroke) -> Result<(Stroke, Color), String> {
             [f64::from((width * 2.0).max(3.0)), f64::from(width.max(2.0))],
         );
     }
-    Ok((style, color(&stroke.color, 1.0)?))
+    let paint = match &stroke.paint {
+        Some(Paint::Gradient {
+            gradient_type: GradientType::Rectangular | GradientType::Path,
+            angle_deg,
+            stops,
+        }) => prepare_paint(
+            &Paint::Gradient {
+                gradient_type: GradientType::Radial,
+                angle_deg: *angle_deg,
+                stops: stops.clone(),
+            },
+            bounds,
+        )?,
+        Some(paint) => prepare_paint(paint, bounds)?,
+        None => PreparedPaint::Solid(color(&stroke.color, 1.0)?),
+    };
+    Ok((style, paint))
 }
 
 fn build_path(commands: &[GeometryPathCommand], frame: Frame) -> Result<BezPath, String> {
@@ -1027,6 +1080,50 @@ fn positive(value: f32, label: &str) -> Result<f32, String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn prepares_gradient_outlines_in_the_primitive_bounds() {
+        for kind in [
+            GradientType::Linear,
+            GradientType::Radial,
+            GradientType::Rectangular,
+            GradientType::Path,
+        ] {
+            let stroke = DisplayStroke {
+                color: "#00FF00".into(),
+                width: 8.0,
+                dashed: true,
+                head_end: None,
+                tail_end: None,
+                paint: Some(Paint::Gradient {
+                    gradient_type: kind,
+                    angle_deg: Some(0.0),
+                    stops: vec![
+                        pptx_render::GradientStop {
+                            position: 0.0,
+                            color: "#FF0000".into(),
+                        },
+                        pptx_render::GradientStop {
+                            position: 1.0,
+                            color: "#0000FF".into(),
+                        },
+                    ],
+                }),
+            };
+            let (style, paint) =
+                prepare_stroke(&stroke, Rect::new(20.0, 40.0, 220.0, 40.0)).unwrap();
+            assert_eq!(style.width, 8.0);
+            assert_eq!(style.dash_pattern.as_slice(), &[16.0, 8.0]);
+            let PreparedPaint::Gradient(gradient) = paint else {
+                panic!("gradient")
+            };
+            assert_eq!(gradient.stops.len(), 2);
+            if let vello::peniko::GradientKind::Linear(line) = gradient.kind {
+                assert_eq!(line.start, Point::new(20.0, 40.0));
+                assert_eq!(line.end, Point::new(220.0, 40.0));
+            }
+        }
+    }
     use betteroffice_pptx::{CONTRACT_VERSION, GradientStop};
     use vello::kurbo::Point;
 
@@ -1070,6 +1167,57 @@ mod tests {
     fn maps(affine: Affine, from: (f64, f64), to: (f64, f64)) -> bool {
         let point = affine * Point::new(from.0, from.1);
         (point.x - to.0).abs() < 1e-3 && (point.y - to.1).abs() < 1e-3
+    }
+
+    #[test]
+    fn overflowing_text_keeps_only_the_enclosing_chart_clip() {
+        let mut presentation = Presentation::open(include_bytes!(
+            "../../../crates/pptx-render/tests/fixtures/text-overflow.pptx"
+        ))
+        .unwrap();
+        let resources = PptxSceneResources::new(&mut presentation).unwrap();
+        let source = presentation.render_slide(0).unwrap().display_list;
+        let text = source
+            .primitives
+            .iter()
+            .find(|primitive| matches!(primitive, Primitive::TextBox { object_id: 2, .. }))
+            .unwrap()
+            .clone();
+        for overflow in [false, true] {
+            for parent_clip in [false, true] {
+                let mut text = text.clone();
+                if let Primitive::TextBox { overflow: flag, .. } = &mut text {
+                    *flag = overflow;
+                }
+                let primitive = if parent_clip {
+                    Primitive::Chart {
+                        object_id: 100,
+                        shape_id: None,
+                        name: "Clip".to_owned(),
+                        x: 20.0,
+                        y: 20.0,
+                        w: 500.0,
+                        h: 200.0,
+                        label: String::new(),
+                        primitives: vec![text],
+                        transform: Transform::default(),
+                    }
+                } else {
+                    text
+                };
+                let list = SurfaceDisplayList {
+                    primitives: vec![primitive],
+                    ..source.clone()
+                };
+                let (page, summary) = resources.translate(&list, 8192).unwrap();
+                assert_eq!(summary.structured(&page.skipped)["totals"]["skipped"], 0);
+                assert_eq!(page.scene.encoding().n_open_clips, 0);
+                assert_eq!(
+                    page.scene.encoding().n_clips,
+                    2 * (u32::from(parent_clip) + u32::from(!overflow))
+                );
+            }
+        }
     }
 
     #[test]
@@ -1117,6 +1265,32 @@ mod tests {
     }
 
     #[test]
+    fn picture_effects_do_not_recolour_the_shared_source() {
+        let source = vec![3, 167, 223, 128];
+        let images = PptxImages {
+            assets: HashMap::from([(
+                "image".into(),
+                PptxImage::Decoded(ImageData {
+                    data: Blob::from(source.clone()),
+                    format: ImageFormat::Rgba8,
+                    alpha_type: ImageAlphaType::Alpha,
+                    width: 1,
+                    height: 1,
+                }),
+            )]),
+        };
+        let recoloured = images
+            .get(
+                "image",
+                &[pptx_render::ImageEffect::BiLevel { threshold: 0.25 }],
+            )
+            .unwrap();
+        assert_eq!(recoloured.data.data(), &[255, 255, 255, 128]);
+        let plain = images.get("image", &[]).unwrap();
+        assert_eq!(plain.data.data(), source);
+    }
+
+    #[test]
     fn a_cropped_masked_picture_translates_through_its_mask() {
         let crop = ImageCrop {
             left: 0.1,
@@ -1138,12 +1312,14 @@ mod tests {
                 w: 200.0,
                 h: 100.0,
                 asset_id: Some("ppt/media/image1.png".to_owned()),
+                effects: Vec::new(),
                 crop,
                 path: Some(ELLIPSE.to_vec()),
                 stroke: Some(DisplayStroke {
                     color: "#ff00ff".to_owned(),
                     width: 2.0,
                     dashed: false,
+                    paint: None,
                     head_end: None,
                     tail_end: None,
                 }),

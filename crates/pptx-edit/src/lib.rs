@@ -17,6 +17,7 @@ use yrs::{
 mod comments;
 mod deck;
 mod model;
+mod outline_gradients;
 mod save;
 mod source_run_properties;
 mod story;
@@ -159,7 +160,7 @@ impl DeckSession {
         }
         .map_err(|error| EditError::Parse(error.to_string()))?;
         comments::import_source_comments(&session, &package)?;
-        deck::import_source_text_properties(&session.doc, &package)?;
+        deck::import_source_render_data(&session.doc, &package)?;
         for property in [
             source_run_properties::SourceProperty::Baseline,
             source_run_properties::SourceProperty::Spacing,
@@ -167,6 +168,7 @@ impl DeckSession {
             source_run_properties::import_source(&session, &package, property)?;
         }
         story::import_source_numbering_restarts(&session.doc, &package)?;
+        outline_gradients::import_source(&session, &package)?;
         Ok(Self {
             package: Arc::new(package),
             ..session

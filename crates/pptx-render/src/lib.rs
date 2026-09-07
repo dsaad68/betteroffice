@@ -2,12 +2,14 @@
 
 mod chart;
 mod display_list;
+mod image_effects;
 mod layout;
 
 pub use display_list::*;
+pub use image_effects::apply_image_effects;
 pub use layout::*;
 
-use ooxml_drawingml::chart::PlotRect;
+use ooxml_drawingml::chart::{PlotRect, PlotTextAlign};
 use pptx_parse::ChartSpace;
 use serde::Deserialize;
 use std::collections::BTreeMap;
@@ -50,6 +52,8 @@ enum ComposedShape {
         base: ShapeBase,
         #[serde(default)]
         image_part_path: Option<String>,
+        #[serde(default)]
+        effects: Vec<ImageEffect>,
         #[serde(default)]
         crop: ImageCrop,
         #[serde(default)]
@@ -198,6 +202,7 @@ fn compile(slide: ComposedSlide) -> SurfaceDisplayList {
             ComposedShape::Picture {
                 base,
                 image_part_path,
+                effects,
                 crop,
                 path,
                 stroke,
@@ -212,6 +217,7 @@ fn compile(slide: ComposedSlide) -> SurfaceDisplayList {
                     w: base.rect.w,
                     h: base.rect.h,
                     asset_id: image_part_path,
+                    effects,
                     crop,
                     path,
                     stroke: stroke.map(Into::into),
@@ -292,7 +298,10 @@ fn composed_chart(base: ShapeBase, chart: &ChartSpace) -> Primitive {
             h: (text.font.size_px * 1.25) as f32,
             anchor: TextAnchor::Top,
             paragraphs: vec![TextParagraph {
-                align: Some(TextAlign::Left),
+                align: Some(match text.align {
+                    PlotTextAlign::Center => TextAlign::Center,
+                    PlotTextAlign::Start => TextAlign::Left,
+                }),
                 level: 0,
                 runs: vec![TextRun {
                     text: text.text.to_owned(),
@@ -384,6 +393,7 @@ impl From<ComposedStroke> for Stroke {
             color: stroke.color_hex,
             width: stroke.width_px,
             dashed: stroke.dash,
+            paint: None,
             head_end: None,
             tail_end: None,
         }
@@ -393,6 +403,15 @@ impl From<ComposedStroke> for Stroke {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn composed_pictures_keep_their_effects() {
+        let json = r#"{"widthPx":100,"heightPx":100,"shapes":[{"kind":"picture","id":7,"name":"Logo","rect":{"x":0,"y":0,"w":10,"h":10},"rotationDeg":0,"imagePartPath":"logo.png","effects":[{"kind":"biLevel","threshold":0.5}]}]}"#;
+        let list: SurfaceDisplayList = serde_json::from_str(&compile_json(json).unwrap()).unwrap();
+        assert!(
+            matches!(&list.primitives[0], Primitive::Image { effects, .. } if effects == &[ImageEffect::BiLevel { threshold: 0.5 }])
+        );
+    }
 
     #[test]
     fn compiles_shape_and_text_in_paint_order() {
@@ -460,6 +479,42 @@ mod tests {
             parts
                 .iter()
                 .any(|part| { part["paragraphs"][0]["runs"][0]["text"] == "3" })
+        );
+    }
+
+    #[test]
+    fn a_chart_space_fill_grounds_the_chart_instead_of_the_default_white() {
+        let compile = |fill: &str| {
+            let json = format!(
+                r##"{{
+              "widthPx":320,"heightPx":180,
+              "shapes":[{{
+                "kind":"chart","id":4,"name":"Revenue chart",
+                "rect":{{"x":0,"y":0,"w":300,"h":150}},"rotationDeg":0,
+                "chart":{{
+                  "chartType":"column",{fill}
+                  "series":[{{"name":"North","categories":["Q1"],"values":[3],"color":"#6254E7"}}],
+                  "plotGroups":[{{"chartType":"column","axisIds":[],"varyColors":false,
+                    "showDataLabels":false,
+                    "series":[{{"name":"North","categories":["Q1"],"values":[3],"color":"#6254E7"}}]}}]
+                }}
+              }}]
+            }}"##
+            );
+            let output: serde_json::Value =
+                serde_json::from_str(&compile_json(&json).expect("compile")).expect("json");
+            output["primitives"][0]["primitives"][0]["fill"]["color"].clone()
+        };
+        assert_eq!(compile(""), "#FFFFFF");
+        assert_eq!(
+            compile(r##""fill":{"kind":"solid","color":"#01BABC"},"##),
+            "#01BABC"
+        );
+        assert_eq!(
+            compile(
+                r##""fill":{"kind":"pattern","foreground":"#01C4BF","background":"#01BABC"},"##
+            ),
+            "#01BFBD"
         );
     }
 
