@@ -1,19 +1,19 @@
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::sync::Arc;
 
-use ooxml_drawingml::chart::PlotRect;
+use ooxml_drawingml::chart::{PlotRect, PlotTextAlign};
 use ooxml_drawingml::{
-    ColorValue, GeometryPathCommand, LineEnd, ShapeFill, ShapeOutline, ShapeStyle, Theme,
+    ColorValue, GeometryPathCommand, GradientFill, LineEnd, ShapeEffects, ShapeFill, ShapeOutline, ShapeStyle, Theme,
     ThemeFormatScheme, preset_geometry_to_path, resolve_color_value_to_hex_with_theme,
     resolve_color_value_to_rgba_hex, resolve_theme_font_ref, style_fill, style_outline,
 };
 use ooxml_text::{CompatFlags, FontId, FontStore, break_opportunities, shape, single_line_box};
 use pptx_edit::{DeckSnapshot, ShapeKind, ShapeSnapshot, StorySnapshot, TextStyle};
 use pptx_parse::{
-    Bullet, BulletColor, BulletFont, BulletSize, ChartSpace, CustomGeometryPath, GraphicFrameData,
-    LineSpacing, ParagraphProperties, Picture, PictureCrop, Placeholder, PptxPackage,
-    RunProperties, ShapeNode, ShapeTransform, Slide, SlideLayout, SlideMaster, TextAutofit,
-    TextBody,
+    BlipEffect, Bullet, BulletColor, BulletFont, BulletSize, ChartSpace, CustomGeometryPath,
+    GraphicFrameData, LineSpacing, ParagraphProperties, Picture, PictureCrop, PictureFill,
+    Placeholder, PptxPackage, RunProperties, ShapeNode, ShapeTransform, Slide, SlideLayout,
+    SlideMaster, TextAutofit, TextBody, TextOverflow,
 };
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
@@ -21,13 +21,15 @@ use thiserror::Error;
 use crate::chart::{ChartFrame, ChartText, chart_primitive};
 use crate::metafile::{MetafileDrawing, decode as decode_metafile, is_metafile};
 use crate::{
-    CONTRACT_VERSION, CaretStop, GradientStop, GradientType, ImageCrop, Paint, PositionedGlyph,
-    PositionedTextLine, PositionedTextRun, Primitive, Stroke, StrokeEnd, SurfaceDisplayList,
-    TextAlign, TextAnchor, TextParagraph, TextRun, Transform,
+    CONTRACT_VERSION, CaretStop, GradientStop, GradientType, ImageCrop, ImageEffect, Paint,
+    PositionedGlyph, PositionedTextLine, PositionedTextRun, Primitive, Shadow, Stroke, StrokeEnd,
+    SurfaceDisplayList, TextAlign, TextAnchor, TextParagraph, TextRun, Transform,
 };
 
 const EMU_PER_CSS_PIXEL: f32 = 9_525.0;
+const PICTURE_FILL: &str = "picture";
 const LINE_END_MIN_BASE_PX: f32 = 0.7 / 25.4 * 96.0;
+const ANGLE_UNITS_PER_DEGREE: f64 = 60_000.0;
 const DEFAULT_INSET_HORIZONTAL_EMU: i64 = 91_440;
 const DEFAULT_INSET_VERTICAL_EMU: i64 = 45_720;
 const DEFAULT_FONT_SIZE_PT: f32 = 18.0;
@@ -330,11 +332,12 @@ impl RenderedSlide {
         }
         for region in self.hit_regions.iter().rev() {
             let (shape_x, shape_y) = region.local_point(x, y);
-            if !region.rect.contains(shape_x, shape_y) {
-                continue;
-            }
+            let inside_shape = region.rect.contains(shape_x, shape_y);
             if let Some(text) = &region.text {
                 let (text_x, text_y) = text.local_point(x, y);
+                if !inside_shape && !(text.overflow && region.hit_rect.contains(text_x, text_y)) {
+                    continue;
+                }
                 if let Some(line) = nearest_line(&text.lines, text_y)
                     && let Some(caret) = line.caret_stops.iter().min_by(|left, right| {
                         (left.x - text_x).abs().total_cmp(&(right.x - text_x).abs())
@@ -346,6 +349,8 @@ impl RenderedSlide {
                         position: caret.position,
                     });
                 }
+            } else if !inside_shape {
+                continue;
             }
             return Some(HitTestResult::Shape {
                 shape_id: region.shape_id.clone(),
@@ -465,11 +470,11 @@ impl<'a> LayoutBuilder<'a> {
         let inherited = [original, layout_node, master_node];
         let inherited_fill = self.resolved_fill(&inherited);
         let inherited_outline = self.resolved_outline(&inherited);
-        let fill = shape
-            .fill
-            .as_ref()
-            .or(inherited_fill.as_ref())
-            .and_then(|fill| paint(fill, self.theme));
+        let effective_fill = shape.fill.as_ref().or(inherited_fill.as_ref());
+        let picture = effective_fill
+            .filter(|fill| fill.fill_type == PICTURE_FILL)
+            .and_then(|_| picture_fill(&inherited));
+        let fill = effective_fill.and_then(|fill| paint(fill, self.theme));
         let outline = if shape.outline.as_ref() == original.and_then(node_outline) {
             inherited_outline
         } else {
@@ -486,6 +491,23 @@ impl<'a> LayoutBuilder<'a> {
                 .or(inherited_outline)
         }
         .and_then(|outline| stroke(&outline, self.theme));
+        let node_effects = original
+            .and_then(node_effects)
+            .or_else(|| layout_node.and_then(node_effects))
+            .or_else(|| master_node.and_then(node_effects));
+        let shadow = node_effects
+            .filter(|_| shape.kind == ShapeKind::Shape && (fill.is_some() || outline.is_some()))
+            .and_then(|effects| {
+                shadow(
+                    effects,
+                    self.theme,
+                    space,
+                    rect,
+                    shape.rotation_deg as f32,
+                    shape.flip_h,
+                    shape.flip_v,
+                )
+            });
         let transform = Transform {
             rotation_deg: shape.rotation_deg as f32,
             flip_h: shape.flip_h,
@@ -517,9 +539,11 @@ impl<'a> LayoutBuilder<'a> {
                             .collect(),
                         fill,
                         stroke: outline,
+                        shadow,
                         transform,
                     },
                     custom_paths(original),
+                    picture,
                 )?;
             }
             ShapeKind::Picture => {
@@ -572,6 +596,7 @@ impl<'a> LayoutBuilder<'a> {
         self.hit_regions.push(HitRegion {
             shape_id: stable_id,
             rect,
+            hit_rect: rect_covering_text(rect, text_hit.as_ref()),
             transform,
             text: text_hit,
         });
@@ -605,6 +630,28 @@ impl<'a> LayoutBuilder<'a> {
         };
         match shape {
             ShapeNode::Shape(value) => {
+                let resolved_fill = self.resolved_fill(&[Some(shape)]);
+                let fill = resolved_fill
+                    .as_ref()
+                    .and_then(|fill| paint(fill, self.theme));
+                let outline = self
+                    .resolved_outline(&[Some(shape)])
+                    .and_then(|outline| stroke(&outline, self.theme));
+                let shadow = value
+                    .effects
+                    .as_ref()
+                    .filter(|_| fill.is_some() || outline.is_some())
+                    .and_then(|effects| {
+                        shadow(
+                            effects,
+                            self.theme,
+                            space,
+                            rect,
+                            transform.rotation_deg,
+                            transform.flip_h,
+                            transform.flip_v,
+                        )
+                    });
                 self.push_shape(
                     Primitive::Shape {
                         clip: None,
@@ -627,15 +674,16 @@ impl<'a> LayoutBuilder<'a> {
                             .iter()
                             .map(|(name, value)| (name.clone(), *value as f32))
                             .collect(),
-                        fill: self
-                            .resolved_fill(&[Some(shape)])
-                            .and_then(|fill| paint(&fill, self.theme)),
-                        stroke: self
-                            .resolved_outline(&[Some(shape)])
-                            .and_then(|outline| stroke(&outline, self.theme)),
+                        fill,
+                        stroke: outline,
+                        shadow,
                         transform,
                     },
                     &value.paths,
+                    resolved_fill
+                        .as_ref()
+                        .filter(|fill| fill.fill_type == PICTURE_FILL)
+                        .and(value.picture_fill.as_deref()),
                 )?;
             }
             ShapeNode::Picture(value) => {
@@ -689,6 +737,7 @@ impl<'a> LayoutBuilder<'a> {
         self.hit_regions.push(HitRegion {
             shape_id: stable_id.to_owned(),
             rect,
+            hit_rect: rect_covering_text(rect, text_hit.as_ref()),
             transform,
             text: text_hit,
         });
@@ -838,11 +887,12 @@ impl<'a> LayoutBuilder<'a> {
         &mut self,
         primitive: Primitive,
         paths: &[CustomGeometryPath],
+        picture: Option<&PictureFill>,
     ) -> Result<(), RenderError> {
         if paths.is_empty()
             || !matches!(&primitive, Primitive::Shape { geometry, .. } if geometry == "custom")
         {
-            self.primitives.push(primitive);
+            self.primitives.push(picture_filled(primitive, picture));
             return Ok(());
         }
         for (index, custom) in paths.iter().enumerate() {
@@ -851,7 +901,11 @@ impl<'a> LayoutBuilder<'a> {
             }
             let mut primitive = primitive.clone();
             if let Primitive::Shape {
-                path, fill, stroke, ..
+                path,
+                fill,
+                stroke,
+                shadow,
+                ..
             } = &mut primitive
             {
                 *path = custom.commands.clone();
@@ -861,8 +915,12 @@ impl<'a> LayoutBuilder<'a> {
                 if custom.no_stroke {
                     *stroke = None;
                 }
+                if fill.is_none() && stroke.is_none() {
+                    *shadow = None;
+                }
             }
-            self.primitives.push(primitive);
+            let picture = picture.filter(|_| !custom.no_fill);
+            self.primitives.push(picture_filled(primitive, picture));
         }
         Ok(())
     }
@@ -989,10 +1047,7 @@ impl<'a> LayoutBuilder<'a> {
             _ => 1.0,
         };
         let mut laid_out = layout_content(&self.renderer.fonts, &resolved, content_rect, scale)?;
-        if matches!(
-            autofit,
-            Some(TextAutofit::Normal { .. } | TextAutofit::Shape)
-        ) {
+        if matches!(autofit, Some(TextAutofit::Normal { .. })) {
             while laid_out.total_height > content_rect.h && scale > MIN_AUTOFIT_SCALE {
                 scale = (scale * 0.9).max(MIN_AUTOFIT_SCALE);
                 laid_out = layout_content(&self.renderer.fonts, &resolved, content_rect, scale)?;
@@ -1012,10 +1067,16 @@ impl<'a> LayoutBuilder<'a> {
             Some("b") => TextAnchor::Bottom,
             _ => TextAnchor::Top,
         };
+        let spare_height = content_rect.h - laid_out.total_height;
+        let spare_height = if cascade.clips_overflow() {
+            spare_height.max(0.0)
+        } else {
+            spare_height
+        };
         let vertical_shift = match anchor {
             TextAnchor::Top => 0.0,
-            TextAnchor::Center => ((content_rect.h - laid_out.total_height) / 2.0).max(0.0),
-            TextAnchor::Bottom => (content_rect.h - laid_out.total_height).max(0.0),
+            TextAnchor::Center => spare_height / 2.0,
+            TextAnchor::Bottom => spare_height,
         };
         for line in &mut laid_out.lines {
             shift_line(line, 0.0, vertical_shift);
@@ -1041,7 +1102,7 @@ impl<'a> LayoutBuilder<'a> {
                     .collect(),
             })
             .collect();
-        let overflow = laid_out.total_height > content_rect.h;
+        let overflow = laid_out.total_height > content_rect.h && !cascade.clips_overflow();
         let story_id = content.story_id;
         let lines = laid_out.lines;
         self.primitives.push(Primitive::TextBox {
@@ -1059,6 +1120,7 @@ impl<'a> LayoutBuilder<'a> {
             transform: text_transform,
         });
         Ok(TextHit {
+            overflow,
             story_id,
             rect: text_rect,
             transform: text_transform,
@@ -1141,6 +1203,19 @@ struct BodyCascade<'a> {
 }
 
 impl BodyCascade<'_> {
+    fn clips_overflow(&self) -> bool {
+        let vertical = cascade_value(self.primary, self.layout, self.master, |body| {
+            body.vertical_overflow
+        });
+        let horizontal = cascade_value(self.primary, self.layout, self.master, |body| {
+            body.horizontal_overflow
+        });
+        [vertical, horizontal]
+            .into_iter()
+            .flatten()
+            .any(|value| value != TextOverflow::Overflow)
+    }
+
     fn anchor(&self) -> Option<&str> {
         self.primary
             .and_then(|body| body.anchor.as_deref())
@@ -1592,7 +1667,17 @@ fn chart_text_primitive(
         .metrics(face.id)
         .map_err(|error| RenderError::Font(error.to_string()))?;
     let line_box = single_line_box(metrics, size_px, &CompatFlags::default());
-    let x = safe_geometry(text.x as f32);
+    let advance: f32 = shaped.iter().map(|glyph| glyph.x_advance).sum();
+    let box_x = safe_geometry(text.x as f32);
+    let box_w = safe_geometry(text.width as f32);
+    let align = match text.align {
+        PlotTextAlign::Center => TextAlign::Center,
+        PlotTextAlign::Start => TextAlign::Left,
+    };
+    let x = match align {
+        TextAlign::Center => box_x + ((box_w - advance) / 2.0).max(0.0),
+        _ => box_x,
+    };
     let baseline = safe_geometry(text.baseline_y as f32);
     let mut glyphs = Vec::with_capacity(shaped.len());
     let mut cursor = 0.0_f32;
@@ -1628,13 +1713,13 @@ fn chart_text_primitive(
         object_id: text.object_id,
         shape_id: Some(shape_id.to_owned()),
         story_id: None,
-        x,
+        x: box_x,
         y: baseline - line_box.ascent,
-        w: safe_geometry(text.width as f32).max(width),
+        w: box_w.max(x - box_x + width),
         h: line_box.height(),
         anchor: TextAnchor::Top,
         paragraphs: vec![TextParagraph {
-            align: Some(TextAlign::Left),
+            align: Some(align),
             level: 0,
             runs: vec![TextRun {
                 text: text.text.to_owned(),
@@ -2365,6 +2450,7 @@ impl Space {
 struct HitRegion {
     shape_id: String,
     rect: PxRect,
+    hit_rect: PxRect,
     transform: Transform,
     text: Option<TextHit>,
 }
@@ -2377,6 +2463,7 @@ impl HitRegion {
 }
 
 struct TextHit {
+    overflow: bool,
     story_id: String,
     rect: PxRect,
     transform: Transform,
@@ -2512,7 +2599,20 @@ fn merge_outline(direct: &ShapeOutline, fallback: Option<&ShapeOutline>) -> Shap
     };
     ShapeOutline {
         width: direct.width.or(fallback.width),
-        color: direct.color.clone().or_else(|| fallback.color.clone()),
+        color: direct.color.clone().or_else(|| {
+            direct
+                .gradient
+                .is_none()
+                .then(|| fallback.color.clone())
+                .flatten()
+        }),
+        gradient: direct.gradient.clone().or_else(|| {
+            direct
+                .color
+                .is_none()
+                .then(|| fallback.gradient.clone())
+                .flatten()
+        }),
         style: direct.style.clone().or_else(|| fallback.style.clone()),
         cap: direct.cap.clone().or_else(|| fallback.cap.clone()),
         join: direct.join.clone().or_else(|| fallback.join.clone()),
@@ -2582,6 +2682,14 @@ fn place_in_source_rect(path: &mut [GeometryPathCommand], rect: (f64, f64, f64, 
             }
             GeometryPathCommand::Close => {}
         }
+    }
+}
+
+fn node_effects(node: &ShapeNode) -> Option<&ShapeEffects> {
+    match node {
+        ShapeNode::Shape(shape) => shape.effects.as_ref(),
+        ShapeNode::Picture(shape) => shape.shape_effects.as_ref(),
+        ShapeNode::GraphicFrame(_) | ShapeNode::Group(_) => None,
     }
 }
 
@@ -2726,6 +2834,33 @@ fn resolved_transform_value(
     }
 }
 
+/// Resolves bitmap effect colours against the theme.
+fn image_effects(effects: &[BlipEffect], theme: &Theme) -> Vec<ImageEffect> {
+    let rgba = |color: Option<&ColorValue>| resolve_color_value_to_rgba_hex(color, Some(theme));
+    effects
+        .iter()
+        .filter_map(|effect| match effect {
+            BlipEffect::BiLevel { threshold } => Some(ImageEffect::BiLevel {
+                threshold: (*threshold as f32).clamp(0.0, 1.0),
+            }),
+            BlipEffect::Grayscale => Some(ImageEffect::Grayscale),
+            BlipEffect::Duotone { shadow, highlight } => Some(ImageEffect::Duotone {
+                shadow: rgba(shadow.as_ref())?,
+                highlight: rgba(highlight.as_ref())?,
+            }),
+            BlipEffect::ColorChange {
+                from,
+                to,
+                use_alpha,
+            } => Some(ImageEffect::ColorChange {
+                from: rgba(from.as_ref())?,
+                to: rgba(to.as_ref())?,
+                use_alpha: *use_alpha,
+            }),
+        })
+        .collect()
+}
+
 /// A fill or stroke colour, widened to `#RRGGBBAA` only when it is actually translucent.
 fn resolve_paint_color(color: Option<&ColorValue>, theme: &Theme) -> Option<String> {
     let rgba = resolve_color_value_to_rgba_hex(color, Some(theme))?;
@@ -2739,35 +2874,12 @@ fn paint(fill: &ShapeFill, theme: &Theme) -> Option<Paint> {
     if fill.fill_type == "none" {
         return None;
     }
-    if let Some(gradient) = &fill.gradient {
-        let gradient_type = match gradient.gradient_type.as_str() {
-            "radial" => GradientType::Radial,
-            "rectangular" => GradientType::Rectangular,
-            "path" => GradientType::Path,
-            _ => GradientType::Linear,
-        };
-        let mut stops = gradient
-            .stops
-            .iter()
-            .filter_map(|stop| {
-                Some(GradientStop {
-                    position: (stop.position as f32 / 100_000.0).clamp(0.0, 1.0),
-                    color: resolve_paint_color(Some(&stop.color), theme)?,
-                })
-            })
-            .collect::<Vec<_>>();
-        stops.sort_by(|left, right| {
-            left.position
-                .partial_cmp(&right.position)
-                .unwrap_or_else(|| left.position.total_cmp(&right.position))
-        });
-        if !stops.is_empty() {
-            return Some(Paint::Gradient {
-                gradient_type,
-                angle_deg: gradient.angle.map(|value| value as f32),
-                stops,
-            });
-        }
+    if let Some(paint) = fill
+        .gradient
+        .as_ref()
+        .and_then(|gradient| gradient_paint(gradient, theme))
+    {
+        return Some(paint);
     }
     resolve_paint_color(fill.color.as_ref(), theme).map(|color| Paint::Solid { color })
 }
@@ -2797,8 +2909,115 @@ fn line_end_scale(size: Option<&str>) -> f32 {
     }
 }
 
+/// `a:outerShdw` in surface pixels, or `None` when it would paint nothing.
+fn shadow(
+    effects: &ShapeEffects,
+    theme: &Theme,
+    space: Space,
+    rect: PxRect,
+    rotation_deg: f32,
+    flip_h: bool,
+    flip_v: bool,
+) -> Option<Shadow> {
+    let outer = effects.outer_shadow.as_ref()?;
+    let color = resolve_paint_color(outer.color.as_ref(), theme)?;
+    if color.len() == 9 && color.ends_with("00") {
+        return None;
+    }
+    let direction = (outer.direction as f64 / ANGLE_UNITS_PER_DEGREE).to_radians();
+    let distance = outer.distance as f64;
+    let mut dx = (distance * direction.cos()) as f32 * space.scale_x;
+    let mut dy = (distance * direction.sin()) as f32 * space.scale_y;
+    if outer.rotate_with_shape {
+        dx *= if flip_h { -1.0 } else { 1.0 };
+        dy *= if flip_v { -1.0 } else { 1.0 };
+        let (sin, cos) = rotation_deg.to_radians().sin_cos();
+        (dx, dy) = (cos * dx - sin * dy, sin * dx + cos * dy);
+    }
+    // Scaling happens about the surface origin, so the anchor `algn` names travels in the
+    // offset: a point scaled about A lands at s * p + A * (1 - s).
+    let scale_x = safe_scale(outer.scale_x as f32);
+    let scale_y = safe_scale(outer.scale_y as f32);
+    if scale_x == 0.0 || scale_y == 0.0 {
+        return None;
+    }
+    let (anchor_x, anchor_y) = shadow_anchor(&outer.alignment, rect);
+    Some(Shadow {
+        color,
+        blur: safe_geometry(outer.blur_radius as f32 * (space.scale_x + space.scale_y) / 2.0),
+        dx: safe_geometry(dx + anchor_x * (1.0 - scale_x)),
+        dy: safe_geometry(dy + anchor_y * (1.0 - scale_y)),
+        scale_x,
+        scale_y,
+    })
+}
+
+fn safe_scale(value: f32) -> f32 {
+    if value.is_finite() { value } else { 1.0 }
+}
+
+/// The point of `rect` that `a:algn` keeps fixed when the shadow is scaled.
+fn shadow_anchor(alignment: &str, rect: PxRect) -> (f32, f32) {
+    let x = match alignment {
+        "tl" | "l" | "bl" => rect.x,
+        "tr" | "r" | "br" => rect.x + rect.w,
+        _ => rect.x + rect.w / 2.0,
+    };
+    let y = match alignment {
+        "tl" | "t" | "tr" => rect.y,
+        "l" | "ctr" | "r" => rect.y + rect.h / 2.0,
+        _ => rect.y + rect.h,
+    };
+    (x, y)
+}
+
+fn gradient_paint(gradient: &GradientFill, theme: &Theme) -> Option<Paint> {
+    let gradient_type = match gradient.gradient_type.as_str() {
+        "radial" => GradientType::Radial,
+        "rectangular" => GradientType::Rectangular,
+        "path" => GradientType::Path,
+        _ => GradientType::Linear,
+    };
+    let mut stops = gradient
+        .stops
+        .iter()
+        .filter_map(|stop| {
+            Some(GradientStop {
+                position: (stop.position as f32 / 100_000.0).clamp(0.0, 1.0),
+                color: resolve_paint_color(Some(&stop.color), theme)?,
+            })
+        })
+        .collect::<Vec<_>>();
+    stops.sort_by(|left, right| {
+        left.position
+            .partial_cmp(&right.position)
+            .unwrap_or_else(|| left.position.total_cmp(&right.position))
+    });
+    if stops.is_empty() {
+        return None;
+    }
+    Some(Paint::Gradient {
+        gradient_type,
+        angle_deg: gradient.angle.map(|value| value as f32),
+        stops,
+    })
+}
+
 fn stroke(outline: &ShapeOutline, theme: &Theme) -> Option<Stroke> {
-    let color = resolve_paint_color(outline.color.as_ref(), theme)?;
+    let solid = resolve_paint_color(outline.color.as_ref(), theme);
+    let paint = match &solid {
+        Some(_) => None,
+        None => outline
+            .gradient
+            .as_ref()
+            .and_then(|gradient| gradient_paint(gradient, theme)),
+    };
+    let color = match (&solid, &paint) {
+        (Some(color), _) => color.clone(),
+        (None, Some(Paint::Gradient { stops, .. })) => stops.first()?.color.clone(),
+        (None, Some(Paint::Solid { color })) => color.clone(),
+        (None, None) => return None,
+    };
     let width = outline
         .width
         .filter(|width| width.is_finite() && *width >= 0.0)
@@ -2811,6 +3030,7 @@ fn stroke(outline: &ShapeOutline, theme: &Theme) -> Option<Stroke> {
             .style
             .as_deref()
             .is_some_and(|style| style != "solid"),
+        paint,
         head_end: line_end(outline.head_end.as_ref(), width),
         tail_end: line_end(outline.tail_end.as_ref(), width),
     })
@@ -2864,6 +3084,85 @@ fn custom_paths(shape: Option<&ShapeNode>) -> &[CustomGeometryPath] {
     }
 }
 
+/// Looks up the blip behind a snapshot shape's picture fill.
+fn picture_fill<'a>(nodes: &[Option<&'a ShapeNode>]) -> Option<&'a PictureFill> {
+    match nodes
+        .iter()
+        .flatten()
+        .find(|node| node_fill(node).is_some())?
+    {
+        ShapeNode::Shape(shape) => shape.picture_fill.as_deref(),
+        _ => None,
+    }
+}
+
+/// Redraws a picture-filled shape as an image masked by the shape's own outline.
+fn picture_filled(primitive: Primitive, picture: Option<&PictureFill>) -> Primitive {
+    let Some(picture) = picture else {
+        return primitive;
+    };
+    match primitive {
+        Primitive::Shape {
+            object_id,
+            shape_id,
+            name,
+            x,
+            y,
+            w,
+            h,
+            geometry,
+            path,
+            stroke,
+            transform,
+            ..
+        } => Primitive::Image {
+            object_id,
+            shape_id,
+            name,
+            x,
+            y,
+            w,
+            h,
+            asset_id: picture.media_part_path.clone(),
+            effects: Vec::new(),
+            crop: picture_fill_crop(picture),
+            path: (geometry != "rect").then_some(path),
+            stroke,
+            transform,
+        },
+        other => other,
+    }
+}
+
+/// Folds `a:srcRect` and the `a:stretch/a:fillRect` band into source fractions.
+/// Insets that letterbox the image rather than crop it stretch to the box instead.
+fn picture_fill_crop(picture: &PictureFill) -> ImageCrop {
+    let source = image_crop(&picture.crop);
+    let (kept_x, kept_y) = source.kept();
+    let band = |near: i32, far: i32| {
+        let (near, far) = (near as f32 / 100_000.0, far as f32 / 100_000.0);
+        let span = 1.0 - near - far;
+        if span <= 0.0 {
+            return (0.0, 0.0);
+        }
+        ((-near).max(0.0) / span, (-far).max(0.0) / span)
+    };
+    let (left, right) = band(picture.fill_rect.left, picture.fill_rect.right);
+    let (top, bottom) = band(picture.fill_rect.top, picture.fill_rect.bottom);
+    let cropped = ImageCrop {
+        left: source.left + left * kept_x,
+        top: source.top + top * kept_y,
+        right: source.right + right * kept_x,
+        bottom: source.bottom + bottom * kept_y,
+    };
+    let (kept_x, kept_y) = cropped.kept();
+    if kept_x <= 0.0 || kept_y <= 0.0 {
+        source
+    } else {
+        cropped
+    }
+}
+
 fn geometry_path(
     geometry: &str,
     adjustments: &BTreeMap<String, f64>,
@@ -2898,6 +3197,31 @@ fn parse_align(value: Option<&str>) -> TextAlign {
 
 fn is_full_justification(value: Option<&str>) -> bool {
     value == Some("just")
+}
+
+fn rect_covering_text(rect: PxRect, text: Option<&TextHit>) -> PxRect {
+    let Some(text) = text.filter(|text| text.overflow) else {
+        return rect;
+    };
+    let rect = text.rect;
+    let (mut left, mut right) = (rect.x, rect.x + rect.w);
+    let (mut top, mut bottom) = (rect.y, rect.y + rect.h);
+    for line in &text.lines {
+        left = left.min(line.x);
+        right = right.max(line.x + line.width);
+        top = top.min(line.y);
+        bottom = bottom.max(line.y + line.height);
+        for run in &line.runs {
+            left = left.min(run.x);
+            right = right.max(run.x + run.width);
+        }
+    }
+    PxRect {
+        x: left,
+        y: top,
+        w: (right - left).max(rect.w),
+        h: (bottom - top).max(rect.h),
+    }
 }
 
 /// Resolves a marker once per paragraph.
@@ -3023,6 +3347,7 @@ fn utf16_len(value: &str) -> u32 {
 
 #[cfg(test)]
 mod tests {
+    use ooxml_drawingml::ThemeColorScheme;
     use std::collections::BTreeSet;
 
     use pptx_edit::{DeckSession, EditCtx};
@@ -3032,6 +3357,8 @@ mod tests {
 
     const FIXTURE: &[u8] = include_bytes!("../../../apps/demo/public/betteroffice-demo.pptx");
     const CHART_FIXTURE: &[u8] = include_bytes!("../../pptx-parse/tests/fixtures/chart-deck.pptx");
+    const GRADIENT_OUTLINE_FIXTURE: &[u8] =
+        include_bytes!("../../pptx-parse/tests/fixtures/gradient-outline.pptx");
     const NUMBERED_FIXTURE: &[u8] =
         include_bytes!("../../pptx-parse/tests/fixtures/slide-number-fields.pptx");
     const STYLE_FIXTURE: &[u8] = include_bytes!("../../pptx-parse/tests/fixtures/shape-style.pptx");
@@ -3097,11 +3424,13 @@ mod tests {
             },
             relationship_id: None,
             media_part_path: None,
+            effects: Vec::new(),
             crop: PictureCrop::default(),
             geometry: "rect".to_owned(),
             adjust_values: BTreeMap::new(),
             fill: None,
             outline: None,
+            shape_effects: None,
             style: None,
         };
         let rect = PxRect {
@@ -3181,6 +3510,55 @@ mod tests {
         let stroke = stroke.as_ref().unwrap();
         assert_eq!(stroke.width, 2.0);
         assert_eq!(stroke.color, "#FF00FF");
+    }
+
+    #[test]
+    fn overflowing_text_grows_the_hit_region_so_a_visible_glyph_stays_clickable() {
+        let rect = PxRect {
+            x: 10.0,
+            y: 100.0,
+            w: 200.0,
+            h: 20.0,
+        };
+        let line = |y: f32, height: f32| PositionedTextLine {
+            x: 10.0,
+            y,
+            width: 200.0,
+            height,
+            baseline: y + height,
+            start: 0,
+            end: 0,
+            runs: Vec::new(),
+            caret_stops: Vec::new(),
+        };
+        let text = TextHit {
+            rect,
+            transform: Transform::default(),
+            overflow: true,
+            story_id: "story".to_owned(),
+            lines: vec![line(80.0, 40.0), line(120.0, 40.0)],
+        };
+        let grown = rect_covering_text(rect, Some(&text));
+        assert_eq!(grown.y, 80.0);
+        assert_eq!(grown.y + grown.h, 160.0);
+        assert_eq!(grown.x, rect.x);
+        assert_eq!(grown.w, rect.w);
+        let fitting = TextHit {
+            rect,
+            transform: Transform::default(),
+            overflow: false,
+            story_id: "story".to_owned(),
+            lines: vec![line(104.0, 12.0)],
+        };
+        let same = rect_covering_text(rect, Some(&fitting));
+        assert_eq!((same.y, same.h), (rect.y, rect.h));
+        assert_eq!(
+            (
+                rect_covering_text(rect, None).y,
+                rect_covering_text(rect, None).h
+            ),
+            (rect.y, rect.h)
+        );
     }
 
     #[test]
@@ -3506,6 +3884,61 @@ mod tests {
             assert_eq!(parse_align(Some(alignment)), TextAlign::Justify);
             assert!(!is_full_justification(Some(alignment)));
         }
+    }
+
+    #[test]
+    fn duotone_colours_resolve_against_the_theme() {
+        let theme = Theme {
+            color_scheme: ThemeColorScheme {
+                lt2: "FFFFFF".to_owned(),
+                ..ThemeColorScheme::default()
+            },
+            ..Theme::default()
+        };
+        let effects = image_effects(
+            &[
+                BlipEffect::Duotone {
+                    shadow: Some(ColorValue {
+                        theme_color: Some("background2".to_owned()),
+                        theme_shade: Some("73".to_owned()),
+                        ..ColorValue::default()
+                    }),
+                    highlight: Some(ColorValue {
+                        rgb: Some("FFFFFF".to_owned()),
+                        ..ColorValue::default()
+                    }),
+                },
+                BlipEffect::BiLevel { threshold: 0.25 },
+            ],
+            &theme,
+        );
+
+        assert_eq!(
+            effects,
+            vec![
+                ImageEffect::Duotone {
+                    shadow: "#737373FF".to_owned(),
+                    highlight: "#FFFFFFFF".to_owned(),
+                },
+                ImageEffect::BiLevel { threshold: 0.25 },
+            ]
+        );
+    }
+
+    #[test]
+    fn an_unresolvable_duotone_is_dropped() {
+        let effects = image_effects(
+            &[BlipEffect::Duotone {
+                shadow: Some(ColorValue::default()),
+                highlight: Some(ColorValue {
+                    rgb: Some("FFFFFF".to_owned()),
+                    ..ColorValue::default()
+                }),
+            }],
+            &Theme::default(),
+        );
+
+        assert!(effects.is_empty());
     }
 
     #[test]
@@ -3920,6 +4353,197 @@ mod tests {
     }
 
     #[test]
+    fn an_outer_shadow_resolves_to_translucent_pixels_offset_along_its_direction() {
+        let theme = Theme::default();
+        let effects = |alpha| ShapeEffects {
+            outer_shadow: Some(ooxml_drawingml::OuterShadow {
+                color: Some(ColorValue {
+                    rgb: Some("000000".to_owned()),
+                    alpha: Some(alpha),
+                    ..ColorValue::default()
+                }),
+                blur_radius: 76_200,
+                distance: 38_100,
+                direction: 2_700_000,
+                ..Default::default()
+            }),
+        };
+        let box_ = PxRect {
+            x: 10.0,
+            y: 20.0,
+            w: 100.0,
+            h: 50.0,
+        };
+        let resolved = shadow(
+            &effects(0.4),
+            &theme,
+            Space::root(),
+            box_,
+            0.0,
+            false,
+            false,
+        )
+        .expect("a painted shadow");
+        assert_eq!(resolved.color, "#00000066");
+        assert!((resolved.blur - 8.0).abs() < 0.01);
+        assert!((resolved.dx - 2.828).abs() < 0.01);
+        assert!((resolved.dy - 2.828).abs() < 0.01);
+
+        let rotated = shadow(
+            &effects(0.4),
+            &theme,
+            Space::root(),
+            box_,
+            90.0,
+            true,
+            false,
+        )
+        .unwrap();
+        assert!((rotated.dx + 2.828).abs() < 0.01);
+        assert!((rotated.dy + 2.828).abs() < 0.01);
+        let mut fixed = effects(0.4);
+        fixed.outer_shadow.as_mut().unwrap().rotate_with_shape = false;
+        assert_eq!(
+            shadow(&fixed, &theme, Space::root(), box_, 90.0, true, false).unwrap(),
+            resolved
+        );
+
+        assert_eq!(
+            shadow(
+                &effects(0.0),
+                &theme,
+                Space::root(),
+                box_,
+                0.0,
+                false,
+                false
+            ),
+            None
+        );
+        assert_eq!(
+            shadow(
+                &ShapeEffects::default(),
+                &theme,
+                Space::root(),
+                box_,
+                0.0,
+                false,
+                false
+            ),
+            None
+        );
+    }
+
+    #[test]
+    fn a_scaled_shadow_keeps_the_point_its_alignment_names() {
+        let theme = Theme::default();
+        let scaled = |alignment: &str, sx: f64| ShapeEffects {
+            outer_shadow: Some(ooxml_drawingml::OuterShadow {
+                color: Some(ColorValue {
+                    rgb: Some("000000".to_owned()),
+                    alpha: Some(0.4),
+                    ..ColorValue::default()
+                }),
+                scale_x: sx,
+                scale_y: sx,
+                alignment: alignment.to_owned(),
+                ..Default::default()
+            }),
+        };
+        let box_ = PxRect {
+            x: 100.0,
+            y: 200.0,
+            w: 40.0,
+            h: 80.0,
+        };
+        let centre = shadow(
+            &scaled("ctr", 1.02),
+            &theme,
+            Space::root(),
+            box_,
+            0.0,
+            false,
+            false,
+        )
+        .expect("a painted shadow");
+        assert!((centre.scale_x - 1.02).abs() < 1e-6);
+        // 102% about the box centre (120, 240) leaves it where it was.
+        assert!((120.0 * centre.scale_x + centre.dx - 120.0).abs() < 0.01);
+        assert!((240.0 * centre.scale_y + centre.dy - 240.0).abs() < 0.01);
+
+        // The default anchor is the bottom edge, so only that edge stays put.
+        let bottom = shadow(
+            &scaled("b", 1.02),
+            &theme,
+            Space::root(),
+            box_,
+            0.0,
+            false,
+            false,
+        )
+        .expect("a painted shadow");
+        assert!((280.0 * bottom.scale_y + bottom.dy - 280.0).abs() < 0.01);
+        assert!(200.0 * bottom.scale_y + bottom.dy < 200.0);
+
+        let plain = shadow(
+            &scaled("ctr", 1.0),
+            &theme,
+            Space::root(),
+            box_,
+            0.0,
+            false,
+            false,
+        )
+        .expect("a painted shadow");
+        assert_eq!((plain.scale_x, plain.dx, plain.dy), (1.0, 0.0, 0.0));
+
+        for (alignment, x, y) in [
+            ("tl", 100.0, 200.0),
+            ("t", 120.0, 200.0),
+            ("tr", 140.0, 200.0),
+            ("l", 100.0, 240.0),
+            ("ctr", 120.0, 240.0),
+            ("r", 140.0, 240.0),
+            ("bl", 100.0, 280.0),
+            ("b", 120.0, 280.0),
+            ("br", 140.0, 280.0),
+        ] {
+            let mut effects = scaled(alignment, -1.5);
+            effects.outer_shadow.as_mut().unwrap().scale_y = 0.5;
+            let result = shadow(&effects, &theme, Space::root(), box_, 0.0, false, false).unwrap();
+            assert_eq!((result.scale_x, result.scale_y), (-1.5, 0.5));
+            assert_eq!(result.dx, x * 2.5, "{alignment}");
+            assert_eq!(result.dy, y * 0.5, "{alignment}");
+        }
+        assert!(
+            shadow(
+                &scaled("ctr", 0.0),
+                &theme,
+                Space::root(),
+                box_,
+                0.0,
+                false,
+                false
+            )
+            .is_none()
+        );
+        let invalid = shadow(
+            &scaled("ctr", f64::INFINITY),
+            &theme,
+            Space::root(),
+            box_,
+            0.0,
+            false,
+            false,
+        )
+        .unwrap();
+        assert_eq!(
+            (invalid.scale_x, invalid.scale_y, invalid.dx, invalid.dy),
+            (1.0, 1.0, 0.0, 0.0)
+        );
+    }
+
+    #[test]
     fn a_slide_number_field_resolves_to_the_slide_it_is_drawn_on() {
         let run = |field_type: Option<&str>, text: &str| pptx_parse::TextRun {
             text: text.to_owned(),
@@ -4183,6 +4807,12 @@ mod tests {
                     w: 100.0,
                     h: 100.0,
                 },
+                hit_rect: PxRect {
+                    x: 100.0,
+                    y: 100.0,
+                    w: 100.0,
+                    h: 100.0,
+                },
                 transform,
                 text: None,
             }],
@@ -4227,12 +4857,19 @@ mod tests {
                     w: 120.0,
                     h: 40.0,
                 },
+                hit_rect: PxRect {
+                    x: 100.0,
+                    y: 100.0,
+                    w: 120.0,
+                    h: 40.0,
+                },
                 transform: Transform {
                     rotation_deg: 0.0,
                     flip_h,
                     flip_v: false,
                 },
                 text: Some(TextHit {
+                    overflow: false,
                     story_id: "story".to_owned(),
                     rect: PxRect {
                         x: 100.0,
@@ -4303,9 +4940,11 @@ mod tests {
             },
             hit_regions: vec![HitRegion {
                 shape_id: "sideways".to_owned(),
+                hit_rect: rect,
                 rect,
                 transform: shape,
                 text: Some(TextHit {
+                    overflow: false,
                     story_id: "story".to_owned(),
                     rect: TextFlow::Vert270.layout_rect(rect),
                     transform: text_transform(shape, TextFlow::Vert270),
@@ -4416,6 +5055,7 @@ mod tests {
         package.masters[0]
             .shapes
             .push(ShapeNode::Shape(pptx_parse::Shape {
+                effects: None,
                 base: pptx_parse::ShapeBase {
                     id: 9_001,
                     name: "turned".to_owned(),
@@ -4429,8 +5069,11 @@ mod tests {
                 paths: Vec::new(),
                 style: None,
                 fill: None,
+                picture_fill: None,
                 outline: None,
                 text: Some(TextBody {
+                    vertical_overflow: None,
+                    horizontal_overflow: None,
                     anchor: Some("ctr".to_owned()),
                     vertical: vertical.map(str::to_owned),
                     compat_line_spacing: None,
@@ -4809,6 +5452,7 @@ mod tests {
         };
         let body = parsed.text.as_mut().unwrap();
         body.compat_line_spacing = compat.then_some(true);
+        body.anchor = Some("t".to_owned());
         for paragraph in &mut body.paragraphs {
             paragraph.properties.line_spacing = paragraph_spacing;
         }
@@ -4940,23 +5584,155 @@ mod tests {
                 &TextStyle::default(),
             )
             .unwrap();
-        let rendered = renderer()
+        let snapshot = session.snapshot().unwrap();
+        let font_size = |package: &PptxPackage| {
+            renderer()
+                .layout_slide(package, &snapshot, 0)
+                .unwrap()
+                .display_list
+                .primitives
+                .iter()
+                .find_map(|primitive| match primitive {
+                    Primitive::TextBox {
+                        shape_id: Some(id),
+                        paragraphs,
+                        ..
+                    } if id == &shape_id => Some(paragraphs[0].runs[0].font_size_pt),
+                    _ => None,
+                })
+                .unwrap()
+        };
+        let scaled = font_size(&package);
+        let ShapeNode::Shape(parsed) = package.slides[0]
+            .shapes
+            .iter_mut()
+            .find(|shape| shape.id() == source_id)
+            .unwrap()
+        else {
+            panic!("expected text shape");
+        };
+        parsed.text.as_mut().unwrap().autofit = Some(TextAutofit::None);
+        assert!(scaled < font_size(&package));
+    }
+
+    #[test]
+    fn a_gradient_outline_strokes_with_its_gradient_and_keeps_a_flat_fallback() {
+        let package = pptx_parse::parse_pptx(GRADIENT_OUTLINE_FIXTURE).unwrap();
+        let session = DeckSession::open(GRADIENT_OUTLINE_FIXTURE, 8_010).unwrap();
+        let primitives = renderer()
             .layout_slide(&package, &session.snapshot().unwrap(), 0)
-            .unwrap();
-        let font_size = rendered
+            .unwrap()
             .display_list
-            .primitives
+            .primitives;
+        let strokes = primitives
             .iter()
-            .find_map(|primitive| match primitive {
-                Primitive::TextBox {
-                    shape_id: Some(id),
-                    paragraphs,
-                    ..
-                } if id == &shape_id => Some(paragraphs[0].runs[0].font_size_pt),
+            .filter_map(|primitive| match primitive {
+                Primitive::Shape { name, stroke, .. } => Some((name.clone(), stroke.clone()?)),
                 _ => None,
             })
-            .unwrap();
-        assert!(font_size < 40.0);
+            .collect::<Vec<_>>();
+
+        let (_, gradient) = strokes
+            .iter()
+            .find(|(name, _)| name == "Gradient outline rectangle")
+            .expect("the gradient-stroked rectangle must reach the display list");
+        assert_eq!(
+            gradient.paint,
+            Some(Paint::Gradient {
+                gradient_type: GradientType::Linear,
+                angle_deg: Some(0.0),
+                stops: vec![
+                    GradientStop {
+                        position: 0.0,
+                        color: "#C00000".to_owned(),
+                    },
+                    GradientStop {
+                        position: 0.5,
+                        color: "#FFC000".to_owned(),
+                    },
+                    GradientStop {
+                        position: 1.0,
+                        color: "#1F7A3D".to_owned(),
+                    },
+                ],
+            })
+        );
+        assert_eq!(gradient.color, "#C00000");
+        assert_eq!(gradient.width, 8.0);
+
+        assert!(
+            strokes
+                .iter()
+                .any(|(name, stroke)| name == "Gradient outline line" && stroke.paint.is_some())
+        );
+
+        let (_, solid) = strokes
+            .iter()
+            .find(|(name, _)| name == "Solid outline rectangle")
+            .expect("the solid-stroked rectangle must reach the display list");
+        assert_eq!(solid.paint, None);
+        assert_eq!(solid.color, "#C00000");
+    }
+
+    #[test]
+    fn gradient_outline_keeps_sorted_alpha_paint_through_theme_fallback() {
+        let gradient: ShapeOutline = serde_json::from_value(serde_json::json!({
+            "gradient": {
+                "type": "linear", "angle": 0.0,
+                "stops": [
+                    {"position": 100000.0, "color": {"rgb": "0000FF"}},
+                    {"position": 50000.0, "color": {"rgb": "00FF00"}},
+                    {"position": 0.0, "color": {"rgb": "FF0000", "alpha": 0.5}},
+                    {"position": 50000.0, "color": {"rgb": "FFFF00"}}
+                ]
+            }
+        }))
+        .unwrap();
+        let solid = ShapeOutline {
+            color: Some(ColorValue {
+                rgb: Some("123456".into()),
+                ..Default::default()
+            }),
+            width: Some(76_200.0),
+            head_end: Some(LineEnd {
+                end_type: "triangle".into(),
+                width: None,
+                length: None,
+            }),
+            ..Default::default()
+        };
+        let merged = merge_outline(&gradient, Some(&solid));
+        let stroke = stroke(&merged, &Theme::default()).unwrap();
+        assert_eq!(stroke.width, 8.0);
+        assert_eq!(stroke.color, "#FF000080");
+        assert!(stroke.head_end.is_some());
+        let Some(Paint::Gradient { stops, .. }) = stroke.paint else {
+            panic!("gradient")
+        };
+        assert_eq!(
+            stops
+                .iter()
+                .map(|stop| (stop.position, stop.color.as_str()))
+                .collect::<Vec<_>>(),
+            [
+                (0.0, "#FF000080"),
+                (0.5, "#00FF00"),
+                (0.5, "#FFFF00"),
+                (1.0, "#0000FF")
+            ]
+        );
+        assert!(merge_outline(&solid, Some(&gradient)).gradient.is_none());
+        assert_eq!(
+            merge_outline(
+                &ShapeOutline {
+                    width: Some(12_700.0),
+                    ..Default::default()
+                },
+                Some(&gradient)
+            )
+            .gradient,
+            gradient.gradient
+        );
     }
 
     fn chart_slide(index: usize) -> Vec<Primitive> {
@@ -5307,6 +6083,41 @@ mod tests {
     }
 
     #[test]
+    fn a_chart_title_is_shaped_into_the_centre_of_its_box() {
+        let parts = chart_slide(0)
+            .into_iter()
+            .find_map(|primitive| match primitive {
+                Primitive::Chart {
+                    primitives, name, ..
+                } if name == "Revenue chart" => Some(primitives),
+                _ => None,
+            })
+            .expect("the chart frame plots");
+        let (align, x, width) = parts
+            .iter()
+            .find_map(|primitive| match primitive {
+                Primitive::TextBox {
+                    lines, paragraphs, ..
+                } if lines
+                    .iter()
+                    .flat_map(|line| &line.runs)
+                    .any(|run| run.text == "Revenue") =>
+                {
+                    let run = &lines[0].runs[0];
+                    Some((paragraphs[0].align, run.x, run.width))
+                }
+                _ => None,
+            })
+            .expect("the chart title is laid out");
+        assert_eq!(align, Some(TextAlign::Center));
+        let centre = x + width / 2.0;
+        assert!(
+            (centre - (96.0 + 576.0 / 2.0)).abs() < 2.0,
+            "the title is not centred on the frame: {centre}"
+        );
+    }
+
+    #[test]
     fn a_graphic_frame_without_a_chart_part_keeps_its_placeholder() {
         assert!(chart_slide(0).iter().any(|primitive| matches!(
             primitive,
@@ -5467,6 +6278,7 @@ mod tests {
             outline: None,
             resolved_outline_color: None,
             media_part_path: None,
+            blip_effects: Vec::new(),
             graphic: None,
             text_stories: Vec::new(),
             children: Vec::new(),
@@ -5491,7 +6303,9 @@ mod tests {
             geometry: "rect".to_owned(),
             adjust_values: BTreeMap::new(),
             fill: None,
+            picture_fill: None,
             outline: None,
+            effects: None,
             text: None,
         });
         let resolved = resolved_transform_value(&snapshot, None, Some(&layout_shape), None);

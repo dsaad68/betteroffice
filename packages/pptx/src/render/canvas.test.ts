@@ -1,6 +1,6 @@
 import { describe, expect, test } from 'bun:test';
-import type { GeometryPathCommand, ShapePrimitive, SlideDisplayList } from '../types';
-import { paintSlide } from './canvas';
+import type { GeometryPathCommand, ImageEffect, ShapePrimitive, SlideDisplayList } from '../types';
+import { applyImageEffects, paintSlide } from './canvas';
 
 describe('PPTX canvas replay', () => {
   test('paints shape geometry and positioned text in display-list order', async () => {
@@ -104,6 +104,94 @@ describe('PPTX canvas replay', () => {
     expect(calls).toContain('fill');
     expect(calls).toContain('stroke');
     expect(calls).toContain('text:Hello');
+  });
+
+  test('strokes a gradient outline with a gradient sized to the shape box', async () => {
+    const gradients: Array<{ args: number[]; stops: Array<[number, string]> }> = [];
+    let strokeStyle: unknown;
+    let fillStyle: unknown;
+    const objects: unknown[] = [];
+    const ctx = new Proxy(
+      {
+        createLinearGradient: (...args: number[]) => {
+          const entry = { args, stops: [] as Array<[number, string]> };
+          gradients.push(entry);
+          const gradient = {
+            addColorStop: (position: number, color: string) => entry.stops.push([position, color]),
+          };
+          objects.push(gradient);
+          return gradient;
+        },
+      } as Record<string, unknown>,
+      {
+        get(target, property) {
+          if (property in target) return target[property as string];
+          return () => undefined;
+        },
+        set(target, property, value) {
+          if (property === 'strokeStyle') strokeStyle = value;
+          if (property === 'fillStyle') fillStyle = value;
+          target[property as string] = value;
+          return true;
+        },
+      }
+    ) as unknown as CanvasRenderingContext2D;
+    const list: SlideDisplayList = {
+      contractVersion: 1,
+      width: 320,
+      height: 180,
+      primitives: [
+        {
+          kind: 'shape',
+          objectId: 1,
+          name: 'Spoke',
+          x: 20,
+          y: 40,
+          w: 200,
+          h: 0,
+          geometry: 'line',
+          path: [
+            { type: 'move', x: 0, y: 0 },
+            { type: 'line', x: 1, y: 0 },
+          ],
+          stroke: {
+            color: '#c00000',
+            width: 3,
+            paint: {
+              kind: 'gradient',
+              gradientType: 'linear',
+              angleDeg: 0,
+              stops: [
+                { position: 0, color: '#c00000' },
+                { position: 1, color: '#c2c2c2' },
+              ],
+            },
+          },
+        },
+      ],
+    };
+
+    await paintSlide(ctx, list, 1);
+    expect(gradients).toHaveLength(1);
+    expect(gradients[0]?.args).toEqual([20, 40, 220, 40]);
+    expect(gradients[0]?.stops).toEqual([
+      [0, '#c00000'],
+      [1, '#c2c2c2'],
+    ]);
+    expect(strokeStyle).toBe(objects[0]);
+    const shape = list.primitives[0];
+    if (shape?.kind !== 'shape' || !shape.stroke) throw new Error('shape');
+    shape.stroke.tailEnd = { kind: 'triangle', width: 9, length: 9 };
+    await paintSlide(ctx, list, 1);
+    expect(fillStyle).toBe(objects[2]);
+    expect(strokeStyle).toBe(objects[2]);
+    list.primitives = [{
+      kind: 'image', objectId: 2, name: 'Outline', x: 20, y: 40, w: 200, h: 0,
+      stroke: shape.stroke,
+    }];
+    await paintSlide(ctx, list, 1);
+    expect(strokeStyle).toBe(objects[3]);
+    expect(gradients[3]?.args).toEqual([20, 40, 220, 40]);
   });
 
   test('paints chart parts clipped to the chart rectangle', async () => {
@@ -683,12 +771,474 @@ describe('PPTX picture cropping', () => {
     expect(calls).not.toContain('clip');
   });
 
+  test('a two-contour mask keeps both contours, so a counter can be punched out', async () => {
+    const { calls, ctx } = harness();
+    const ring: GeometryPathCommand[] = [
+      { type: 'move', x: 0, y: 0 },
+      { type: 'line', x: 1, y: 0 },
+      { type: 'line', x: 1, y: 1 },
+      { type: 'line', x: 0, y: 1 },
+      { type: 'close' },
+      { type: 'move', x: 0.25, y: 0.25 },
+      { type: 'line', x: 0.25, y: 0.75 },
+      { type: 'line', x: 0.75, y: 0.75 },
+      { type: 'line', x: 0.75, y: 0.25 },
+      { type: 'close' },
+    ];
+    await paintSlide(ctx, list({ path: ring }), 1, 1, { resolveImage: async () => source });
+    expect(calls).toEqual([
+      'save',
+      'save',
+      'save',
+      'beginPath',
+      'move:10,20',
+      'line:210,20',
+      'line:210,120',
+      'line:10,120',
+      'close',
+      'move:60,45',
+      'line:60,95',
+      'line:160,95',
+      'line:160,45',
+      'close',
+      'clip',
+      'draw:0,0,400,300,10,20,200,100',
+      'restore',
+      'restore',
+      'restore',
+    ]);
+  });
+
   test('a crop that keeps nothing draws nothing', async () => {
     const { calls, ctx } = harness();
     await paintSlide(ctx, list({ crop: { left: 0.6, right: 0.6 } }), 1, 1, {
       resolveImage: async () => source,
     });
     expect(calls.some((call) => call.startsWith('draw:'))).toBe(false);
+  });
+});
+
+describe('PPTX shape shadows', () => {
+  function harness(supportsFilters = true) {
+    const calls: string[] = [];
+    const transforms: number[][] = [];
+    const surfaces: number[][] = [];
+    const makeContext = (name: string) => {
+      const state: Record<string, unknown> = {
+        canvas: { width: 480, height: 480 }, filter: supportsFilters ? 'none' : undefined,
+        getTransform: () => ({ a: 3, b: 0, c: 0, d: 3, e: 0, f: 0 }),
+        setTransform: (...matrix: number[]) => { if (name === 'mask') transforms.push(matrix); },
+        fill: () => calls.push(`${name}:fill`),
+        stroke: () => calls.push(`${name}:stroke`),
+        fillRect: () => calls.push(`${name}:tint:${state.globalCompositeOperation}:${state.fillStyle}`),
+        drawImage: (_image: unknown, x: number, y: number) => calls.push(state.shadowColor
+          ? `${name}:native:${state.shadowColor},${state.shadowBlur},${state.shadowOffsetX},${state.shadowOffsetY}:${x},${y}`
+          : `${name}:shadow:${state.filter}:${x},${y}`),
+      };
+      const filters: unknown[] = [];
+      state.save = () => filters.push(state.filter);
+      state.restore = () => { state.filter = filters.pop(); };
+      return new Proxy(state, {
+        get: (target, key) => target[key as string] ?? (() => undefined),
+        set: (target, key, value) => { target[key as string] = value; return true; },
+      }) as unknown as CanvasRenderingContext2D;
+    };
+    const previous = globalThis.OffscreenCanvas;
+    Object.defineProperty(globalThis, 'OffscreenCanvas', { configurable: true, writable: true, value: class {
+      constructor(public width: number, public height: number) { surfaces.push([width, height]); }
+      getContext() { return makeContext('mask'); }
+    } });
+    return { calls, transforms, surfaces, ctx: makeContext('main'), restore: () => {
+      Object.defineProperty(globalThis, 'OffscreenCanvas', { configurable: true, writable: true, value: previous });
+    } };
+  }
+
+  function list(shadow: ShapePrimitive['shadow']): SlideDisplayList {
+    return {
+      contractVersion: 1, width: 160, height: 160,
+      primitives: [{
+        kind: 'shape', objectId: 1, name: 'card', x: 40, y: 40, w: 40, h: 40,
+        geometry: 'rect', path: [
+          { type: 'move', x: 0, y: 0 }, { type: 'line', x: 1, y: 0 },
+          { type: 'line', x: 1, y: 1 }, { type: 'line', x: 0, y: 1 }, { type: 'close' },
+        ],
+        fill: { kind: 'solid', color: '#4472c480' },
+        stroke: { color: '#10235b', width: 2 }, shadow,
+      }],
+    };
+  }
+
+  test('scaled shadows transform both axes and retain scaled outline margins', async () => {
+    const { calls, transforms, surfaces, ctx, restore } = harness();
+    try {
+      await paintSlide(ctx, list({ color: '#00000066', scaleX: 2, scaleY: 0.5, dx: -40, dy: 80 }), 3, 1);
+      expect(transforms[0]).toEqual([6, 0, 0, 1.5, -216, -36]);
+      expect(surfaces).toEqual([[288, 108]]);
+      expect(calls).toContain('main:shadow:blur(0px):96,276');
+    } finally { restore(); }
+  });
+
+  test('shadow work shares a slide budget, fails before allocation, and resets for each paint', async () => {
+    const { surfaces, ctx, restore } = harness();
+    try {
+      const display = list({ color: '#00000066' });
+      const shape = display.primitives[0] as ShapePrimitive;
+      shape.stroke = undefined;
+      const options = { maxShadowPixels: 120 * 120 };
+      await paintSlide(ctx, display, 3, 1, options);
+      await paintSlide(ctx, display, 3, 1, options);
+      expect(surfaces).toHaveLength(2);
+      await expect(paintSlide(ctx, display, 3, 1, { maxShadowPixels: 120 * 120 - 1 })).rejects.toThrow('pixel budget');
+      expect(surfaces).toHaveLength(2);
+      const many = { ...display, primitives: Array.from({ length: 10_000 }, () => shape) };
+      await expect(paintSlide(ctx, many, 3, 1, options)).rejects.toThrow('pixel budget');
+      expect(surfaces).toHaveLength(3);
+      const chart = { kind: 'chart', objectId: 9, x: 0, y: 0, w: 160, h: 160, primitives: [shape, shape] };
+      await expect(paintSlide(ctx, { ...display, primitives: [chart] } as SlideDisplayList, 3, 1, options)).rejects.toThrow('pixel budget');
+      expect(surfaces).toHaveLength(4);
+    } finally { restore(); }
+  });
+
+  test('a shadow combines fill and outline alpha and scales blur and offset to the device', async () => {
+    const { calls, ctx, restore } = harness();
+    try {
+      await paintSlide(ctx, list({ color: '#00000066', blur: 8, dx: 6, dy: 6 }), 2, 1.5);
+      expect(calls).toEqual([
+        'mask:fill', 'mask:stroke', 'mask:tint:source-in:#00000066',
+        'main:shadow:blur(12px):126,126', 'main:fill', 'main:stroke',
+      ]);
+      expect(ctx.filter).toBe('none');
+    } finally { restore(); }
+  });
+
+  test('a context without filters paints one shadow from the combined source alpha', async () => {
+    const { calls, ctx, restore } = harness(false);
+    try {
+      await paintSlide(ctx, list({ color: '#00000066', blur: 8, dx: 6, dy: 6 }), 2, 1.5);
+      expect(calls).toEqual([
+        'mask:fill', 'mask:stroke', 'main:native:#00000066,24,-355,18:481,108',
+        'main:fill', 'main:stroke',
+      ]);
+    } finally { restore(); }
+  });
+
+  test('an unshadowed shape leaves the shadow state alone', async () => {
+    const { calls, ctx, restore } = harness();
+    try {
+      await paintSlide(ctx, list(undefined), 1, 1);
+      expect(calls).toEqual(['main:fill', 'main:stroke']);
+    } finally { restore(); }
+  });
+
+  test('an unfilled outline casts a shadow even at zero blur and offset', async () => {
+    const { calls, ctx, restore } = harness();
+    try {
+      const display = list({ color: '#00000066' });
+      (display.primitives[0] as ShapePrimitive).fill = undefined;
+      await paintSlide(ctx, display, 2, 1.5);
+      expect(calls).toEqual([
+        'mask:stroke', 'mask:tint:source-in:#00000066',
+        'main:shadow:blur(0px):108,108', 'main:stroke',
+      ]);
+    } finally { restore(); }
+  });
+});
+
+describe('blip colour effects', () => {
+  test('biLevel thresholds on Rec. 601 luma and leaves alpha alone', () => {
+    const data = new Uint8ClampedArray([0x03, 0xa7, 0xdf, 0x80]);
+    applyImageEffects(data, [{ kind: 'biLevel', threshold: 0.5 }]);
+    expect([...data]).toEqual([0, 0, 0, 0x80]);
+
+    const light = new Uint8ClampedArray([0x03, 0xa7, 0xdf, 0xff]);
+    applyImageEffects(light, [{ kind: 'biLevel', threshold: 0.25 }]);
+    expect([...light]).toEqual([255, 255, 255, 0xff]);
+  });
+
+  test('duotone interpolates between the two colours by luma', () => {
+    const data = new Uint8ClampedArray([0, 0, 0, 0xff, 255, 255, 255, 0xff]);
+    applyImageEffects(data, [{ kind: 'duotone', shadow: '#737373ff', highlight: '#ffffffff' }]);
+    expect([...data]).toEqual([0x73, 0x73, 0x73, 0xff, 255, 255, 255, 0xff]);
+  });
+
+  test('effects apply in list order', () => {
+    const ordered: ImageEffect[] = [
+      { kind: 'colorChange', from: '#ffffffff', to: '#ffffff00' },
+      { kind: 'duotone', shadow: '#000000ff', highlight: '#ff0000ff' },
+    ];
+    const data = new Uint8ClampedArray([255, 255, 255, 0xff]);
+    applyImageEffects(data, ordered);
+    expect(data[3]).toBe(0);
+
+    const reversed = new Uint8ClampedArray([255, 255, 255, 0xff]);
+    applyImageEffects(reversed, [...ordered].reverse());
+    expect(reversed[3]).toBe(0xff);
+  });
+});
+
+test('colour changes respect useA and preserve transparent and antialiased pixels', () => {
+  for (const useAlpha of [undefined, true, false]) {
+    const data = new Uint8ClampedArray([
+      255, 255, 255, 255, 255, 255, 255, 128, 255, 255, 255, 0, 255, 254, 255, 255,
+    ]);
+    applyImageEffects(data, [{ kind: 'colorChange', from: '#ffffffff', to: '#ff000000', useAlpha }]);
+    expect([...data]).toEqual(useAlpha === false
+      ? [255, 0, 0, 255, 255, 0, 0, 128, 255, 0, 0, 0, 255, 254, 255, 255]
+      : [255, 0, 0, 0, 255, 255, 255, 128, 255, 255, 255, 0, 255, 254, 255, 255]);
+  }
+  const data = new Uint8ClampedArray([3, 167, 223, 128]);
+  applyImageEffects(data, [{ kind: 'grayscale' }]);
+  expect([...data]).toEqual([124, 124, 124, 128]);
+});
+
+test('a duotone endpoint modulates alpha instead of replacing it', () => {
+  const data = new Uint8ClampedArray([255, 255, 255, 200, 0, 0, 0, 0]);
+  applyImageEffects(data, [{ kind: 'duotone', shadow: '#000000ff', highlight: '#ffffff80' }]);
+  // The white pixel takes half the highlight's alpha; the transparent one stays transparent.
+  expect([...data]).toEqual([255, 255, 255, 100, 0, 0, 0, 0]);
+
+  const opaque = new Uint8ClampedArray([255, 255, 255, 200]);
+  applyImageEffects(opaque, [{ kind: 'duotone', shadow: '#000000', highlight: '#ffffff' }]);
+  expect([...opaque]).toEqual([255, 255, 255, 200]);
+});
+
+test('picture effects reach canvas before cropping without changing the shared source', async () => {
+  const original = globalThis.OffscreenCanvas;
+  try {
+    for (const failure of [null, 'read', 'context'] as const) {
+      // A source of its own per case: a recoloured bitmap is cached against the source it
+      // came from, so sharing one here would answer the later cases from the first.
+      const source = { width: 4, height: 1, pixels: new Uint8ClampedArray([3, 167, 223, 128]) };
+      class Surface {
+        pixels = new Uint8ClampedArray();
+        constructor(public width: number, public height: number) {}
+        getContext() {
+          if (failure === 'context') throw new Error('context unavailable');
+          return {
+            drawImage: () => { this.pixels = source.pixels.slice(); },
+            getImageData: () => {
+              if (failure === 'read') throw new Error('tainted');
+              return { data: this.pixels };
+            },
+            putImageData: () => {},
+          };
+        }
+      }
+      globalThis.OffscreenCanvas = Surface as unknown as typeof OffscreenCanvas;
+      const draws: unknown[][] = [];
+      const ctx = new Proxy({} as CanvasRenderingContext2D, {
+        get: (_, key) => key === 'drawImage' ? (...args: unknown[]) => draws.push(args) : () => {},
+        set: () => true,
+      });
+      await paintSlide(ctx, {
+        contractVersion: 1,
+        width: 100,
+        height: 100,
+        primitives: [
+          { kind: 'image', objectId: 1, name: 'Effect', x: 10, y: 20, w: 40, h: 10,
+            assetId: 'image', crop: { left: 0.25 }, effects: [{ kind: 'biLevel', threshold: 0.25 }] },
+          { kind: 'image', objectId: 2, name: 'Control', x: 10, y: 40, w: 40, h: 10, assetId: 'image' },
+        ],
+      }, 1, 1, { resolveImage: async () => source as unknown as CanvasImageSource });
+      expect(draws).toHaveLength(2);
+      expect(draws[0].slice(1)).toEqual([1, 0, 3, 1, 10, 20, 40, 10]);
+      expect([...(draws[0][0] as typeof source).pixels]).toEqual(
+        failure ? [3, 167, 223, 128] : [255, 255, 255, 128]
+      );
+      expect(draws[1][0]).toBe(source);
+      expect([...source.pixels]).toEqual([3, 167, 223, 128]);
+    }
+  } finally {
+    if (original === undefined) Reflect.deleteProperty(globalThis, 'OffscreenCanvas');
+    else globalThis.OffscreenCanvas = original;
+  }
+});
+
+/** Installs a fake OffscreenCanvas that records each surface's size and does no pixel work. */
+async function withSurfaces(
+  run: (surfaces: { width: number; height: number }[]) => Promise<void>
+): Promise<void> {
+  const original = globalThis.OffscreenCanvas;
+  const surfaces: { width: number; height: number }[] = [];
+  class Surface {
+    constructor(public width: number, public height: number) {
+      surfaces.push({ width, height });
+    }
+    getContext() {
+      return {
+        drawImage: () => {},
+        getImageData: () => ({ data: new Uint8ClampedArray(4) }),
+        putImageData: () => {},
+      };
+    }
+  }
+  globalThis.OffscreenCanvas = Surface as unknown as typeof OffscreenCanvas;
+  try {
+    await run(surfaces);
+  } finally {
+    if (original === undefined) Reflect.deleteProperty(globalThis, 'OffscreenCanvas');
+    else globalThis.OffscreenCanvas = original;
+  }
+}
+
+/** Paints one picture with `effects` from `source` and returns the canvas's drawImage calls. */
+async function paintEffect(source: object, effects: ImageEffect[]): Promise<unknown[][]> {
+  const draws: unknown[][] = [];
+  const ctx = new Proxy({} as CanvasRenderingContext2D, {
+    get: (_, key) => key === 'drawImage' ? (...args: unknown[]) => draws.push(args) : () => {},
+    set: () => true,
+  });
+  await paintSlide(ctx, {
+    contractVersion: 1,
+    width: 100,
+    height: 100,
+    primitives: [
+      { kind: 'image', objectId: 1, name: 'Effect', x: 10, y: 20, w: 40, h: 10, assetId: 'image', effects },
+    ],
+  }, 1, 1, { resolveImage: async () => source as unknown as CanvasImageSource });
+  return draws;
+}
+
+test('a recolouring is reused for the same source and effects and redone for another list', async () => {
+  await withSurfaces(async (surfaces) => {
+    const source = { width: 4, height: 1 };
+    const biLevel: ImageEffect[] = [{ kind: 'biLevel', threshold: 0.25 }];
+    const first = await paintEffect(source, biLevel);
+    const second = await paintEffect(source, biLevel);
+    expect(surfaces).toHaveLength(1);
+    expect(first[0][0]).not.toBe(source);
+    expect(second[0][0]).toBe(first[0][0]);
+    await paintEffect(source, [{ kind: 'grayscale' }]);
+    expect(surfaces).toHaveLength(2);
+    await paintEffect({ width: 4, height: 1 }, biLevel);
+    expect(surfaces).toHaveLength(3);
+  });
+});
+
+test('an oversized bitmap is recoloured within the pixel cap and drawn back at picture size', async () => {
+  await withSurfaces(async (surfaces) => {
+    const draws = await paintEffect({ width: 8192, height: 8192 }, [{ kind: 'grayscale' }]);
+    expect(surfaces).toEqual([{ width: 5792, height: 5792 }]);
+    expect(draws[0].slice(1)).toEqual([0, 0, 5792, 5792, 10, 20, 40, 10]);
+    await paintEffect({ width: 8192, height: 4096 }, [{ kind: 'grayscale' }]);
+    expect(surfaces[1]).toEqual({ width: 8192, height: 4096 });
+  });
+});
+
+test('a video frame is recoloured on every paint rather than kept', async () => {
+  await withSurfaces(async (surfaces) => {
+    const video = { videoWidth: 4, videoHeight: 1 };
+    const first = await paintEffect(video, [{ kind: 'grayscale' }]);
+    const second = await paintEffect(video, [{ kind: 'grayscale' }]);
+    expect(surfaces).toEqual([{ width: 4, height: 1 }, { width: 4, height: 1 }]);
+    expect(first[0][0]).not.toBe(video);
+    expect(second[0][0]).not.toBe(first[0][0]);
+  });
+});
+
+test('retained recolourings stay within the pixel budget, dropping the least recently used', async () => {
+  await withSurfaces(async (surfaces) => {
+    const effects: ImageEffect[] = [{ kind: 'grayscale' }];
+    const a = { width: 8192, height: 4096 };
+    const b = { width: 8192, height: 4096 };
+    const c = { width: 8192, height: 4096 };
+    for (const source of [a, b, c]) await paintEffect(source, effects);
+    expect(surfaces).toHaveLength(3);
+    await paintEffect(b, effects);
+    expect(surfaces).toHaveLength(3);
+    await paintEffect(a, effects);
+    expect(surfaces).toHaveLength(4);
+    await paintEffect(b, effects);
+    expect(surfaces).toHaveLength(4);
+    await paintEffect(c, effects);
+    expect(surfaces).toHaveLength(5);
+  });
+});
+
+describe('PPTX text overflow', () => {
+  function harness() {
+    const calls: string[] = [];
+    const ctx = new Proxy(
+      {
+        clip: () => calls.push('clip'),
+        fillText: (t: string) => calls.push(`text:${t}`),
+        rect: () => calls.push('rect'),
+      } as Record<string, unknown>,
+      {
+        get(target, property) {
+          if (property in target) return target[property as string];
+          return () => undefined;
+        },
+        set(target, property, value) {
+          target[property as string] = value;
+          return true;
+        },
+      }
+    ) as unknown as CanvasRenderingContext2D;
+    return { calls, ctx };
+  }
+
+  function list(overflow: boolean): SlideDisplayList {
+    return {
+      contractVersion: 1,
+      width: 320,
+      height: 180,
+      primitives: [
+        {
+          kind: 'textBox',
+          objectId: 1,
+          x: 10,
+          y: 10,
+          w: 100,
+          h: 20,
+          anchor: 'top',
+          paragraphs: [],
+          overflow,
+          lines: [
+            {
+              x: 10,
+              y: 10,
+              width: 100,
+              height: 40,
+              baseline: 30,
+              start: 0,
+              end: 5,
+              caretStops: [],
+              runs: [
+                {
+                  text: 'spill',
+                  start: 0,
+                  end: 5,
+                  x: 10,
+                  width: 100,
+                  fontId: 0,
+                  fontFamily: 'Arial',
+                  fontSizePx: 40,
+                  bold: false,
+                  italic: false,
+                  underline: false,
+                  color: '#000000',
+                  glyphs: [],
+                },
+              ],
+            },
+          ],
+        },
+      ],
+    } as unknown as SlideDisplayList;
+  }
+
+  test('text taller than its box is not clipped to it', async () => {
+    const { calls, ctx } = harness();
+    await paintSlide(ctx, list(true), 1, 1, {});
+    expect(calls).not.toContain('clip');
+    expect(calls).toContain('text:spill');
+  });
+
+  test('text that fits is still clipped to its box', async () => {
+    const { calls, ctx } = harness();
+    await paintSlide(ctx, list(false), 1, 1, {});
+    expect(calls).toContain('clip');
   });
 });
 

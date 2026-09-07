@@ -2,7 +2,8 @@ use std::collections::BTreeMap;
 
 pub use ooxml_drawingml::ShapeStyle;
 use ooxml_drawingml::{
-    ColorValue, GeometryPathCommand, ShapeFill, ShapeOutline, Theme, ThemeFormatScheme,
+    ColorValue, GeometryPathCommand, ShapeEffects, ShapeFill, ShapeOutline, Theme,
+    ThemeFormatScheme,
 };
 use serde::{Deserialize, Serialize};
 
@@ -262,8 +263,28 @@ pub struct Shape {
     #[serde(default)]
     pub adjust_values: BTreeMap<String, f64>,
     pub fill: Option<ShapeFill>,
+    /// The image behind an `a:blipFill`, when the fill is a stretched picture.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub picture_fill: Option<Box<PictureFill>>,
     pub outline: Option<ShapeOutline>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub effects: Option<ShapeEffects>,
     pub text: Option<TextBody>,
+}
+
+/// An `a:blipFill` on a shape: the image, and the box it stretches into.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PictureFill {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub relationship_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub media_part_path: Option<String>,
+    #[serde(default, skip_serializing_if = "PictureCrop::is_whole")]
+    pub crop: PictureCrop,
+    /// `a:stretch/a:fillRect` insets, in thousandths of a percent of the box.
+    #[serde(default, skip_serializing_if = "PictureCrop::is_whole")]
+    pub fill_rect: PictureCrop,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -284,6 +305,9 @@ pub struct Picture {
     pub relationship_id: Option<String>,
     pub media_part_path: Option<String>,
     pub crop: PictureCrop,
+    /// Bitmap effects in document order.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub effects: Vec<BlipEffect>,
     /// Preset mask; defaults to the frame rectangle.
     #[serde(default = "rect_geometry", skip_serializing_if = "is_rect")]
     pub geometry: String,
@@ -291,6 +315,8 @@ pub struct Picture {
     pub adjust_values: BTreeMap<String, f64>,
     pub fill: Option<ShapeFill>,
     pub outline: Option<ShapeOutline>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub shape_effects: Option<ShapeEffects>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub style: Option<Box<ShapeStyle>>,
 }
@@ -303,12 +329,52 @@ fn is_rect(geometry: &str) -> bool {
     geometry == "rect"
 }
 
+/// Bitmap effects with unresolved colours.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(tag = "type", rename_all = "camelCase")]
+pub enum BlipEffect {
+    /// `a:biLevel`: luminance below `threshold` becomes black, the rest white.
+    BiLevel { threshold: f64 },
+    /// `a:grayscl`.
+    Grayscale,
+    /// `a:duotone`: luminance interpolates between the two colours.
+    Duotone {
+        shadow: Option<ColorValue>,
+        highlight: Option<ColorValue>,
+    },
+    /// Exact colour replacement.
+    ColorChange {
+        from: Option<ColorValue>,
+        to: Option<ColorValue>,
+        #[serde(
+            default = "default_use_alpha",
+            skip_serializing_if = "use_alpha_is_default",
+            rename = "useAlpha"
+        )]
+        use_alpha: bool,
+    },
+}
+
+fn default_use_alpha() -> bool {
+    true
+}
+
+fn use_alpha_is_default(value: &bool) -> bool {
+    *value
+}
+
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct PictureCrop {
     pub left: i32,
     pub top: i32,
     pub right: i32,
     pub bottom: i32,
+}
+
+impl PictureCrop {
+    pub fn is_whole(&self) -> bool {
+        *self == Self::default()
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -360,6 +426,10 @@ pub struct TextBody {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub compat_line_spacing: Option<bool>,
     pub autofit: Option<TextAutofit>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub vertical_overflow: Option<TextOverflow>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub horizontal_overflow: Option<TextOverflow>,
     pub inset_left: Option<i64>,
     pub inset_top: Option<i64>,
     pub inset_right: Option<i64>,
@@ -370,6 +440,14 @@ pub struct TextBody {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub default_list_style: Option<Box<ParagraphProperties>>,
     pub paragraphs: Vec<TextParagraph>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum TextOverflow {
+    Overflow,
+    Clip,
+    Ellipsis,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]

@@ -49,13 +49,51 @@ pub struct GradientStop {
     pub color: String,
 }
 
+/// Bitmap effects with resolved colours.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(
+    tag = "kind",
+    rename_all = "camelCase",
+    rename_all_fields = "camelCase"
+)]
+pub enum ImageEffect {
+    BiLevel {
+        threshold: f32,
+    },
+    Grayscale,
+    Duotone {
+        shadow: String,
+        highlight: String,
+    },
+    ColorChange {
+        from: String,
+        to: String,
+        #[serde(
+            default = "default_use_alpha",
+            skip_serializing_if = "use_alpha_is_default"
+        )]
+        use_alpha: bool,
+    },
+}
+
+fn default_use_alpha() -> bool {
+    true
+}
+
+fn use_alpha_is_default(value: &bool) -> bool {
+    *value
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Stroke {
+    /// Solid colour or first gradient stop.
     pub color: String,
     pub width: f32,
     #[serde(default, skip_serializing_if = "is_false")]
     pub dashed: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub paint: Option<Paint>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub head_end: Option<StrokeEnd>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -69,6 +107,33 @@ pub struct StrokeEnd {
     pub kind: String,
     pub width: f32,
     pub length: f32,
+}
+
+/// An `a:outerShdw`: a blurred copy of the shape's own path, offset and tinted.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Shadow {
+    pub color: String,
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub blur: f32,
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub dx: f32,
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub dy: f32,
+    /// `sx`/`sy`. The anchor `algn` names is already folded into `dx`/`dy`, so a backend
+    /// scales about the surface origin and then translates.
+    #[serde(default = "unit_scale", skip_serializing_if = "is_unit_scale")]
+    pub scale_x: f32,
+    #[serde(default = "unit_scale", skip_serializing_if = "is_unit_scale")]
+    pub scale_y: f32,
+}
+
+fn unit_scale() -> f32 {
+    1.0
+}
+
+fn is_unit_scale(value: &f32) -> bool {
+    *value == 1.0
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Default, Serialize, Deserialize)]
@@ -135,6 +200,8 @@ pub enum Primitive {
         fill: Option<Paint>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         stroke: Option<Stroke>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        shadow: Option<Shadow>,
         #[serde(default, skip_serializing_if = "Transform::is_identity")]
         transform: Transform,
     },
@@ -149,6 +216,8 @@ pub enum Primitive {
         h: f32,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         asset_id: Option<String>,
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        effects: Vec<ImageEffect>,
         #[serde(default, skip_serializing_if = "ImageCrop::is_whole")]
         crop: ImageCrop,
         #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -322,6 +391,14 @@ mod tests {
     use super::*;
 
     #[test]
+    fn solid_stroke_keeps_legacy_json_and_reads_missing_paint() {
+        let json = r##"{"color":"#123456","width":2.0,"dashed":true}"##;
+        let stroke: Stroke = serde_json::from_str(json).unwrap();
+        assert!(stroke.paint.is_none());
+        assert_eq!(serde_json::to_string(&stroke).unwrap(), json);
+    }
+
+    #[test]
     fn identity_transform_is_omitted_from_json() {
         let list = SurfaceDisplayList {
             contract_version: CONTRACT_VERSION,
@@ -357,6 +434,7 @@ mod tests {
             w: 0.5,
             h: 0.25,
             asset_id: Some("ppt/media/betteroffice-mark.png".into()),
+            effects: Vec::new(),
             crop: ImageCrop::default(),
             path: None,
             stroke: None,

@@ -1,8 +1,8 @@
 use std::collections::BTreeMap;
 
 use ooxml_drawingml::{
-    ColorValue, GradientFill, GradientStop, LineEnd, ShapeFill, ShapeOutline, ShapeStyle,
-    StyleReference,
+    ColorValue, GradientFill, GradientStop, LineEnd, OuterShadow, ShapeEffects, ShapeFill,
+    ShapeOutline, ShapeStyle, StyleReference,
 };
 
 use crate::PptxError;
@@ -115,7 +115,12 @@ fn parse_shape_children(
     for child in parent.child_elements() {
         let shape = match child.local_name() {
             "cxnSp" if elements == ShapeElements::WithoutConnectors => None,
-            "sp" | "cxnSp" => Some(ShapeNode::Shape(parse_shape(child, part, budget)?)),
+            "sp" | "cxnSp" => Some(ShapeNode::Shape(parse_shape(
+                child,
+                relationships,
+                part,
+                budget,
+            )?)),
             "pic" => Some(ShapeNode::Picture(parse_picture(
                 child,
                 relationships,
@@ -146,6 +151,7 @@ fn parse_shape_children(
 
 fn parse_shape(
     element: &XmlElement,
+    relationships: &[Relationship],
     part: &str,
     budget: &mut ParseBudget<'_>,
 ) -> Result<Shape, PptxError> {
@@ -167,7 +173,11 @@ fn parse_shape(
         geometry: parse_geometry(properties),
         adjust_values: parse_adjust_values(properties, parse_shape_extent(transform)),
         fill: properties.and_then(parse_fill),
+        picture_fill: properties
+            .and_then(|value| parse_picture_fill(value, relationships))
+            .map(Box::new),
         outline: properties.and_then(parse_outline),
+        effects: properties.and_then(parse_effects),
         style: parse_shape_style(element.child("style"), properties).map(Box::new),
         text: element
             .child("txBody")
@@ -202,12 +212,42 @@ fn parse_picture(
         relationship_id,
         media_part_path,
         crop: parse_crop(blip_fill.and_then(|value| value.child("srcRect"))),
+        effects: parse_blip_effects(blip_fill.and_then(|value| value.child("blip"))),
         geometry: parse_geometry(properties),
         adjust_values: parse_adjust_values(properties, parse_shape_extent(transform)),
         fill: properties.and_then(parse_fill),
         outline: properties.and_then(parse_outline),
+        shape_effects: properties.and_then(parse_effects),
         style: parse_shape_style(element.child("style"), properties).map(Box::new),
     })
+}
+
+/// Reads supported bitmap effects in document order.
+fn parse_blip_effects(blip: Option<&XmlElement>) -> Vec<BlipEffect> {
+    let Some(blip) = blip else {
+        return Vec::new();
+    };
+    blip.child_elements()
+        .filter_map(|child| match child.local_name() {
+            "biLevel" => Some(BlipEffect::BiLevel {
+                threshold: percentage_attribute(child, "thresh").unwrap_or(0.5),
+            }),
+            "grayscl" => Some(BlipEffect::Grayscale),
+            "duotone" => {
+                let mut colors = child.child_elements().filter_map(parse_color_element);
+                Some(BlipEffect::Duotone {
+                    shadow: colors.next(),
+                    highlight: colors.next(),
+                })
+            }
+            "clrChange" => Some(BlipEffect::ColorChange {
+                from: child.child("clrFrom").and_then(parse_color_container),
+                to: child.child("clrTo").and_then(parse_color_container),
+                use_alpha: child.attribute("useA").map(parse_bool).unwrap_or(true),
+            }),
+            _ => None,
+        })
+        .collect()
 }
 
 fn parse_graphic_frame(
@@ -628,6 +668,7 @@ fn parse_shape_style(
                 .any(|child| is_fill_element(child) && !allowed.contains(&child.local_name()))
         })
     };
+    let line = properties.and_then(|value| value.child("ln"));
     let style = ShapeStyle {
         font_color: element
             .and_then(|value| value.child("fontRef"))
@@ -638,10 +679,10 @@ fn parse_shape_style(
             properties,
             &["solidFill", "gradFill", "blipFill", "noFill", "grpFill"],
         ),
-        line_disabled: unsupported(
-            properties.and_then(|value| value.child("ln")),
-            &["solidFill"],
-        ),
+        line_disabled: unsupported(line, &["solidFill", "gradFill"])
+            || line.is_some_and(|line| {
+                line.child("gradFill").is_some() && parse_outline_gradient(line).is_none()
+            }),
     };
     (!style.is_empty()).then_some(style)
 }
@@ -671,6 +712,32 @@ pub(crate) fn parse_fill_element(element: &XmlElement) -> Option<ShapeFill> {
         "grpFill" => Some(ShapeFill::named(GROUP_FILL)),
         _ => None,
     }
+}
+
+/// Resolves a stretched shape picture fill.
+fn parse_picture_fill(element: &XmlElement, relationships: &[Relationship]) -> Option<PictureFill> {
+    let fill = element
+        .child_elements()
+        .find(|child| is_fill_element(child))?;
+    if fill.local_name() != "blipFill" || fill.child("tile").is_some() {
+        return None;
+    }
+    let relationship_id = fill
+        .child("blip")
+        .and_then(|blip| {
+            blip.attribute("r:embed")
+                .or_else(|| blip.attribute_local("embed"))
+        })
+        .map(str::to_owned)?;
+    Some(PictureFill {
+        media_part_path: relationship_target(relationships, &relationship_id),
+        relationship_id: Some(relationship_id),
+        crop: parse_crop(fill.child("srcRect")),
+        fill_rect: parse_crop(
+            fill.child("stretch")
+                .and_then(|value| value.child("fillRect")),
+        ),
+    })
 }
 
 /// Marker left by `<a:grpFill/>`, standing until an ancestor group resolves it or the tree
@@ -765,6 +832,7 @@ pub(crate) fn parse_outline_element(line: &XmlElement) -> Option<ShapeOutline> {
     Some(ShapeOutline {
         width: line.attribute("w").and_then(|value| value.parse().ok()),
         color: line.child("solidFill").and_then(parse_color_container),
+        gradient: parse_outline_gradient(line),
         style: line
             .child("prstDash")
             .and_then(|value| value.attribute("val"))
@@ -779,6 +847,53 @@ pub(crate) fn parse_outline_element(line: &XmlElement) -> Option<ShapeOutline> {
     })
 }
 
+fn parse_effects(element: &XmlElement) -> Option<ShapeEffects> {
+    let list = element.child("effectLst")?;
+    let Some(shadow) = list.child("outerShdw") else {
+        return Some(ShapeEffects::default());
+    };
+    Some(ShapeEffects {
+        outer_shadow: Some(OuterShadow {
+            color: parse_color_container(shadow),
+            blur_radius: numeric_attribute(Some(shadow), "blurRad")
+                .unwrap_or_default()
+                .max(0),
+            distance: numeric_attribute(Some(shadow), "dist")
+                .unwrap_or_default()
+                .max(0),
+            direction: numeric_attribute(Some(shadow), "dir").unwrap_or_default(),
+            rotate_with_shape: shadow
+                .attribute("rotWithShape")
+                .is_none_or(|value| value != "0" && value != "false"),
+            scale_x: shadow_scale(shadow, "sx"),
+            scale_y: shadow_scale(shadow, "sy"),
+            alignment: shadow
+                .attribute("algn")
+                .filter(|value| RECT_ALIGNMENTS.contains(value))
+                .unwrap_or("b")
+                .to_owned(),
+        }),
+    })
+}
+
+/// `ST_RectAlignment`, the anchor a scaled shadow keeps.
+const RECT_ALIGNMENTS: [&str; 9] = ["tl", "t", "tr", "l", "ctr", "r", "bl", "b", "br"];
+
+/// `sx`/`sy`, which are thousandths of a percent and may legitimately exceed 100%.
+fn shadow_scale(shadow: &XmlElement, name: &str) -> f64 {
+    shadow
+        .attribute(name)
+        .and_then(|value| value.parse::<i32>().ok())
+        .map(|value| f64::from(value) / 100_000.0)
+        .unwrap_or(1.0)
+}
+
+fn parse_outline_gradient(line: &XmlElement) -> Option<GradientFill> {
+    line.child("gradFill")
+        .and_then(|fill| parse_gradient_fill(fill).gradient)
+        .filter(|gradient| !gradient.stops.is_empty())
+}
+
 fn parse_line_end(element: &XmlElement) -> LineEnd {
     LineEnd {
         end_type: element.attribute("type").unwrap_or("none").to_owned(),
@@ -788,12 +903,10 @@ fn parse_line_end(element: &XmlElement) -> LineEnd {
 }
 
 pub(crate) fn parse_color_container(element: &XmlElement) -> Option<ColorValue> {
-    let color = element.child_elements().find(|value| {
-        matches!(
-            value.local_name(),
-            "srgbClr" | "schemeClr" | "sysClr" | "prstClr"
-        )
-    })?;
+    element.child_elements().find_map(parse_color_element)
+}
+
+fn parse_color_element(color: &XmlElement) -> Option<ColorValue> {
     let mut parsed = match color.local_name() {
         "srgbClr" => ColorValue {
             rgb: color.attribute("val").map(str::to_owned),
@@ -919,6 +1032,8 @@ pub(crate) fn parse_text_body(
             .and_then(|value| value.attribute("compatLnSpc"))
             .map(parse_bool),
         autofit: body_properties.and_then(parse_text_autofit),
+        vertical_overflow: parse_text_overflow(body_properties, "vertOverflow"),
+        horizontal_overflow: parse_text_overflow(body_properties, "horzOverflow"),
         inset_left: numeric_attribute(body_properties, "lIns"),
         inset_top: numeric_attribute(body_properties, "tIns"),
         inset_right: numeric_attribute(body_properties, "rIns"),
@@ -930,6 +1045,15 @@ pub(crate) fn parse_text_body(
             .map(|properties| Box::new(parse_paragraph_properties(Some(properties)))),
         paragraphs,
     })
+}
+
+fn parse_text_overflow(body: Option<&XmlElement>, name: &str) -> Option<crate::TextOverflow> {
+    match body?.attribute(name)? {
+        "overflow" => Some(crate::TextOverflow::Overflow),
+        "clip" => Some(crate::TextOverflow::Clip),
+        "ellipsis" => Some(crate::TextOverflow::Ellipsis),
+        _ => None,
+    }
 }
 
 fn parse_text_autofit(body_properties: &XmlElement) -> Option<TextAutofit> {
@@ -1204,6 +1328,62 @@ mod tests {
     }
 
     #[test]
+    fn a_blip_fill_on_a_shape_resolves_its_image() {
+        let limits = ParseLimits::default();
+        let mut budget = ParseBudget::new(&limits);
+        let root = parse_xml(
+            br#"<p:sld><p:cSld><p:spTree><p:sp><p:nvSpPr><p:cNvPr id="2" name="Filled"/><p:nvPr/></p:nvSpPr><p:spPr><a:prstGeom prst="rect"><a:avLst/></a:prstGeom><a:blipFill><a:blip r:embed="rId7"/><a:srcRect l="10000" b="5000"/><a:stretch><a:fillRect l="-53000"/></a:stretch></a:blipFill></p:spPr></p:sp><p:sp><p:nvSpPr><p:cNvPr id="3" name="Tiled"/><p:nvPr/></p:nvSpPr><p:spPr><a:blipFill><a:blip r:embed="rId7"/><a:tile tx="0" ty="0"/></a:blipFill></p:spPr></p:sp><p:sp><p:nvSpPr><p:cNvPr id="4" name="Solid"/><p:nvPr/></p:nvSpPr><p:spPr><a:solidFill><a:srgbClr val="DC2626"/></a:solidFill></p:spPr></p:sp></p:spTree></p:cSld></p:sld>"#,
+            "ppt/slides/slide1.xml",
+            &mut budget,
+        )
+        .unwrap();
+        let relationships = [Relationship {
+            id: "rId7".to_owned(),
+            relationship_type:
+                "http://schemas.openxmlformats.org/officeDocument/2006/relationships/image"
+                    .to_owned(),
+            target: "../media/image1.png".to_owned(),
+            target_mode: crate::TargetMode::Internal,
+            resolved_target: Some("ppt/media/image1.png".to_owned()),
+        }];
+        let data = common_slide_data(
+            &root,
+            &relationships,
+            "ppt/slides/slide1.xml",
+            &mut budget,
+            ShapeElements::WithConnectors,
+        )
+        .unwrap();
+
+        let ShapeNode::Shape(filled) = &data.shapes[0] else {
+            panic!("expected a shape");
+        };
+        assert_eq!(
+            filled.fill.as_ref().map(|fill| fill.fill_type.as_str()),
+            Some("picture")
+        );
+        let picture = filled.picture_fill.as_ref().expect("blip resolves");
+        assert_eq!(picture.relationship_id.as_deref(), Some("rId7"));
+        assert_eq!(
+            picture.media_part_path.as_deref(),
+            Some("ppt/media/image1.png")
+        );
+        assert_eq!(picture.crop.left, 10_000);
+        assert_eq!(picture.crop.bottom, 5_000);
+        assert_eq!(picture.fill_rect.left, -53_000);
+
+        let ShapeNode::Shape(tiled) = &data.shapes[1] else {
+            panic!("expected a shape");
+        };
+        assert!(tiled.picture_fill.is_none());
+
+        let ShapeNode::Shape(solid) = &data.shapes[2] else {
+            panic!("expected a shape");
+        };
+        assert!(solid.picture_fill.is_none());
+    }
+
+    #[test]
     fn a_shape_style_supplies_the_default_text_colour() {
         let limits = ParseLimits::default();
         let mut budget = ParseBudget::new(&limits);
@@ -1437,6 +1617,98 @@ mod tests {
     }
 
     #[test]
+    fn keeps_blip_colour_effects_in_document_order() {
+        let limits = ParseLimits::default();
+        let mut budget = ParseBudget::new(&limits);
+        let root = parse_xml(
+            br#"<p:sld><p:cSld><p:spTree><p:pic><p:nvPicPr><p:cNvPr id="7" name="Logo"/></p:nvPicPr><p:blipFill><a:blip r:embed="rId3"><a:clrChange><a:clrFrom><a:srgbClr val="FFFFFF"/></a:clrFrom><a:clrTo><a:srgbClr val="FFFFFF"><a:alpha val="0"/></a:srgbClr></a:clrTo></a:clrChange><a:duotone><a:schemeClr val="bg2"><a:shade val="45000"/></a:schemeClr><a:prstClr val="white"/></a:duotone><a:biLevel thresh="25000"/><a:extLst/></a:blip><a:stretch/></p:blipFill><p:spPr><a:xfrm><a:off x="0" y="0"/><a:ext cx="10" cy="10"/></a:xfrm></p:spPr></p:pic></p:spTree></p:cSld></p:sld>"#,
+            "ppt/slides/slide1.xml",
+            &mut budget,
+        )
+        .unwrap();
+        let data = common_slide_data(
+            &root,
+            &[],
+            "ppt/slides/slide1.xml",
+            &mut budget,
+            ShapeElements::WithConnectors,
+        )
+        .unwrap();
+        let ShapeNode::Picture(picture) = &data.shapes[0] else {
+            panic!("expected picture");
+        };
+
+        assert_eq!(
+            picture.effects,
+            vec![
+                BlipEffect::ColorChange {
+                    use_alpha: true,
+                    from: Some(ColorValue {
+                        rgb: Some("FFFFFF".to_owned()),
+                        ..ColorValue::default()
+                    }),
+                    to: Some(ColorValue {
+                        rgb: Some("FFFFFF".to_owned()),
+                        alpha: Some(0.0),
+                        ..ColorValue::default()
+                    }),
+                },
+                BlipEffect::Duotone {
+                    shadow: Some(ColorValue {
+                        theme_color: Some("background2".to_owned()),
+                        theme_shade: Some("73".to_owned()),
+                        ..ColorValue::default()
+                    }),
+                    highlight: Some(ColorValue {
+                        rgb: Some("FFFFFF".to_owned()),
+                        ..ColorValue::default()
+                    }),
+                },
+                BlipEffect::BiLevel { threshold: 0.25 },
+            ]
+        );
+    }
+
+    #[test]
+    fn reads_a_gradient_fill_on_an_outline() {
+        let limits = ParseLimits::default();
+        let mut budget = ParseBudget::new(&limits);
+        let root = parse_xml(
+            br#"<p:sld><p:cSld><p:spTree><p:sp><p:nvSpPr><p:cNvPr id="2" name="Spoke"/></p:nvSpPr><p:spPr><a:prstGeom prst="line"><a:avLst/></a:prstGeom><a:ln w="19050"><a:gradFill><a:gsLst><a:gs pos="0"><a:srgbClr val="C00000"/></a:gs><a:gs pos="100000"><a:srgbClr val="C2C2C2"/></a:gs></a:gsLst><a:lin ang="5400000" scaled="1"/></a:gradFill></a:ln></p:spPr></p:sp></p:spTree></p:cSld></p:sld>"#,
+            "ppt/slides/slide1.xml",
+            &mut budget,
+        )
+        .unwrap();
+        let data = common_slide_data(
+            &root,
+            &[],
+            "ppt/slides/slide1.xml",
+            &mut budget,
+            ShapeElements::WithConnectors,
+        )
+        .unwrap();
+        let ShapeNode::Shape(shape) = &data.shapes[0] else {
+            panic!("expected shape");
+        };
+        let outline = shape.outline.as_ref().unwrap();
+
+        assert_eq!(outline.width, Some(19_050.0));
+        assert!(outline.color.is_none());
+        let gradient = outline.gradient.as_ref().unwrap();
+        assert_eq!(gradient.gradient_type, "linear");
+        assert_eq!(gradient.angle, Some(90.0));
+        assert_eq!(gradient.stops.len(), 2);
+        assert_eq!(gradient.stops[0].color.rgb.as_deref(), Some("C00000"));
+        assert_eq!(gradient.stops[1].position, 100_000.0);
+        assert!(
+            shape
+                .style
+                .as_ref()
+                .is_none_or(|style| !style.line_disabled)
+        );
+    }
+
+    #[test]
     fn reads_line_spacing_as_a_percentage_or_an_exact_height() {
         let spacing = |body: &str| {
             let limits = ParseLimits::default();
@@ -1614,6 +1886,8 @@ mod tests {
         let json = serde_json::to_value(body).unwrap();
         assert!(json.get("listStyle").is_none());
         assert!(json.get("defaultListStyle").is_none());
+        assert!(json.get("verticalOverflow").is_none());
+        assert!(json.get("horizontalOverflow").is_none());
         assert_eq!(serde_json::from_value::<TextBody>(json).unwrap(), *body);
     }
 
@@ -2009,6 +2283,109 @@ mod tests {
         let actual = values.get(name).unwrap();
         assert_eq!(actual.value, expected);
         assert_eq!(actual.extent_power, expected_power);
+    }
+
+    #[test]
+    fn a_shadow_reads_its_scale_and_alignment() {
+        let limits = ParseLimits::default();
+        let mut budget = ParseBudget::new(&limits);
+        let root = parse_xml(
+            br#"<p:spPr><a:effectLst><a:outerShdw blurRad="63500" sx="102000" sy="98000" algn="ctr"><a:prstClr val="black"><a:alpha val="40000"/></a:prstClr></a:outerShdw></a:effectLst></p:spPr>"#,
+            "ppt/slides/slide1.xml",
+            &mut budget,
+        )
+        .unwrap();
+        let shadow = parse_effects(&root).unwrap().outer_shadow.unwrap();
+        assert!((shadow.scale_x - 1.02).abs() < 1e-9);
+        assert!((shadow.scale_y - 0.98).abs() < 1e-9);
+        assert_eq!(shadow.alignment, "ctr");
+
+        let root = parse_xml(
+            br#"<p:spPr><a:effectLst><a:outerShdw blurRad="1" sx="0" algn="bogus"><a:srgbClr val="000000"/></a:outerShdw></a:effectLst></p:spPr>"#,
+            "ppt/slides/slide1.xml",
+            &mut budget,
+        )
+        .unwrap();
+        let shadow = parse_effects(&root).unwrap().outer_shadow.unwrap();
+        assert_eq!((shadow.scale_x, shadow.scale_y), (0.0, 1.0));
+        assert_eq!(shadow.alignment, "b");
+
+        for (value, expected) in [
+            ("-150000", -1.5),
+            ("2147483647", 21474.83647),
+            ("NaN", 1.0),
+            ("inf", 1.0),
+        ] {
+            let xml = format!("<a:outerShdw sx=\"{value}\" sy=\"{value}\"/>");
+            let root = parse_xml(xml.as_bytes(), "slide.xml", &mut budget).unwrap();
+            assert_eq!(shadow_scale(&root, "sx"), expected);
+            assert_eq!(shadow_scale(&root, "sy"), expected);
+        }
+    }
+
+    #[test]
+    fn an_outer_shadow_reaches_the_model_with_its_colour_and_geometry() {
+        let limits = ParseLimits::default();
+        let mut budget = ParseBudget::new(&limits);
+        let root = parse_xml(
+            br#"<p:sld><p:cSld><p:spTree><p:sp><p:nvSpPr><p:cNvPr id="2" name="Shadowed"/><p:nvPr/></p:nvSpPr><p:spPr><a:effectLst><a:outerShdw blurRad="25400" dist="38100" dir="2700000" rotWithShape="0"><a:schemeClr val="bg1"><a:lumMod val="50000"/><a:alpha val="40000"/></a:schemeClr></a:outerShdw></a:effectLst></p:spPr></p:sp><p:sp><p:nvSpPr><p:cNvPr id="3" name="Plain"/><p:nvPr/></p:nvSpPr><p:spPr><a:solidFill><a:srgbClr val="FF0000"/></a:solidFill></p:spPr></p:sp><p:sp><p:nvSpPr><p:cNvPr id="4" name="Hidden effects only"/><p:nvPr/></p:nvSpPr><p:spPr><a:extLst><a:ext uri="{909E8E84-426E-40DD-AFC4-6F175D3DCCD1}"><a14:hiddenEffects xmlns:a14="http://schemas.microsoft.com/office/drawing/2010/main"><a:effectLst><a:outerShdw blurRad="12700"><a:srgbClr val="000000"/></a:outerShdw></a:effectLst></a14:hiddenEffects></a:ext></a:extLst></p:spPr></p:sp></p:spTree></p:cSld></p:sld>"#,
+            "ppt/slides/slide1.xml",
+            &mut budget,
+        )
+        .unwrap();
+        let data = common_slide_data(
+            &root,
+            &[],
+            "ppt/slides/slide1.xml",
+            &mut budget,
+            ShapeElements::WithConnectors,
+        )
+        .unwrap();
+        let effects_of = |node: &ShapeNode| match node {
+            ShapeNode::Shape(shape) => shape.effects.clone(),
+            _ => panic!("expected a shape"),
+        };
+
+        let shadow = effects_of(&data.shapes[0])
+            .expect("the shape should have effects")
+            .outer_shadow
+            .expect("the effects should carry an outer shadow");
+        assert_eq!(
+            (shadow.blur_radius, shadow.distance, shadow.direction),
+            (25_400, 38_100, 2_700_000)
+        );
+        assert!(!shadow.rotate_with_shape);
+        let color = shadow.color.expect("the shadow should have a colour");
+        assert_eq!(color.theme_color.as_deref(), Some("background1"));
+        assert_eq!(color.luminance_modulation, Some(0.5));
+        assert_eq!(color.alpha, Some(0.4));
+
+        assert_eq!(effects_of(&data.shapes[1]), None);
+        assert_eq!(effects_of(&data.shapes[2]), None);
+    }
+    #[test]
+    fn empty_effect_lists_override_inherited_effects_and_defaults_stay_omitted() {
+        let limits = ParseLimits::default();
+        let mut budget = ParseBudget::new(&limits);
+        let properties = parse_xml(
+            br#"<a:spPr><a:effectLst/></a:spPr>"#,
+            "slide.xml",
+            &mut budget,
+        )
+        .unwrap();
+        assert_eq!(parse_effects(&properties), Some(ShapeEffects::default()));
+        let properties = parse_xml(br#"<a:spPr><a:effectLst><a:outerShdw><a:srgbClr val="FF0000"/></a:outerShdw></a:effectLst></a:spPr>"#, "slide.xml", &mut budget).unwrap();
+        let shadow = parse_effects(&properties).unwrap().outer_shadow.unwrap();
+        assert!(shadow.rotate_with_shape);
+        assert_eq!(
+            (shadow.blur_radius, shadow.distance, shadow.direction),
+            (0, 0, 0)
+        );
+        let json = serde_json::to_value(&shadow).unwrap();
+        for key in ["blurRadius", "distance", "direction", "rotateWithShape"] {
+            assert!(json.get(key).is_none(), "{key}");
+        }
+        assert_eq!(serde_json::from_value::<OuterShadow>(json).unwrap(), shadow);
     }
 
     #[test]

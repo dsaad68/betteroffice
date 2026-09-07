@@ -65,6 +65,12 @@ export interface ShapeOutline {
   join?: string;
 }
 
+export type BlipEffect =
+  | { type: 'biLevel'; threshold: number }
+  | { type: 'grayscale' }
+  | { type: 'duotone'; shadow: ColorValue | null; highlight: ColorValue | null }
+  | { type: 'colorChange'; from: ColorValue | null; to: ColorValue | null; useAlpha?: boolean };
+
 export interface ShapeSnapshot {
   id: string;
   sourceId: number;
@@ -87,6 +93,7 @@ export interface ShapeSnapshot {
   outline: ShapeOutline | null;
   resolvedOutlineColor: string | null;
   mediaPartPath: string | null;
+  blipEffects?: BlipEffect[];
   graphic: unknown | null;
   textStories: StorySnapshot[];
   children: ShapeSnapshot[];
@@ -248,11 +255,23 @@ export interface StrokeEnd {
 }
 
 export interface Stroke {
+  /** Solid colour or first gradient stop. */
   color: string;
   width: number;
   dashed?: boolean;
+  paint?: Paint;
   headEnd?: StrokeEnd;
   tailEnd?: StrokeEnd;
+}
+
+/** An `a:outerShdw`: a blurred copy of the shape's own path, offset and tinted. */
+export interface Shadow {
+  color: string;
+  blur?: number;
+  dx?: number;
+  dy?: number;
+  scaleX?: number;
+  scaleY?: number;
 }
 
 export interface PrimitiveTransform {
@@ -281,8 +300,15 @@ export interface ShapePrimitive extends PrimitiveBase {
   adjustValues?: Record<string, number>;
   fill?: Paint;
   stroke?: Stroke;
+  shadow?: Shadow;
 }
 
+/** An `a:blip` colour transform, colours already resolved to `#rrggbbaa`. */
+export type ImageEffect =
+  | { kind: 'biLevel'; threshold: number }
+  | { kind: 'grayscale' }
+  | { kind: 'duotone'; shadow: string; highlight: string }
+  | { kind: 'colorChange'; from: string; to: string; useAlpha?: boolean };
 export interface ImageCrop {
   left?: number;
   top?: number;
@@ -294,6 +320,8 @@ export interface ImagePrimitive extends PrimitiveBase {
   kind: 'image';
   name: string;
   assetId?: string;
+  /** Applied to the bitmap in order before it is drawn. */
+  effects?: ImageEffect[];
   /** Fraction of the source discarded per edge, from `a:srcRect`. */
   crop?: ImageCrop;
   /** Outline the picture is masked to, when its `spPr` gives it one. */
