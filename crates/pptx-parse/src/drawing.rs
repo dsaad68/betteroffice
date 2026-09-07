@@ -231,6 +231,10 @@ fn parse_blip_effects(blip: Option<&XmlElement>) -> Vec<BlipEffect> {
                 threshold: percentage_attribute(child, "thresh").unwrap_or(0.5),
             }),
             "grayscl" => Some(BlipEffect::Grayscale),
+            "lum" => Some(BlipEffect::Luminance {
+                brightness: fixed_percentage_attribute(child, "bright").unwrap_or(0.0),
+                contrast: fixed_percentage_attribute(child, "contrast").unwrap_or(0.0),
+            }),
             "duotone" => {
                 let mut colors = child.child_elements().filter_map(parse_color_element);
                 Some(BlipEffect::Duotone {
@@ -1024,6 +1028,16 @@ fn percentage_attribute(element: &XmlElement, name: &str) -> Option<f64> {
         .map(|value| value / 100_000.0)
 }
 
+/// Reads a signed `ST_FixedPercentage` attribute as a fraction.
+fn fixed_percentage_attribute(element: &XmlElement, name: &str) -> Option<f64> {
+    element
+        .attribute(name)?
+        .parse::<f64>()
+        .ok()
+        .filter(|value| value.is_finite())
+        .map(|value| (value / 100_000.0).clamp(-1.0, 1.0))
+}
+
 fn parse_text_paragraph(
     element: &XmlElement,
     part: &str,
@@ -1609,6 +1623,52 @@ mod tests {
                     }),
                 },
                 BlipEffect::BiLevel { threshold: 0.25 },
+            ]
+        );
+    }
+
+    #[test]
+    fn reads_lum_brightness_and_contrast_as_signed_fractions() {
+        let limits = ParseLimits::default();
+        let mut budget = ParseBudget::new(&limits);
+        let root = parse_xml(
+            br#"<p:sld><p:cSld><p:spTree><p:pic><p:nvPicPr><p:cNvPr id="7" name="Washout"/></p:nvPicPr><p:blipFill><a:blip r:embed="rId3"><a:lum bright="70000" contrast="-70000"/></a:blip><a:stretch/></p:blipFill><p:spPr><a:xfrm><a:off x="0" y="0"/><a:ext cx="10" cy="10"/></a:xfrm></p:spPr></p:pic><p:pic><p:nvPicPr><p:cNvPr id="8" name="Bare"/></p:nvPicPr><p:blipFill><a:blip r:embed="rId3"><a:lum/></a:blip><a:stretch/></p:blipFill><p:spPr><a:xfrm><a:off x="0" y="0"/><a:ext cx="10" cy="10"/></a:xfrm></p:spPr></p:pic><p:pic><p:nvPicPr><p:cNvPr id="9" name="Beyond"/></p:nvPicPr><p:blipFill><a:blip r:embed="rId3"><a:lum bright="-400000" contrast="400000"/></a:blip><a:stretch/></p:blipFill><p:spPr><a:xfrm><a:off x="0" y="0"/><a:ext cx="10" cy="10"/></a:xfrm></p:spPr></p:pic></p:spTree></p:cSld></p:sld>"#,
+            "ppt/slides/slide1.xml",
+            &mut budget,
+        )
+        .unwrap();
+        let data = common_slide_data(
+            &root,
+            &[],
+            "ppt/slides/slide1.xml",
+            &mut budget,
+            ShapeElements::WithConnectors,
+        )
+        .unwrap();
+        let effects: Vec<_> = data
+            .shapes
+            .iter()
+            .map(|node| match node {
+                ShapeNode::Picture(picture) => picture.effects.clone(),
+                _ => panic!("expected picture"),
+            })
+            .collect();
+
+        assert_eq!(
+            effects,
+            vec![
+                vec![BlipEffect::Luminance {
+                    brightness: 0.7,
+                    contrast: -0.7
+                }],
+                vec![BlipEffect::Luminance {
+                    brightness: 0.0,
+                    contrast: 0.0
+                }],
+                vec![BlipEffect::Luminance {
+                    brightness: -1.0,
+                    contrast: 1.0
+                }],
             ]
         );
     }

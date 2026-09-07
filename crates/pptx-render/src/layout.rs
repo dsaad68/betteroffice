@@ -2576,6 +2576,13 @@ fn image_effects(effects: &[BlipEffect], theme: &Theme) -> Vec<ImageEffect> {
                 threshold: (*threshold as f32).clamp(0.0, 1.0),
             }),
             BlipEffect::Grayscale => Some(ImageEffect::Grayscale),
+            BlipEffect::Luminance {
+                brightness,
+                contrast,
+            } => Some(ImageEffect::Luminance {
+                brightness: (*brightness as f32).clamp(-1.0, 1.0),
+                contrast: (*contrast as f32).clamp(-1.0, 1.0),
+            }),
             BlipEffect::Duotone { shadow, highlight } => Some(ImageEffect::Duotone {
                 shadow: rgba(shadow.as_ref())?,
                 highlight: rgba(highlight.as_ref())?,
