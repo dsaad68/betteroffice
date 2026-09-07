@@ -888,11 +888,18 @@ fn merge_source_render_shapes(target: &mut [ShapeNode], source: &[ShapeNode]) ->
     changed
 }
 
-/// Copies the chart-space fill, axis lines and series lines a source chart part
-/// declares.
+/// Copies the chart-space fill, axis lines, series lines and text properties a
+/// source chart part declares.
 fn merge_source_chart_properties(target: &mut ChartSpace, source: &ChartSpace) -> bool {
     let mut changed = target.fill != source.fill;
     target.fill.clone_from(&source.fill);
+    changed |= target.text != source.text || target.title_text != source.title_text;
+    target.text.clone_from(&source.text);
+    target.title_text.clone_from(&source.title_text);
+    if let (Some(target), Some(source)) = (&mut target.legend, &source.legend) {
+        changed |= target.text != source.text;
+        target.text.clone_from(&source.text);
+    }
     for (target, source) in target.plot_groups.iter_mut().zip(&source.plot_groups) {
         for (target, source) in target.series.iter_mut().zip(&source.series) {
             changed |= target.line != source.line;
@@ -901,8 +908,9 @@ fn merge_source_chart_properties(target: &mut ChartSpace, source: &ChartSpace) -
     }
     let mut merge_axis = |target: Option<&mut ChartAxis>, source: Option<&ChartAxis>| {
         if let (Some(target), Some(source)) = (target, source) {
-            changed |= target.line != source.line;
+            changed |= target.line != source.line || target.text != source.text;
             target.line.clone_from(&source.line);
+            target.text.clone_from(&source.text);
         }
     };
     if let (Some(target), Some(source)) = (&mut target.axes, &source.axes) {
@@ -2019,6 +2027,44 @@ mod tests {
         assert_eq!(target.space_before, source.space_before);
         assert_eq!(target.space_after, source.space_after);
         assert!(!merge_source_paragraph_properties(&mut target, &source));
+    }
+
+    #[test]
+    fn attaching_a_source_refreshes_chart_text_a_stored_package_never_carried() {
+        use ooxml_drawingml::chart::{ChartLegend, ChartTextProperties};
+
+        let styled = ChartTextProperties {
+            spacing_pt: Some(3.0),
+            ..ChartTextProperties::default()
+        };
+        let source = ChartSpace {
+            text: Some(styled.clone()),
+            title_text: Some(styled.clone()),
+            legend: Some(ChartLegend {
+                visible: true,
+                text: Some(styled.clone()),
+                ..ChartLegend::default()
+            }),
+            axis_list: Some(vec![ChartAxis {
+                text: Some(styled.clone()),
+                ..ChartAxis::default()
+            }]),
+            ..ChartSpace::default()
+        };
+        let mut target = ChartSpace {
+            legend: Some(ChartLegend {
+                visible: true,
+                ..ChartLegend::default()
+            }),
+            axis_list: Some(vec![ChartAxis::default()]),
+            ..ChartSpace::default()
+        };
+        assert!(merge_source_chart_properties(&mut target, &source));
+        assert_eq!(target.text.as_ref(), Some(&styled));
+        assert_eq!(target.title_text.as_ref(), Some(&styled));
+        assert_eq!(target.legend.unwrap().text.as_ref(), Some(&styled));
+        assert_eq!(target.axis_list.unwrap()[0].text.as_ref(), Some(&styled));
+        assert!(!merge_source_chart_properties(&mut source.clone(), &source));
     }
 
     #[test]
