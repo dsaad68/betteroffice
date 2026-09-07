@@ -226,3 +226,40 @@ Historical v1–v16 fixtures remain independent migration oracles. The new
 composition test also derives constructed legacy states from the v17 seed by
 restamping and removing bitmap-effect keys, then observes each migration's
 version and bitmap-effect keys through schema 18.
+
+## Run character spacing
+
+`run-spacing-main-v10.update.bin` was generated on main `069e4d66` from
+`crates/pptx-render/tests/fixtures/run-spacing.pptx` with client ID 32500.
+It exercises schema v19 source recovery, deferred attachment, and explicit zero overrides.
+
+`run-spacing-main-v11.update.bin` was generated from the same deck on main
+`cca2618c` with client ID 32500. Both main snapshots exercise migration to v19.
+
+`run-spacing-main-v12.update.bin` is the same source opened on main `3d95068f`
+with client ID 32500. All three native main snapshots recover tracking in v19.
+
+
+`run-spacing-main-v17.update.bin` and `run-spacing-shadow-main-v17.update.bin`
+are fresh schema-17 output from current main `1f30ea033b335af8cb5d8c1e02c96ffdf7a91913`.
+The corresponding `*-main-v18.update.bin` fixtures are fresh output from that
+main plus PR #334 at `42644c7297713d808e5733fa746b56166f73c25a`. They use locked
+dependencies and client ID 32500. No fixture version is restamped by the generator.
+
+`run-spacing-shadow.pptx` adds a black outer shadow (76200 EMU blur, 38100 EMU
+distance, 45 degrees, 40% opacity) to the first shape of `run-spacing.pptx`.
+The rest of the ZIP parts are unchanged. It demonstrates shadow and tracking
+recovery in the same document.
+
+Copy `generate_run_spacing_schema_snapshots.rs` to each base checkout's
+`crates/pptx-edit/examples/`, then run:
+
+```sh
+cargo run --locked -p betteroffice-pptx-edit --example generate_run_spacing_schema_snapshots -- /absolute/path/to/this/branch 18
+```
+
+Use `17` for the origin/main checkout. The generator verifies the base writer's
+schema and idempotent reopening. Historical v10/v11/v12 tracking snapshots and
+main's historical fixtures retain their original provenance. Tests observe every
+separate migration transaction through 18 and 19, then recover both shadows and
+tracking, preserve edits and explicit zero overrides, and reopen idempotently.
