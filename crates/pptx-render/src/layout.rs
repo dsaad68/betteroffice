@@ -1467,6 +1467,8 @@ struct ResolvedParagraph {
     margin_left_px: f32,
     margin_right_px: f32,
     line_spacing: Option<LineSpacing>,
+    space_before: Option<LineSpacing>,
+    space_after: Option<LineSpacing>,
     compat_line_spacing: bool,
     indent_px: f32,
     marker: Option<String>,
@@ -1577,6 +1579,8 @@ fn resolve_content(
             margin_left_px: emu_to_px(properties.margin_left.unwrap_or_default()),
             margin_right_px: emu_to_px(properties.margin_right.unwrap_or_default()),
             line_spacing: properties.line_spacing,
+            space_before: properties.space_before,
+            space_after: properties.space_after,
             compat_line_spacing,
             indent_px: emu_to_px(properties.indent.unwrap_or_default()),
             bullet_style: marker
@@ -1821,7 +1825,13 @@ fn layout_content(
 ) -> Result<LayoutText, RenderError> {
     let mut lines = Vec::new();
     let mut y = rect.y;
+    let mut previous: Option<&ResolvedParagraph> = None;
     for paragraph in &content.paragraphs {
+        if let Some(previous) = previous {
+            y += spacing_px(previous.space_after, previous, scale)
+                + spacing_px(paragraph.space_before, paragraph, scale);
+        }
+        previous = Some(paragraph);
         let paragraph_x = rect.x + paragraph.margin_left_px.max(0.0);
         let paragraph_width =
             (rect.w - paragraph.margin_left_px.max(0.0) - paragraph.margin_right_px.max(0.0))
@@ -1844,6 +1854,27 @@ fn layout_content(
         total_height: (y - rect.y).max(0.0),
         lines,
     })
+}
+
+/// Height of a `spcBef` or `spcAft`, whose percentages measure the text size.
+fn spacing_px(spacing: Option<LineSpacing>, paragraph: &ResolvedParagraph, scale: f32) -> f32 {
+    let height = match spacing {
+        Some(LineSpacing::Percent { value }) => {
+            let size_pt = paragraph
+                .runs
+                .iter()
+                .map(|run| run.style.font_size_pt)
+                .fold(0.0_f32, f32::max);
+            value as f32 * points_to_px(size_pt * scale)
+        }
+        Some(LineSpacing::Points { value }) => points_to_px(value as f32 * scale),
+        None => 0.0,
+    };
+    if height.is_finite() {
+        height.max(0.0)
+    } else {
+        0.0
+    }
 }
 
 fn layout_paragraph(
@@ -1997,6 +2028,8 @@ fn prepend_bullet(
         margin_left_px: 0.0,
         margin_right_px: 0.0,
         line_spacing: None,
+        space_before: None,
+        space_after: None,
         compat_line_spacing: false,
         indent_px: 0.0,
         marker: None,
@@ -2880,6 +2913,12 @@ fn merge_paragraph_properties(target: &mut ParagraphProperties, source: &Paragra
     }
     if source.line_spacing.is_some() {
         target.line_spacing = source.line_spacing;
+    }
+    if source.space_before.is_some() {
+        target.space_before = source.space_before;
+    }
+    if source.space_after.is_some() {
+        target.space_after = source.space_after;
     }
     if source.bullet_font.is_some() {
         target.bullet_font.clone_from(&source.bullet_font);
@@ -3887,6 +3926,8 @@ mod tests {
             margin_left_px: 0.0,
             margin_right_px: 0.0,
             line_spacing: None,
+            space_before: None,
+            space_after: None,
             compat_line_spacing: false,
             indent_px: 0.0,
             marker: None,
@@ -4145,6 +4186,8 @@ mod tests {
                 margin_left_px: 0.0,
                 margin_right_px: 0.0,
                 line_spacing: None,
+                space_before: None,
+                space_after: None,
                 compat_line_spacing: false,
                 indent_px: 0.0,
                 marker: None,
@@ -4217,6 +4260,8 @@ mod tests {
                 margin_left_px: 0.0,
                 margin_right_px: 0.0,
                 line_spacing: None,
+                space_before: None,
+                space_after: None,
                 compat_line_spacing: false,
                 indent_px: 0.0,
                 marker: None,
@@ -4274,6 +4319,8 @@ mod tests {
                 level: 0,
                 margin_left_px: 0.0,
                 margin_right_px: 0.0,
+                space_before: None,
+                space_after: None,
                 line_spacing: None,
                 compat_line_spacing: false,
                 indent_px: 0.0,

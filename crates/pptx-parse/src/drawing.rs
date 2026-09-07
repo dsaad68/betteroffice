@@ -1172,7 +1172,9 @@ fn parse_paragraph_properties(element: Option<&XmlElement>) -> ParagraphProperti
         margin_right: numeric_attribute(Some(element), "marR"),
         indent: numeric_attribute(Some(element), "indent"),
         bullet,
-        line_spacing: element.child("lnSpc").and_then(parse_line_spacing),
+        line_spacing: element.child("lnSpc").and_then(parse_text_spacing),
+        space_before: element.child("spcBef").and_then(parse_text_spacing),
+        space_after: element.child("spcAft").and_then(parse_text_spacing),
         bullet_font: if element.child("buFontTx").is_some() {
             Some(BulletFont::FollowText)
         } else {
@@ -1206,7 +1208,7 @@ fn parse_paragraph_properties(element: Option<&XmlElement>) -> ParagraphProperti
     }
 }
 
-fn parse_line_spacing(element: &XmlElement) -> Option<LineSpacing> {
+fn parse_text_spacing(element: &XmlElement) -> Option<LineSpacing> {
     if let Some(percent) = element.child("spcPct") {
         let raw = percent.attribute("val")?;
         let (raw, divisor) = raw
@@ -1867,6 +1869,58 @@ mod tests {
             None
         );
         assert_eq!(spacing(""), None);
+    }
+
+    #[test]
+    fn reads_the_space_before_and_after_a_paragraph() {
+        let properties = |body: &str| {
+            let limits = ParseLimits::default();
+            let mut budget = ParseBudget::new(&limits);
+            let xml = format!("<a:pPr>{body}</a:pPr>");
+            let root = parse_xml(
+                xml.as_bytes(),
+                "ppt/slideMasters/slideMaster1.xml",
+                &mut budget,
+            )
+            .unwrap();
+            parse_paragraph_properties(Some(&root))
+        };
+
+        let both = properties(
+            r#"<a:spcBef><a:spcPts val="1000"/></a:spcBef><a:spcAft><a:spcPct val="20000"/></a:spcAft>"#,
+        );
+        assert_eq!(both.space_before, Some(LineSpacing::Points { value: 10.0 }));
+        assert_eq!(both.space_after, Some(LineSpacing::Percent { value: 0.2 }));
+
+        let reset = properties(r#"<a:spcBef><a:spcPct val="0"/></a:spcBef>"#);
+        assert_eq!(
+            reset.space_before,
+            Some(LineSpacing::Percent { value: 0.0 })
+        );
+        assert_eq!(reset.space_after, None);
+
+        let contradictory =
+            properties(r#"<a:spcBef><a:spcPct val="50000"/><a:spcPts val="1200"/></a:spcBef>"#);
+        assert_eq!(
+            contradictory.space_before,
+            Some(LineSpacing::Percent { value: 0.5 })
+        );
+
+        assert_eq!(
+            properties(r#"<a:spcAft><a:spcPts val="158401"/></a:spcAft>"#).space_after,
+            None
+        );
+        assert_eq!(properties("").space_before, None);
+
+        let json = serde_json::to_value(&both).unwrap();
+        assert_eq!(json["spaceBefore"]["type"], "points");
+        assert_eq!(json["spaceAfter"]["value"], 0.2);
+        assert!(
+            serde_json::to_value(properties(""))
+                .unwrap()
+                .get("spaceBefore")
+                .is_none()
+        );
     }
 
     #[test]

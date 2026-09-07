@@ -475,7 +475,7 @@ pub struct TextParagraph {
     pub end_properties: Option<RunProperties>,
 }
 
-/// Paragraph line pitch.
+/// A spacing height, as a share of the text size or in points.
 #[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(
     tag = "type",
@@ -499,6 +499,10 @@ pub struct ParagraphProperties {
     pub bullet: Option<Bullet>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub line_spacing: Option<LineSpacing>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub space_before: Option<LineSpacing>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub space_after: Option<LineSpacing>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub bullet_font: Option<BulletFont>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
