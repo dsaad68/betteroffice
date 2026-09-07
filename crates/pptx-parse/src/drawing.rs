@@ -1,8 +1,8 @@
 use std::collections::BTreeMap;
 
 use ooxml_drawingml::{
-    ColorValue, GradientFill, GradientStop, LineEnd, ShapeFill, ShapeOutline, ShapeStyle,
-    StyleReference,
+    ColorValue, GradientFill, GradientStop, LineEnd, OuterShadow, ShapeEffects, ShapeFill,
+    ShapeOutline, ShapeStyle, StyleReference,
 };
 
 use crate::PptxError;
@@ -14,6 +14,8 @@ use crate::xml::{ParseBudget, XmlElement};
 const MAX_SAFE_EMU: i64 = 1_000_000_000_000_000;
 const ANGLE_UNITS_PER_DEGREE: f64 = 60_000.0;
 const ADJUSTMENT_SCALE: f64 = 100_000.0;
+/// `ST_TextPoint` bound: hundredths of a point, +/- 4000pt.
+const MAX_TEXT_SPACING_HUNDREDTHS: i32 = 400_000;
 
 #[derive(Clone, Copy)]
 struct GuideValue {
@@ -177,6 +179,7 @@ fn parse_shape(
             .and_then(|value| parse_picture_fill(value, relationships))
             .map(Box::new),
         outline: properties.and_then(parse_outline),
+        effects: properties.and_then(parse_effects),
         style: parse_shape_style(element.child("style"), properties).map(Box::new),
         text: element
             .child("txBody")
@@ -216,6 +219,7 @@ fn parse_picture(
         adjust_values: parse_adjust_values(properties, parse_shape_extent(transform)),
         fill: properties.and_then(parse_fill),
         outline: properties.and_then(parse_outline),
+        shape_effects: properties.and_then(parse_effects),
         style: parse_shape_style(element.child("style"), properties).map(Box::new),
     })
 }
@@ -296,10 +300,23 @@ fn parse_graphic_frame(
             .collect();
         GraphicFrameData::Diagram { relationship_ids }
     } else {
+        let uri = data.and_then(|value| value.attribute("uri"));
+        let picture = data
+            .filter(|_| uri == Some("http://schemas.openxmlformats.org/presentationml/2006/ole"))
+            .and_then(|value| {
+                value
+                    .child("AlternateContent")
+                    .and_then(|alternate| alternate.child("Fallback"))
+                    .unwrap_or(value)
+                    .child("oleObj")
+            })
+            .and_then(|object| object.child("pic"))
+            .map(|picture| parse_picture(picture, relationships, part, budget))
+            .transpose()?
+            .map(Box::new);
         GraphicFrameData::Unknown {
-            uri: data
-                .and_then(|value| value.attribute("uri"))
-                .map(str::to_owned),
+            uri: uri.map(str::to_owned),
+            picture,
         }
     };
     Ok(GraphicFrame {
@@ -832,6 +849,47 @@ pub(crate) fn parse_outline_element(line: &XmlElement) -> Option<ShapeOutline> {
     })
 }
 
+fn parse_effects(element: &XmlElement) -> Option<ShapeEffects> {
+    let list = element.child("effectLst")?;
+    let Some(shadow) = list.child("outerShdw") else {
+        return Some(ShapeEffects::default());
+    };
+    Some(ShapeEffects {
+        outer_shadow: Some(OuterShadow {
+            color: parse_color_container(shadow),
+            blur_radius: numeric_attribute(Some(shadow), "blurRad")
+                .unwrap_or_default()
+                .max(0),
+            distance: numeric_attribute(Some(shadow), "dist")
+                .unwrap_or_default()
+                .max(0),
+            direction: numeric_attribute(Some(shadow), "dir").unwrap_or_default(),
+            rotate_with_shape: shadow
+                .attribute("rotWithShape")
+                .is_none_or(|value| value != "0" && value != "false"),
+            scale_x: shadow_scale(shadow, "sx"),
+            scale_y: shadow_scale(shadow, "sy"),
+            alignment: shadow
+                .attribute("algn")
+                .filter(|value| RECT_ALIGNMENTS.contains(value))
+                .unwrap_or("b")
+                .to_owned(),
+        }),
+    })
+}
+
+/// `ST_RectAlignment`, the anchor a scaled shadow keeps.
+const RECT_ALIGNMENTS: [&str; 9] = ["tl", "t", "tr", "l", "ctr", "r", "bl", "b", "br"];
+
+/// `sx`/`sy`, which are thousandths of a percent and may legitimately exceed 100%.
+fn shadow_scale(shadow: &XmlElement, name: &str) -> f64 {
+    shadow
+        .attribute(name)
+        .and_then(|value| value.parse::<i32>().ok())
+        .map(|value| f64::from(value) / 100_000.0)
+        .unwrap_or(1.0)
+}
+
 fn parse_outline_gradient(line: &XmlElement) -> Option<GradientFill> {
     line.child("gradFill")
         .and_then(|fill| parse_gradient_fill(fill).gradient)
@@ -1168,6 +1226,13 @@ pub(crate) fn parse_run_properties(element: Option<&XmlElement>) -> RunPropertie
             .and_then(|value| value.parse::<f64>().ok())
             .filter(|value| value.is_finite())
             .map(|value| value / 100.0),
+        spacing_pt: element
+            .attribute("spc")
+            .and_then(|value| value.parse::<i32>().ok())
+            .filter(|value| {
+                (-MAX_TEXT_SPACING_HUNDREDTHS..=MAX_TEXT_SPACING_HUNDREDTHS).contains(value)
+            })
+            .map(|value| f64::from(value) / 100.0),
         baseline_pct: element
             .attribute("baseline")
             .and_then(|value| value.parse::<i32>().ok())
@@ -1558,6 +1623,35 @@ mod tests {
                 .font_size_pt,
             Some(24.0)
         );
+    }
+
+    #[test]
+    fn reads_run_spacing_as_points_and_rejects_out_of_range_values() {
+        let spacing = |attributes: &str| {
+            let limits = ParseLimits::default();
+            let mut budget = ParseBudget::new(&limits);
+            let xml = format!("<a:rPr {attributes}/>");
+            let root = parse_xml(xml.as_bytes(), "ppt/slides/slide1.xml", &mut budget).unwrap();
+            parse_run_properties(Some(&root)).spacing_pt
+        };
+
+        assert_eq!(spacing(r#"spc="600""#), Some(6.0));
+        assert_eq!(spacing(r#"spc="-100""#), Some(-1.0));
+        assert_eq!(spacing(r#"spc="0""#), Some(0.0));
+        assert_eq!(spacing(r#"spc="400000""#), Some(4000.0));
+        assert_eq!(spacing(r#"spc="-400000""#), Some(-4000.0));
+        for value in [
+            "900000",
+            "-2147483648",
+            "400001",
+            "-400001",
+            "NaN",
+            "inf",
+            "1.5",
+        ] {
+            assert_eq!(spacing(&format!("spc=\"{value}\"")), None);
+        }
+        assert_eq!(spacing(r#"sz="1800""#), None);
     }
 
     #[test]
@@ -1991,6 +2085,63 @@ mod tests {
     }
 
     #[test]
+    fn unrelated_graphics_keep_their_original_json_without_an_ole_picture() {
+        let limits = ParseLimits::default();
+        let mut budget = ParseBudget::new(&limits);
+        let root = parse_xml(br#"<p:graphicFrame><a:graphic><a:graphicData uri="custom:graphic"><p:oleObj><p:pic><p:blipFill><a:blip r:embed="rId1"/></p:blipFill></p:pic></p:oleObj></a:graphicData></a:graphic></p:graphicFrame>"#, "ppt/slides/slide1.xml", &mut budget).unwrap();
+        let frame = parse_graphic_frame(&root, &[], "ppt/slides/slide1.xml", &mut budget).unwrap();
+        let json = serde_json::to_string(&frame.data).unwrap();
+        assert_eq!(json, r#"{"type":"unknown","uri":"custom:graphic"}"#);
+        assert_eq!(
+            serde_json::from_str::<GraphicFrameData>(&json).unwrap(),
+            frame.data
+        );
+    }
+
+    #[test]
+    fn an_ole_graphic_frame_keeps_its_fallback_picture() {
+        let limits = ParseLimits::default();
+        let mut budget = ParseBudget::new(&limits);
+        let root = parse_xml(
+            br#"<p:sld><p:cSld><p:spTree><p:graphicFrame><p:nvGraphicFramePr><p:cNvPr id="9" name="Object 8"/></p:nvGraphicFramePr><p:xfrm><a:off x="10" y="20"/><a:ext cx="30" cy="40"/></p:xfrm><a:graphic><a:graphicData uri="http://schemas.openxmlformats.org/presentationml/2006/ole"><mc:AlternateContent xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"><mc:Choice Requires="v"><p:oleObj r:id="rId9" progId="MSGraph.Chart.8"><p:embed/><p:pic><p:blipFill><a:blip r:embed="unsupportedChoice"/></p:blipFill></p:pic></p:oleObj></mc:Choice><mc:Fallback><p:oleObj r:id="rId9" progId="MSGraph.Chart.8"><p:embed/><p:pic><p:nvPicPr><p:cNvPr id="9" name="Object 8"/><p:cNvPicPr/><p:nvPr/></p:nvPicPr><p:blipFill><a:blip r:embed="rId10"/></p:blipFill><p:spPr><a:xfrm><a:off x="10" y="20"/><a:ext cx="30" cy="40"/></a:xfrm></p:spPr></p:pic></p:oleObj></mc:Fallback></mc:AlternateContent></a:graphicData></a:graphic></p:graphicFrame></p:spTree></p:cSld></p:sld>"#,
+            "ppt/slides/slide1.xml",
+            &mut budget,
+        )
+        .unwrap();
+        let relationships = [Relationship {
+            id: "rId10".to_owned(),
+            relationship_type: String::new(),
+            target: "../media/image1.emf".to_owned(),
+            target_mode: crate::TargetMode::Internal,
+            resolved_target: Some("ppt/media/image1.emf".to_owned()),
+        }];
+
+        let data = common_slide_data(
+            &root,
+            &relationships,
+            "ppt/slides/slide1.xml",
+            &mut budget,
+            ShapeElements::WithConnectors,
+        )
+        .unwrap();
+
+        let ShapeNode::GraphicFrame(frame) = &data.shapes[0] else {
+            panic!("expected a graphic frame");
+        };
+        let GraphicFrameData::Unknown {
+            picture: Some(picture),
+            ..
+        } = &frame.data
+        else {
+            panic!("expected the OLE fallback picture, got {:?}", frame.data);
+        };
+        assert_eq!(
+            picture.media_part_path.as_deref(),
+            Some("ppt/media/image1.emf")
+        );
+    }
+
+    #[test]
     fn evaluates_literal_arithmetic_and_reference_adjustment_formulas() {
         let properties = adjustment_properties(
             r#"<a:gd name="adj" fmla="val 20000"/>
@@ -2170,6 +2321,109 @@ mod tests {
         let actual = values.get(name).unwrap();
         assert_eq!(actual.value, expected);
         assert_eq!(actual.extent_power, expected_power);
+    }
+
+    #[test]
+    fn a_shadow_reads_its_scale_and_alignment() {
+        let limits = ParseLimits::default();
+        let mut budget = ParseBudget::new(&limits);
+        let root = parse_xml(
+            br#"<p:spPr><a:effectLst><a:outerShdw blurRad="63500" sx="102000" sy="98000" algn="ctr"><a:prstClr val="black"><a:alpha val="40000"/></a:prstClr></a:outerShdw></a:effectLst></p:spPr>"#,
+            "ppt/slides/slide1.xml",
+            &mut budget,
+        )
+        .unwrap();
+        let shadow = parse_effects(&root).unwrap().outer_shadow.unwrap();
+        assert!((shadow.scale_x - 1.02).abs() < 1e-9);
+        assert!((shadow.scale_y - 0.98).abs() < 1e-9);
+        assert_eq!(shadow.alignment, "ctr");
+
+        let root = parse_xml(
+            br#"<p:spPr><a:effectLst><a:outerShdw blurRad="1" sx="0" algn="bogus"><a:srgbClr val="000000"/></a:outerShdw></a:effectLst></p:spPr>"#,
+            "ppt/slides/slide1.xml",
+            &mut budget,
+        )
+        .unwrap();
+        let shadow = parse_effects(&root).unwrap().outer_shadow.unwrap();
+        assert_eq!((shadow.scale_x, shadow.scale_y), (0.0, 1.0));
+        assert_eq!(shadow.alignment, "b");
+
+        for (value, expected) in [
+            ("-150000", -1.5),
+            ("2147483647", 21474.83647),
+            ("NaN", 1.0),
+            ("inf", 1.0),
+        ] {
+            let xml = format!("<a:outerShdw sx=\"{value}\" sy=\"{value}\"/>");
+            let root = parse_xml(xml.as_bytes(), "slide.xml", &mut budget).unwrap();
+            assert_eq!(shadow_scale(&root, "sx"), expected);
+            assert_eq!(shadow_scale(&root, "sy"), expected);
+        }
+    }
+
+    #[test]
+    fn an_outer_shadow_reaches_the_model_with_its_colour_and_geometry() {
+        let limits = ParseLimits::default();
+        let mut budget = ParseBudget::new(&limits);
+        let root = parse_xml(
+            br#"<p:sld><p:cSld><p:spTree><p:sp><p:nvSpPr><p:cNvPr id="2" name="Shadowed"/><p:nvPr/></p:nvSpPr><p:spPr><a:effectLst><a:outerShdw blurRad="25400" dist="38100" dir="2700000" rotWithShape="0"><a:schemeClr val="bg1"><a:lumMod val="50000"/><a:alpha val="40000"/></a:schemeClr></a:outerShdw></a:effectLst></p:spPr></p:sp><p:sp><p:nvSpPr><p:cNvPr id="3" name="Plain"/><p:nvPr/></p:nvSpPr><p:spPr><a:solidFill><a:srgbClr val="FF0000"/></a:solidFill></p:spPr></p:sp><p:sp><p:nvSpPr><p:cNvPr id="4" name="Hidden effects only"/><p:nvPr/></p:nvSpPr><p:spPr><a:extLst><a:ext uri="{909E8E84-426E-40DD-AFC4-6F175D3DCCD1}"><a14:hiddenEffects xmlns:a14="http://schemas.microsoft.com/office/drawing/2010/main"><a:effectLst><a:outerShdw blurRad="12700"><a:srgbClr val="000000"/></a:outerShdw></a:effectLst></a14:hiddenEffects></a:ext></a:extLst></p:spPr></p:sp></p:spTree></p:cSld></p:sld>"#,
+            "ppt/slides/slide1.xml",
+            &mut budget,
+        )
+        .unwrap();
+        let data = common_slide_data(
+            &root,
+            &[],
+            "ppt/slides/slide1.xml",
+            &mut budget,
+            ShapeElements::WithConnectors,
+        )
+        .unwrap();
+        let effects_of = |node: &ShapeNode| match node {
+            ShapeNode::Shape(shape) => shape.effects.clone(),
+            _ => panic!("expected a shape"),
+        };
+
+        let shadow = effects_of(&data.shapes[0])
+            .expect("the shape should have effects")
+            .outer_shadow
+            .expect("the effects should carry an outer shadow");
+        assert_eq!(
+            (shadow.blur_radius, shadow.distance, shadow.direction),
+            (25_400, 38_100, 2_700_000)
+        );
+        assert!(!shadow.rotate_with_shape);
+        let color = shadow.color.expect("the shadow should have a colour");
+        assert_eq!(color.theme_color.as_deref(), Some("background1"));
+        assert_eq!(color.luminance_modulation, Some(0.5));
+        assert_eq!(color.alpha, Some(0.4));
+
+        assert_eq!(effects_of(&data.shapes[1]), None);
+        assert_eq!(effects_of(&data.shapes[2]), None);
+    }
+    #[test]
+    fn empty_effect_lists_override_inherited_effects_and_defaults_stay_omitted() {
+        let limits = ParseLimits::default();
+        let mut budget = ParseBudget::new(&limits);
+        let properties = parse_xml(
+            br#"<a:spPr><a:effectLst/></a:spPr>"#,
+            "slide.xml",
+            &mut budget,
+        )
+        .unwrap();
+        assert_eq!(parse_effects(&properties), Some(ShapeEffects::default()));
+        let properties = parse_xml(br#"<a:spPr><a:effectLst><a:outerShdw><a:srgbClr val="FF0000"/></a:outerShdw></a:effectLst></a:spPr>"#, "slide.xml", &mut budget).unwrap();
+        let shadow = parse_effects(&properties).unwrap().outer_shadow.unwrap();
+        assert!(shadow.rotate_with_shape);
+        assert_eq!(
+            (shadow.blur_radius, shadow.distance, shadow.direction),
+            (0, 0, 0)
+        );
+        let json = serde_json::to_value(&shadow).unwrap();
+        for key in ["blurRadius", "distance", "direction", "rotateWithShape"] {
+            assert!(json.get(key).is_none(), "{key}");
+        }
+        assert_eq!(serde_json::from_value::<OuterShadow>(json).unwrap(), shadow);
     }
 
     #[test]

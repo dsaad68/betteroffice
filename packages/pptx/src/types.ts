@@ -5,6 +5,7 @@ export interface TextStyle {
   color?: string;
   fontFamily?: string;
   underline?: string;
+  spacingPt?: number;
   baselinePct?: number;
 }
 
@@ -17,6 +18,7 @@ export interface TextStyleSnapshot {
   color: string | null;
   fontFamily: string | null;
   underline: string | null;
+  spacingPt?: number | null;
   baselinePct?: number | null;
 }
 
@@ -264,6 +266,16 @@ export interface Stroke {
   tailEnd?: StrokeEnd;
 }
 
+/** An `a:outerShdw`: a blurred copy of the shape's own path, offset and tinted. */
+export interface Shadow {
+  color: string;
+  blur?: number;
+  dx?: number;
+  dy?: number;
+  scaleX?: number;
+  scaleY?: number;
+}
+
 export interface PrimitiveTransform {
   rotationDeg?: number;
   flipH?: boolean;
@@ -285,9 +297,12 @@ export interface ShapePrimitive extends PrimitiveBase {
   name: string;
   geometry: string;
   path: GeometryPathCommand[];
+  clip?: GeometryPathCommand[];
+  evenOdd?: boolean;
   adjustValues?: Record<string, number>;
   fill?: Paint;
   stroke?: Stroke;
+  shadow?: Shadow;
 }
 
 /** An `a:blip` colour transform, colours already resolved to `#rrggbbaa`. */
@@ -343,6 +358,7 @@ export interface PositionedTextRun {
   italic: boolean;
   underline: boolean;
   color: string;
+  letterSpacingPx?: number;
   baselineOffsetPx?: number;
   glyphs: PositionedGlyph[];
 }
