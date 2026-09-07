@@ -930,6 +930,40 @@ describe('PPTX shape shadows', () => {
     } finally { restore(); }
   });
 
+  test('a picture casts its shadow from the bitmap it draws, not from its frame', async () => {
+    const { calls, surfaces, ctx, restore } = harness();
+    try {
+      const display: SlideDisplayList = {
+        contractVersion: 1, width: 160, height: 160,
+        primitives: [{
+          kind: 'image', objectId: 2, name: 'mark', x: 40, y: 40, w: 40, h: 40,
+          assetId: 'mark', shadow: { color: '#00000066', blur: 8, dx: 6, dy: 6 },
+        }],
+      };
+      await paintSlide(ctx, display, 2, 1.5, { resolveImage: () => ({} as CanvasImageSource) });
+      expect(surfaces).toEqual([[120, 120]]);
+      expect(calls).toEqual([
+        'mask:shadow:none:40,40', 'mask:tint:source-in:#00000066',
+        'main:shadow:blur(12px):138,138', 'main:shadow:none:40,40',
+      ]);
+    } finally { restore(); }
+  });
+
+  test('an unresolved picture casts nothing', async () => {
+    const { calls, ctx, restore } = harness();
+    try {
+      const display: SlideDisplayList = {
+        contractVersion: 1, width: 160, height: 160,
+        primitives: [{
+          kind: 'image', objectId: 2, name: 'mark', x: 40, y: 40, w: 40, h: 40,
+          assetId: 'mark', shadow: { color: '#00000066', blur: 8, dx: 6, dy: 6 },
+        }],
+      };
+      await paintSlide(ctx, display, 2, 1.5, { resolveImage: () => null });
+      expect(calls).toEqual([]);
+    } finally { restore(); }
+  });
+
   test('an unfilled outline casts a shadow even at zero blur and offset', async () => {
     const { calls, ctx, restore } = harness();
     try {

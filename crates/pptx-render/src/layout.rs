@@ -499,7 +499,11 @@ impl<'a> LayoutBuilder<'a> {
             .or_else(|| layout_node.and_then(node_effects))
             .or_else(|| master_node.and_then(node_effects));
         let shadow = node_effects
-            .filter(|_| shape.kind == ShapeKind::Shape && (fill.is_some() || outline.is_some()))
+            .filter(|_| match shape.kind {
+                ShapeKind::Shape => fill.is_some() || outline.is_some(),
+                ShapeKind::Picture => true,
+                ShapeKind::GraphicFrame | ShapeKind::Group => false,
+            })
             .and_then(|effects| {
                 shadow(
                     effects,
@@ -562,6 +566,7 @@ impl<'a> LayoutBuilder<'a> {
                     source.map(|picture| &picture.crop),
                     source.and_then(|picture| picture_mask(picture, rect)),
                     outline,
+                    shadow,
                 );
             }
             ShapeKind::GraphicFrame => {
@@ -571,6 +576,7 @@ impl<'a> LayoutBuilder<'a> {
                     &shape.name,
                     rect,
                     transform,
+                    space,
                     shape.graphic.as_ref(),
                 )?;
             }
@@ -705,6 +711,17 @@ impl<'a> LayoutBuilder<'a> {
                     Some(&value.crop),
                     picture_mask(value, rect),
                     outline,
+                    value.shape_effects.as_ref().and_then(|effects| {
+                        shadow(
+                            effects,
+                            self.theme,
+                            space,
+                            rect,
+                            transform.rotation_deg,
+                            transform.flip_h,
+                            transform.flip_v,
+                        )
+                    }),
                 );
             }
             ShapeNode::GraphicFrame(value) => {
@@ -714,6 +731,7 @@ impl<'a> LayoutBuilder<'a> {
                     &base.name,
                     rect,
                     transform,
+                    space,
                     Some(&value.data),
                 )?;
             }
@@ -762,6 +780,7 @@ impl<'a> LayoutBuilder<'a> {
         crop: Option<&PictureCrop>,
         mask: Option<Vec<GeometryPathCommand>>,
         outline: Option<Stroke>,
+        shadow: Option<Shadow>,
     ) {
         if effects.is_empty()
             && self.push_metafile(
@@ -811,6 +830,7 @@ impl<'a> LayoutBuilder<'a> {
             crop: crop.map(image_crop).unwrap_or_default(),
             path: mask,
             stroke: outline,
+            shadow,
             transform,
         });
     }
@@ -939,6 +959,7 @@ impl<'a> LayoutBuilder<'a> {
 
     /// Plots a chart frame, or keeps the placeholder for graphics that carry
     /// no drawable data.
+    #[allow(clippy::too_many_arguments)]
     fn render_graphic_frame(
         &mut self,
         object_id: u32,
@@ -946,6 +967,7 @@ impl<'a> LayoutBuilder<'a> {
         name: &str,
         rect: PxRect,
         transform: Transform,
+        frame_space: Space,
         graphic: Option<&GraphicFrameData>,
     ) -> Result<(), RenderError> {
         if let Some(space) = self.chart_space(graphic) {
@@ -991,6 +1013,17 @@ impl<'a> LayoutBuilder<'a> {
                 Some(&picture.crop),
                 picture_mask(picture, rect),
                 outline,
+                picture.shape_effects.as_ref().and_then(|effects| {
+                    shadow(
+                        effects,
+                        self.theme,
+                        frame_space,
+                        rect,
+                        transform.rotation_deg,
+                        transform.flip_h,
+                        transform.flip_v,
+                    )
+                }),
             );
             return Ok(());
         }
@@ -3198,6 +3231,7 @@ fn picture_filled(primitive: Primitive, picture: Option<&PictureFill>) -> Primit
             geometry,
             path,
             stroke,
+            shadow,
             transform,
             ..
         } => Primitive::Image {
@@ -3213,6 +3247,7 @@ fn picture_filled(primitive: Primitive, picture: Option<&PictureFill>) -> Primit
             crop: picture_fill_crop(picture),
             path: (geometry != "rect").then_some(path),
             stroke,
+            shadow,
             transform,
         },
         other => other,

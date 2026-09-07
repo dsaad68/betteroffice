@@ -314,6 +314,7 @@ fn golden_image() {
                 head_end: None,
                 tail_end: None,
             }),
+            shadow: None,
             transform: Transform::default(),
         }]),
     );
@@ -353,6 +354,7 @@ fn golden_picture_fill() {
                 Cmd::Close,
             ]),
             stroke: None,
+            shadow: None,
             transform: Transform::default(),
         }]),
     );
