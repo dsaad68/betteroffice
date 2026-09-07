@@ -870,10 +870,17 @@ fn merge_source_render_shapes(target: &mut [ShapeNode], source: &[ShapeNode]) ->
     changed
 }
 
-/// Copies the chart-space fill and axis lines a source chart part declares.
+/// Copies the chart-space fill, axis lines and series lines a source chart part
+/// declares.
 fn merge_source_chart_properties(target: &mut ChartSpace, source: &ChartSpace) -> bool {
     let mut changed = target.fill != source.fill;
     target.fill.clone_from(&source.fill);
+    for (target, source) in target.plot_groups.iter_mut().zip(&source.plot_groups) {
+        for (target, source) in target.series.iter_mut().zip(&source.series) {
+            changed |= target.line != source.line;
+            target.line.clone_from(&source.line);
+        }
+    }
     let mut merge_axis = |target: Option<&mut ChartAxis>, source: Option<&ChartAxis>| {
         if let (Some(target), Some(source)) = (target, source) {
             changed |= target.line != source.line;
@@ -1807,6 +1814,30 @@ mod tests {
 
     const FIXTURE: &[u8] = include_bytes!("../../../apps/demo/public/betteroffice-demo.pptx");
     const HIDDEN_FIXTURE: &[u8] = include_bytes!("../tests/fixtures/hidden-shapes.pptx");
+
+    #[test]
+    fn a_reattached_source_restores_the_series_lines_a_stored_package_lacks() {
+        let source = ChartSpace {
+            plot_groups: vec![pptx_parse::ChartPlotGroup {
+                series: vec![pptx_parse::ChartSeries {
+                    line: Some(ooxml_drawingml::chart::ChartLine {
+                        none: false,
+                        color: Some("#FFFFFF".to_owned()),
+                        width_emu: Some(41275.0),
+                    }),
+                    ..pptx_parse::ChartSeries::default()
+                }],
+                ..pptx_parse::ChartPlotGroup::default()
+            }],
+            ..ChartSpace::default()
+        };
+        let mut target = source.clone();
+        target.plot_groups[0].series[0].line = None;
+
+        assert!(merge_source_chart_properties(&mut target, &source));
+        assert_eq!(target, source);
+        assert!(!merge_source_chart_properties(&mut target, &source));
+    }
 
     #[test]
     fn an_unmigratable_schema_version_is_reported_before_package_json() {
