@@ -113,6 +113,33 @@ pub struct StrokeEnd {
     pub length: f32,
 }
 
+/// An `a:outerShdw`: a blurred copy of the shape's own path, offset and tinted.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Shadow {
+    pub color: String,
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub blur: f32,
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub dx: f32,
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub dy: f32,
+    /// `sx`/`sy`. The anchor `algn` names is already folded into `dx`/`dy`, so a backend
+    /// scales about the surface origin and then translates.
+    #[serde(default = "unit_scale", skip_serializing_if = "is_unit_scale")]
+    pub scale_x: f32,
+    #[serde(default = "unit_scale", skip_serializing_if = "is_unit_scale")]
+    pub scale_y: f32,
+}
+
+fn unit_scale() -> f32 {
+    1.0
+}
+
+fn is_unit_scale(value: &f32) -> bool {
+    *value == 1.0
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Default, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Transform {
@@ -167,12 +194,18 @@ pub enum Primitive {
         h: f32,
         geometry: String,
         path: Vec<GeometryPathCommand>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        clip: Option<Vec<GeometryPathCommand>>,
+        #[serde(default, skip_serializing_if = "is_false")]
+        even_odd: bool,
         #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
         adjust_values: BTreeMap<String, f32>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         fill: Option<Paint>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         stroke: Option<Stroke>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        shadow: Option<Shadow>,
         #[serde(default, skip_serializing_if = "Transform::is_identity")]
         transform: Transform,
     },
@@ -326,6 +359,9 @@ pub struct PositionedTextRun {
     pub italic: bool,
     pub underline: bool,
     pub color: String,
+    /// Tracking between clusters in pixels.
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub letter_spacing_px: f32,
     /// Pixels this run's baseline sits above the line's; negative is subscript.
     #[serde(default, skip_serializing_if = "is_zero")]
     pub baseline_offset_px: f32,

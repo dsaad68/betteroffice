@@ -4,6 +4,7 @@ mod chart;
 mod display_list;
 mod image_effects;
 mod layout;
+mod metafile;
 
 pub use display_list::*;
 pub use image_effects::apply_image_effects;
@@ -181,6 +182,8 @@ fn compile(slide: ComposedSlide) -> SurfaceDisplayList {
                     f64::from(base.rect.w) / f64::from(base.rect.h),
                 );
                 primitives.push(Primitive::Shape {
+                    clip: None,
+                    even_odd: false,
                     object_id: base.id,
                     shape_id: None,
                     name: base.name,
@@ -193,6 +196,7 @@ fn compile(slide: ComposedSlide) -> SurfaceDisplayList {
                     adjust_values,
                     fill,
                     stroke: stroke.map(Into::into),
+                    shadow: None,
                     transform,
                 });
                 if let Some(text) = text {

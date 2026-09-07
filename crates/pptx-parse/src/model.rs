@@ -2,7 +2,8 @@ use std::collections::BTreeMap;
 
 pub use ooxml_drawingml::ShapeStyle;
 use ooxml_drawingml::{
-    ColorValue, GeometryPathCommand, ShapeFill, ShapeOutline, Theme, ThemeFormatScheme,
+    ColorValue, GeometryPathCommand, ShapeEffects, ShapeFill, ShapeOutline, Theme,
+    ThemeFormatScheme,
 };
 use serde::{Deserialize, Serialize};
 
@@ -266,6 +267,8 @@ pub struct Shape {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub picture_fill: Option<Box<PictureFill>>,
     pub outline: Option<ShapeOutline>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub effects: Option<ShapeEffects>,
     pub text: Option<TextBody>,
 }
 
@@ -312,6 +315,8 @@ pub struct Picture {
     pub adjust_values: BTreeMap<String, f64>,
     pub fill: Option<ShapeFill>,
     pub outline: Option<ShapeOutline>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub shape_effects: Option<ShapeEffects>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub style: Option<Box<ShapeStyle>>,
 }
@@ -401,6 +406,8 @@ pub enum GraphicFrameData {
     },
     Unknown {
         uri: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        picture: Option<Box<Picture>>,
     },
 }
 
@@ -554,6 +561,8 @@ pub struct TextRun {
 #[serde(rename_all = "camelCase")]
 pub struct RunProperties {
     pub font_size_pt: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub spacing_pt: Option<f64>,
     /// Baseline shift as a percentage of the font size; negative is subscript.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub baseline_pct: Option<f64>,
