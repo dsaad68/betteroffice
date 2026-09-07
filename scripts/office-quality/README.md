@@ -21,6 +21,14 @@ node scripts/office-quality/readme.mjs .source/office-quality/run/report.json
 
 The runner compares the latest npm releases with the checked-out source using pinned CDN fonts. Commit source changes first and choose an empty output directory. Set `QUALITY_SAMPLES='["betteroffice-demo"]'` to select a subset; all three demos run by default.
 
+XLSX capture uses `printDisplayList` when available, with font metrics measured
+at 72 layout DPI for the frozen Mac Office capture and the worksheet's explicit defaults.
+The Normal style resolves through its built-in ID and `xfId`; missing declarations fall back to style XF zero, then font zero.
+Older packages use the screen-range capture. Both keep the recorded ranges,
+150-DPI output, page margins, and SSIM scoring. Per-capture metadata identifies
+the mode and metrics. Unspecified column defaults, locale-specific dates, and
+chart typography can still differ from Excel.
+
 ## Manual CI and generated README
 
 After the [workflow](../../.github/workflows/visual-fidelity.yml) lands on `main`, use **Actions → Visual fidelity → Run workflow**, or:
@@ -42,7 +50,7 @@ Requires macOS and desktop Word, PowerPoint, or Excel. Run exports serially into
 
 The extension selects the app. Output includes `reference.pdf`, numbered PNGs at 150 DPI, and `result.json` with source hashes, Office/macOS versions, font names, UTC timestamps, and export status. The timeout defaults to 120 seconds; override it with `--timeout`.
 
-For XLSX comparisons, add `--xlsx-profile /path/to/profile.json`. The profile specifies `scale_percent`, `margin_pt`, and `pages` with zero-based `sheet` indices and A1 `range` values. Each range must fit one page. The demo's nine-page profile is stored in its metadata under `reference.capture_profile`. This measures worksheet range rendering, not automatic print pagination; frozen panes are unsupported. Print settings apply only to the temporary workbook, leaving source bytes unchanged.
+For XLSX comparisons, add `--xlsx-profile /path/to/profile.json`. The profile specifies `scale_percent`, `margin_pt`, and `pages` with zero-based `sheet` indices and A1 `range` values. Each range must fit one page. The demo's nine-page profile is stored in its metadata under `reference.capture_profile`. This measures worksheet range rendering, not automatic print pagination. The print API ignores frozen panes; the screen-range fallback rejects them. Print settings apply only to the temporary workbook, leaving source bytes unchanged.
 
 ## macOS permissions
 
