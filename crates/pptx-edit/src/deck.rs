@@ -223,7 +223,7 @@ fn seeded_child_path(path: &str, child_index: usize) -> String {
     format!("{path}.{child_index}")
 }
 
-fn shape_base(shape: &ShapeNode) -> &ShapeBase {
+pub(crate) fn shape_base(shape: &ShapeNode) -> &ShapeBase {
     match shape {
         ShapeNode::Shape(shape) => &shape.base,
         ShapeNode::Picture(shape) => &shape.base,
@@ -1003,6 +1003,9 @@ pub(crate) fn migrate_doc(doc: &Doc) -> EditResult<()> {
     if version < 17.0 {
         migrate_doc_to_v17(doc)?;
     }
+    if version < 18.0 {
+        migrate_doc_to_v18(doc)?;
+    }
     if version < 19.0 {
         migrate_doc_to_v19(doc)?;
     }
@@ -1245,6 +1248,12 @@ fn migrate_doc_to_v17(doc: &Doc) -> EditResult<()> {
     let package = package_from_meta(&meta, &txn)?;
     backfill_blip_effects(&mut txn, &package)?;
     meta.insert(&mut txn, "schemaVersion", 17.0);
+    Ok(())
+}
+
+fn migrate_doc_to_v18(doc: &Doc) -> EditResult<()> {
+    let mut txn = doc.transact_mut_with(MIGRATE_ORIGIN);
+    required_map(&txn, META)?.insert(&mut txn, "schemaVersion", 18.0);
     Ok(())
 }
 
@@ -1857,6 +1866,131 @@ mod tests {
     }
 
     #[test]
+    fn tracking_migration_follows_shadow_schema_for_every_older_version() {
+        use std::sync::Mutex;
+
+        const V17: &[u8] =
+            include_bytes!("../tests/fixtures/run-spacing-shadow-main-v17.update.bin");
+        const V18: &[u8] =
+            include_bytes!("../tests/fixtures/run-spacing-shadow-main-v18.update.bin");
+        const SOURCE: &[u8] = include_bytes!("../tests/fixtures/run-spacing-shadow.pptx");
+        for version in 1..=18 {
+            let doc = crate::doc_with_client_id(32520);
+            let (update, seeded_version) = if version == 18 {
+                (V18, 18.0)
+            } else {
+                (V17, 17.0)
+            };
+            crate::hydrate_doc(&doc, update).unwrap();
+            {
+                let mut txn = doc.transact_mut();
+                let meta = required_map(&txn, META).unwrap();
+                assert_eq!(
+                    map_number(&meta, &txn, "schemaVersion"),
+                    Some(seeded_version)
+                );
+                assert!(map_bool(&meta, &txn, "spacingPendingSource").is_none());
+                if f64::from(version) != seeded_version {
+                    meta.insert(&mut txn, "schemaVersion", f64::from(version));
+                }
+            }
+            let observed = Arc::new(Mutex::new(Vec::new()));
+            let events = observed.clone();
+            let _subscription = doc
+                .observe_update_v1(move |txn, _| {
+                    let meta = required_map(txn, META).unwrap();
+                    events.lock().unwrap().push((
+                        map_number(&meta, txn, "schemaVersion").unwrap() as u32,
+                        map_bool(&meta, txn, "spacingPendingSource"),
+                    ));
+                })
+                .unwrap();
+            migrate_doc(&doc).unwrap();
+            let expected: Vec<_> = ((version + 1).max(3)..=19)
+                .map(|step| (step, (step == 19).then_some(true)))
+                .collect();
+            assert_eq!(*observed.lock().unwrap(), expected, "starting at {version}");
+            migrate_doc(&doc).unwrap();
+            assert_eq!(*observed.lock().unwrap(), expected);
+            let update = doc
+                .transact()
+                .encode_state_as_update_v1(&Default::default());
+            let attached =
+                DeckSession::open_from_update_with_source(&update, SOURCE, 32521).unwrap();
+            let fresh = DeckSession::open(SOURCE, 32522).unwrap();
+            assert_eq!(attached.package(), fresh.package());
+            assert_eq!(attached.snapshot().unwrap(), fresh.snapshot().unwrap());
+            let json = serde_json::to_string(attached.package()).unwrap();
+            assert!(json.contains("outerShadow"));
+            assert!(json.contains("spacingPt"));
+            let current = attached.encode_state_as_update_v1();
+            let reopened = DeckSession::open_from_update(&current, 32523).unwrap();
+            assert_eq!(reopened.snapshot().unwrap(), fresh.snapshot().unwrap());
+            assert_eq!(reopened.encode_state_as_update_v1(), current);
+            let reattached =
+                DeckSession::open_from_update_with_source(&current, SOURCE, 32524).unwrap();
+            assert_eq!(reattached.encode_state_as_update_v1(), current);
+        }
+    }
+
+    #[test]
+    fn bitmap_migration_commits_before_shadow_schema_for_every_older_version() {
+        use std::sync::Mutex;
+
+        const UPDATE: &[u8] = include_bytes!("../tests/fixtures/blip-shadow-main-v17.update.bin");
+        const SOURCE: &[u8] = include_bytes!("../tests/fixtures/blip-shadow.pptx");
+        for version in 1..=17 {
+            let doc = crate::doc_with_client_id(33420);
+            crate::hydrate_doc(&doc, UPDATE).unwrap();
+            {
+                let mut txn = doc.transact_mut();
+                let meta = required_map(&txn, META).unwrap();
+                assert_eq!(map_number(&meta, &txn, "schemaVersion"), Some(17.0));
+                meta.insert(&mut txn, "schemaVersion", f64::from(version));
+                if version < 17 {
+                    let shapes = required_map(&txn, SHAPES).unwrap();
+                    for shape in shapes
+                        .iter(&txn)
+                        .map(|(_, shape)| shape)
+                        .collect::<Vec<_>>()
+                    {
+                        let Out::YMap(shape) = shape else { panic!() };
+                        shape.remove(&mut txn, "blipEffectsJson");
+                    }
+                }
+            }
+            let observed = Arc::new(Mutex::new(Vec::new()));
+            let events = observed.clone();
+            let _subscription = doc
+                .observe_update_v1(move |txn, _| {
+                    let meta = required_map(txn, META).unwrap();
+                    let version = map_number(&meta, txn, "schemaVersion").unwrap();
+                    let shapes = required_map(txn, SHAPES).unwrap();
+                    let effects = shapes.iter(txn).filter(|(_, shape)| {
+                    matches!(shape, Out::YMap(shape) if shape.contains_key(txn, "blipEffectsJson"))
+                }).count();
+                    events.lock().unwrap().push((version as u32, effects));
+                })
+                .unwrap();
+            migrate_doc(&doc).unwrap();
+            let expected: Vec<_> = ((version + 1).max(3)..=19)
+                .map(|step| (step, if step >= 17 { 5 } else { 0 }))
+                .collect();
+            assert_eq!(*observed.lock().unwrap(), expected, "starting at {version}");
+            migrate_doc(&doc).unwrap();
+            assert_eq!(*observed.lock().unwrap(), expected);
+            let update = doc
+                .transact()
+                .encode_state_as_update_v1(&Default::default());
+            let attached =
+                DeckSession::open_from_update_with_source(&update, SOURCE, 33421).unwrap();
+            let fresh = DeckSession::open(SOURCE, 33422).unwrap();
+            assert_eq!(attached.package(), fresh.package());
+            assert_eq!(attached.snapshot().unwrap(), fresh.snapshot().unwrap());
+        }
+    }
+
+    #[test]
     fn baseline_through_chart_property_migrations_preserve_main_state() {
         use std::sync::Mutex;
 
@@ -1900,12 +2034,23 @@ mod tests {
             (
                 V14_COMBINED,
                 14.0,
-                vec![(15.0, None, None), (16.0, None, None), (17.0, None, None)],
+                vec![
+                    (15.0, None, None),
+                    (16.0, None, None),
+                    (17.0, None, None),
+                    (18.0, None, None),
+                    (19.0, None, None),
+                ],
             ),
             (
                 V15_COMBINED,
                 15.0,
-                vec![(16.0, None, None), (17.0, None, None)],
+                vec![
+                    (16.0, None, None),
+                    (17.0, None, None),
+                    (18.0, None, None),
+                    (19.0, None, None),
+                ],
             ),
             (
                 V8,
@@ -1920,6 +2065,8 @@ mod tests {
                     (15.0, Some(true), Some(true)),
                     (16.0, Some(true), Some(true)),
                     (17.0, Some(true), Some(true)),
+                    (18.0, Some(true), Some(true)),
+                    (19.0, Some(true), Some(true)),
                 ],
             ),
             (
@@ -1934,6 +2081,8 @@ mod tests {
                     (15.0, Some(true), Some(true)),
                     (16.0, Some(true), Some(true)),
                     (17.0, Some(true), Some(true)),
+                    (18.0, Some(true), Some(true)),
+                    (19.0, Some(true), Some(true)),
                 ],
             ),
             (
@@ -1947,6 +2096,8 @@ mod tests {
                     (15.0, None, Some(true)),
                     (16.0, None, Some(true)),
                     (17.0, None, Some(true)),
+                    (18.0, None, Some(true)),
+                    (19.0, None, Some(true)),
                 ],
             ),
             (
@@ -1960,6 +2111,8 @@ mod tests {
                     (15.0, None, Some(true)),
                     (16.0, None, Some(true)),
                     (17.0, None, Some(true)),
+                    (18.0, None, Some(true)),
+                    (19.0, None, Some(true)),
                 ],
             ),
             (
@@ -1972,6 +2125,8 @@ mod tests {
                     (15.0, None, Some(true)),
                     (16.0, None, Some(true)),
                     (17.0, None, Some(true)),
+                    (18.0, None, Some(true)),
+                    (19.0, None, Some(true)),
                 ],
             ),
             (
@@ -1984,6 +2139,8 @@ mod tests {
                     (15.0, None, Some(true)),
                     (16.0, None, Some(true)),
                     (17.0, None, Some(true)),
+                    (18.0, None, Some(true)),
+                    (19.0, None, Some(true)),
                 ],
             ),
             (
@@ -1996,6 +2153,8 @@ mod tests {
                     (15.0, None, Some(true)),
                     (16.0, None, Some(true)),
                     (17.0, None, Some(true)),
+                    (18.0, None, Some(true)),
+                    (19.0, None, Some(true)),
                 ],
             ),
             (
@@ -2007,6 +2166,8 @@ mod tests {
                     (15.0, None, Some(true)),
                     (16.0, None, Some(true)),
                     (17.0, None, Some(true)),
+                    (18.0, None, Some(true)),
+                    (19.0, None, Some(true)),
                 ],
             ),
             (
@@ -2018,6 +2179,8 @@ mod tests {
                     (15.0, None, Some(true)),
                     (16.0, None, Some(true)),
                     (17.0, None, Some(true)),
+                    (18.0, None, Some(true)),
+                    (19.0, None, Some(true)),
                 ],
             ),
             (
@@ -2029,6 +2192,8 @@ mod tests {
                     (15.0, None, Some(true)),
                     (16.0, None, Some(true)),
                     (17.0, None, Some(true)),
+                    (18.0, None, Some(true)),
+                    (19.0, None, Some(true)),
                 ],
             ),
             (
@@ -2040,6 +2205,8 @@ mod tests {
                     (15.0, None, Some(true)),
                     (16.0, None, Some(true)),
                     (17.0, None, Some(true)),
+                    (18.0, None, Some(true)),
+                    (19.0, None, Some(true)),
                 ],
             ),
             (
@@ -2050,6 +2217,8 @@ mod tests {
                     (15.0, None, Some(true)),
                     (16.0, None, Some(true)),
                     (17.0, None, Some(true)),
+                    (18.0, None, Some(true)),
+                    (19.0, None, Some(true)),
                 ],
             ),
             (
@@ -2060,6 +2229,8 @@ mod tests {
                     (15.0, None, Some(true)),
                     (16.0, None, Some(true)),
                     (17.0, None, Some(true)),
+                    (18.0, None, Some(true)),
+                    (19.0, None, Some(true)),
                 ],
             ),
             (
@@ -2070,6 +2241,8 @@ mod tests {
                     (15.0, None, Some(true)),
                     (16.0, None, Some(true)),
                     (17.0, None, Some(true)),
+                    (18.0, None, Some(true)),
+                    (19.0, None, Some(true)),
                 ],
             ),
             (
@@ -2080,6 +2253,8 @@ mod tests {
                     (15.0, None, Some(true)),
                     (16.0, None, Some(true)),
                     (17.0, None, Some(true)),
+                    (18.0, None, Some(true)),
+                    (19.0, None, Some(true)),
                 ],
             ),
             (
@@ -2090,6 +2265,8 @@ mod tests {
                     (15.0, None, Some(true)),
                     (16.0, None, Some(true)),
                     (17.0, None, Some(true)),
+                    (18.0, None, Some(true)),
+                    (19.0, None, Some(true)),
                 ],
             ),
             (
@@ -2100,6 +2277,8 @@ mod tests {
                     (15.0, None, Some(true)),
                     (16.0, None, Some(true)),
                     (17.0, None, Some(true)),
+                    (18.0, None, Some(true)),
+                    (19.0, None, Some(true)),
                 ],
             ),
         ] {
@@ -2134,7 +2313,7 @@ mod tests {
     }
 
     #[test]
-    fn legacy_migrations_commit_each_version_through_v17() {
+    fn legacy_migrations_commit_each_version_through_v19() {
         use std::sync::Mutex;
         use yrs::Update;
         use yrs::updates::decoder::Decode;
@@ -2148,20 +2327,21 @@ mod tests {
                 V1,
                 vec![
                     3.0, 4.0, 5.0, 6.0, 7.0, 8.0, 9.0, 10.0, 11.0, 12.0, 13.0, 14.0, 15.0, 16.0,
-                    17.0,
+                    17.0, 18.0, 19.0,
                 ],
             ),
             (
                 V2,
                 vec![
                     3.0, 4.0, 5.0, 6.0, 7.0, 8.0, 9.0, 10.0, 11.0, 12.0, 13.0, 14.0, 15.0, 16.0,
-                    17.0,
+                    17.0, 18.0, 19.0,
                 ],
             ),
             (
                 V3,
                 vec![
                     4.0, 5.0, 6.0, 7.0, 8.0, 9.0, 10.0, 11.0, 12.0, 13.0, 14.0, 15.0, 16.0, 17.0,
+                    18.0, 19.0,
                 ],
             ),
         ] {
@@ -2238,7 +2418,7 @@ mod tests {
                 V4_LEGACY,
                 vec![
                     3.0, 4.0, 5.0, 6.0, 7.0, 8.0, 9.0, 10.0, 11.0, 12.0, 13.0, 14.0, 15.0, 16.0,
-                    17.0,
+                    17.0, 18.0, 19.0,
                 ],
                 1,
             ),
@@ -2246,7 +2426,8 @@ mod tests {
                 V4_STYLES,
                 V4_STYLES,
                 vec![
-                    5.0, 6.0, 7.0, 8.0, 9.0, 10.0, 11.0, 12.0, 13.0, 14.0, 15.0, 16.0, 17.0,
+                    5.0, 6.0, 7.0, 8.0, 9.0, 10.0, 11.0, 12.0, 13.0, 14.0, 15.0, 16.0, 17.0, 18.0,
+                    19.0,
                 ],
                 1,
             ),
@@ -2254,7 +2435,8 @@ mod tests {
                 V4_NUMBERED,
                 V4_NUMBERED,
                 vec![
-                    5.0, 6.0, 7.0, 8.0, 9.0, 10.0, 11.0, 12.0, 13.0, 14.0, 15.0, 16.0, 17.0,
+                    5.0, 6.0, 7.0, 8.0, 9.0, 10.0, 11.0, 12.0, 13.0, 14.0, 15.0, 16.0, 17.0, 18.0,
+                    19.0,
                 ],
                 10,
             ),
@@ -2323,19 +2505,19 @@ mod tests {
                 V2,
                 vec![
                     3.0, 4.0, 5.0, 6.0, 7.0, 8.0, 9.0, 10.0, 11.0, 12.0, 13.0, 14.0, 15.0, 16.0,
-                    17.0,
+                    17.0, 18.0, 19.0,
                 ],
             ),
             (
                 V5,
                 vec![
-                    6.0, 7.0, 8.0, 9.0, 10.0, 11.0, 12.0, 13.0, 14.0, 15.0, 16.0, 17.0,
+                    6.0, 7.0, 8.0, 9.0, 10.0, 11.0, 12.0, 13.0, 14.0, 15.0, 16.0, 17.0, 18.0, 19.0,
                 ],
             ),
             (
                 V6,
                 vec![
-                    7.0, 8.0, 9.0, 10.0, 11.0, 12.0, 13.0, 14.0, 15.0, 16.0, 17.0,
+                    7.0, 8.0, 9.0, 10.0, 11.0, 12.0, 13.0, 14.0, 15.0, 16.0, 17.0, 18.0, 19.0,
                 ],
             ),
         ] {
@@ -2585,7 +2767,9 @@ mod tests {
                 (14.0, before.clone(), Some("legacy".to_owned()), Some(true)),
                 (15.0, before.clone(), Some("legacy".to_owned()), Some(true)),
                 (16.0, before.clone(), Some("legacy".to_owned()), Some(true)),
-                (17.0, before, Some("legacy".to_owned()), Some(true))
+                (17.0, before.clone(), Some("legacy".to_owned()), Some(true)),
+                (18.0, before.clone(), Some("legacy".to_owned()), Some(true)),
+                (19.0, before, Some("legacy".to_owned()), Some(true))
             ]
         );
     }
