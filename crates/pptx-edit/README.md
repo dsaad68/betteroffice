@@ -18,12 +18,13 @@ untouched comment parts byte for byte. Deleting a thread removes its known
 replies; a reply added concurrently becomes a root when its parent is absent,
 so both clients and saved files retain it.
 
-The current schema is v19. Older v1–v18 updates can be opened, and attaching the
+The current schema is v20. Older v1–v19 updates can be opened, and attaching the
 original package with `open_from_update_with_source` imports source comments,
 list styles, explicit numbering restarts, paragraph line spacing, picture
 fills, unedited gradient outlines, chart-space fills and axis lines, explicit
 text overflow settings, bitmap effects, and shape shadows with their scale and
-alignment missing from older snapshots.
+alignment missing from older snapshots. Schema 20 recovers OLE preview pictures
+after schema 19 restores character tracking.
 Source attachment also restores run baseline and character spacing formatting
 on surviving text while retaining edits and explicit zero overrides. Imported properties persist in
 subsequent updates, and reattaching the source is idempotent.

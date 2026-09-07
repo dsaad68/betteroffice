@@ -263,3 +263,31 @@ schema and idempotent reopening. Historical v10/v11/v12 tracking snapshots and
 main's historical fixtures retain their original provenance. Tests observe every
 separate migration transaction through 18 and 19, then recover both shadows and
 tracking, preserve edits and explicit zero overrides, and reopen idempotently.
+
+
+## OLE pictures after character tracking
+
+`metafile-pictures-v18.update.bin` and `metafile-tracking-v18.update.bin` are
+fresh native output from main `22ce4e9436b25fc515c38b5073f91736dc22d288`.
+Their v19 counterparts are fresh native output from that main plus PR #325
+at `1cde1ed0413c1d539bb5f784290e3b773787756f`. Each uses client ID 31800 and
+locked dependencies; no generated version is restamped. The v12 metafile
+fixture remains a historical oracle from main `3d95068f`.
+
+`metafile-tracking.pptx` combines the four pictures from the public
+`metafile-pictures.pptx` repro with the first text shape from `run-spacing.pptx`,
+using source ID 99. It contains an OLE preview and explicit 6-point character
+spacing. The v18 reader retains neither property; v19 retains the spacing.
+
+Copy `generate_metafile_schema_snapshots.rs` into each base checkout's
+`crates/pptx-edit/examples/` and run:
+
+```sh
+cargo run --locked -p betteroffice-pptx-edit --example generate_metafile_schema_snapshots -- /absolute/path/to/this/branch 19
+```
+
+Use `18` for main. The generator checks the writer's native schema, absent OLE
+previews, version-dependent tracking, and byte-identical reopening. Tests use
+the native v18/v19 seeds plus explicitly constructed v1-v17 states to observe
+every migration transaction, with tracking at 19 before OLE pictures at 20.
+Historical v1/v2/v3 fixtures separately prove the complete legacy chain.

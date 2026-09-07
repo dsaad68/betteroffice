@@ -364,6 +364,8 @@ impl Translator<'_> {
                 fill,
                 stroke,
                 transform,
+                clip,
+                even_odd,
                 ..
             } => Frame::new(*x, *y, *w, *h).and_then(|frame| {
                 self.draw_shape(
@@ -373,6 +375,8 @@ impl Translator<'_> {
                     stroke.as_ref(),
                     *transform,
                     parent,
+                    clip.as_deref(),
+                    *even_odd,
                 )
             }),
             Primitive::Image {
@@ -471,6 +475,7 @@ impl Translator<'_> {
         self.scene.pop_layer();
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn draw_shape(
         &mut self,
         frame: Frame,
@@ -479,6 +484,8 @@ impl Translator<'_> {
         stroke: Option<&DisplayStroke>,
         transform: Transform,
         parent: Affine,
+        clip: Option<&[GeometryPathCommand]>,
+        even_odd: bool,
     ) -> Result<(), String> {
         let path = build_path(commands, frame)?;
         if path.is_empty() && (fill.is_some() || stroke.is_some()) {
@@ -491,13 +498,25 @@ impl Translator<'_> {
             .map(|stroke| prepare_stroke(stroke, frame.rect))
             .transpose()?;
         let affine = frame.transform(transform, parent)?;
+        if let Some(clip) = clip {
+            let clip = build_path(clip, frame)?;
+            self.scene.push_clip_layer(Fill::NonZero, affine, &clip);
+        }
         if let Some(fill) = fill {
-            fill.fill(&mut self.scene, affine, &path);
+            let rule = if even_odd {
+                Fill::EvenOdd
+            } else {
+                Fill::NonZero
+            };
+            fill.fill_with_rule(&mut self.scene, affine, &path, rule);
         }
         if let Some((style, paint)) = stroke
             && style.width > 0.0
         {
             paint.stroke(&mut self.scene, &style, affine, &path);
+        }
+        if clip.is_some() {
+            self.scene.pop_layer();
         }
         Ok(())
     }
@@ -804,9 +823,19 @@ impl PreparedPaint {
     }
 
     fn fill(&self, scene: &mut Scene, transform: Affine, shape: &impl vello::kurbo::Shape) {
+        self.fill_with_rule(scene, transform, shape, Fill::NonZero);
+    }
+
+    fn fill_with_rule(
+        &self,
+        scene: &mut Scene,
+        transform: Affine,
+        shape: &impl vello::kurbo::Shape,
+        rule: Fill,
+    ) {
         match self {
-            Self::Solid(color) => scene.fill(Fill::NonZero, transform, *color, None, shape),
-            Self::Gradient(gradient) => scene.fill(Fill::NonZero, transform, gradient, None, shape),
+            Self::Solid(color) => scene.fill(rule, transform, *color, None, shape),
+            Self::Gradient(gradient) => scene.fill(rule, transform, gradient, None, shape),
         }
     }
 }
@@ -1385,6 +1414,8 @@ mod tests {
             height: 80.0,
             background: None,
             primitives: vec![Primitive::Shape {
+                clip: None,
+                even_odd: false,
                 object_id: 1,
                 shape_id: None,
                 name: "advanced fill".to_owned(),

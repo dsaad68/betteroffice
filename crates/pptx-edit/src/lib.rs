@@ -167,6 +167,7 @@ impl DeckSession {
             &package,
             source_run_properties::SourceProperty::Baseline,
         )?;
+        deck::import_source_ole_pictures(&session.doc, &package)?;
         effects::import_source(&session.doc, &package)?;
         source_run_properties::import_source(
             &session,

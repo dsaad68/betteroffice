@@ -21,9 +21,9 @@ use crate::{
     ShapeStrokeReceipt, SlideReceipt, SlideSnapshot, TransformReceipt,
 };
 
-const SCHEMA_VERSION: f64 = 19.0;
+const SCHEMA_VERSION: f64 = 20.0;
 /// Versions [`migrate_doc`] can carry forward. Anything else is unreadable.
-const MIGRATABLE_SCHEMA_VERSIONS: [f64; 19] = [
+const MIGRATABLE_SCHEMA_VERSIONS: [f64; 20] = [
     1.0,
     2.0,
     3.0,
@@ -42,6 +42,7 @@ const MIGRATABLE_SCHEMA_VERSIONS: [f64; 19] = [
     16.0,
     17.0,
     18.0,
+    19.0,
     SCHEMA_VERSION,
 ];
 const MAX_GEOMETRY: i64 = 1_000_000_000_000_000;
@@ -855,6 +856,19 @@ fn merge_source_render_shapes(target: &mut [ShapeNode], source: &[ShapeNode]) ->
                 changed |= merge_source_render_shapes(&mut target.children, &source.children);
             }
             (ShapeNode::GraphicFrame(target), ShapeNode::GraphicFrame(source)) => {
+                if matches!(
+                    target.data,
+                    pptx_parse::GraphicFrameData::Unknown { picture: None, .. }
+                ) && matches!(
+                    source.data,
+                    pptx_parse::GraphicFrameData::Unknown {
+                        picture: Some(_),
+                        ..
+                    }
+                ) {
+                    target.data.clone_from(&source.data);
+                    changed = true;
+                }
                 if let (
                     pptx_parse::GraphicFrameData::Table { rows: target },
                     pptx_parse::GraphicFrameData::Table { rows: source },
@@ -1008,6 +1022,9 @@ pub(crate) fn migrate_doc(doc: &Doc) -> EditResult<()> {
     }
     if version < 19.0 {
         migrate_doc_to_v19(doc)?;
+    }
+    if version < 20.0 {
+        migrate_doc_to_v20(doc)?;
     }
     Ok(())
 }
@@ -1311,6 +1328,100 @@ fn backfill_picture_effects(
             }
         }
         _ => {}
+    }
+    Ok(())
+}
+
+fn migrate_doc_to_v20(doc: &Doc) -> EditResult<()> {
+    let mut txn = doc.transact_mut_with(MIGRATE_ORIGIN);
+    let meta = required_map(&txn, META)?;
+    let package = package_from_meta(&meta, &txn)?;
+    let needs_source = package
+        .slides
+        .iter()
+        .any(|part| needs_ole_source(&part.shapes))
+        || package
+            .layouts
+            .iter()
+            .any(|part| needs_ole_source(&part.shapes))
+        || package
+            .masters
+            .iter()
+            .any(|part| needs_ole_source(&part.shapes));
+    if needs_source {
+        meta.insert(&mut txn, "olePicturesPendingSource", true);
+    }
+    meta.insert(&mut txn, "schemaVersion", 20.0);
+    Ok(())
+}
+
+fn needs_ole_source(nodes: &[ShapeNode]) -> bool {
+    nodes.iter().any(|node| match node {
+        ShapeNode::GraphicFrame(frame) => matches!(&frame.data,
+            pptx_parse::GraphicFrameData::Unknown { uri: Some(uri), picture: None }
+                if uri == "http://schemas.openxmlformats.org/presentationml/2006/ole"),
+        ShapeNode::Group(group) => needs_ole_source(&group.children),
+        _ => false,
+    })
+}
+
+pub(crate) fn import_source_ole_pictures(doc: &Doc, source: &PptxPackage) -> EditResult<()> {
+    let mut txn = doc.transact_mut_with(MIGRATE_ORIGIN);
+    let meta = required_map(&txn, META)?;
+    if map_bool(&meta, &txn, "olePicturesPendingSource") != Some(true) {
+        return Ok(());
+    }
+    let shapes = required_map(&txn, SHAPES)?;
+    for (index, (slide, reference)) in source
+        .slides
+        .iter()
+        .zip(&source.presentation.slides)
+        .enumerate()
+    {
+        let slide_id = seeded_slide_id(index, reference.id);
+        for (index, node) in slide.shapes.iter().enumerate() {
+            backfill_ole_picture(&mut txn, &shapes, &slide_id, &index.to_string(), node)?;
+        }
+    }
+    meta.remove(&mut txn, "olePicturesPendingSource");
+    Ok(())
+}
+
+fn backfill_ole_picture(
+    txn: &mut TransactionMut<'_>,
+    shapes: &MapRef,
+    slide_id: &str,
+    path: &str,
+    node: &ShapeNode,
+) -> EditResult<()> {
+    if let ShapeNode::GraphicFrame(frame) = node
+        && matches!(
+            frame.data,
+            pptx_parse::GraphicFrameData::Unknown {
+                picture: Some(_),
+                ..
+            }
+        )
+        && let Some(shape) = shapes
+            .get(txn, &seeded_shape_id(slide_id, path))
+            .and_then(|value| value.cast::<MapRef>().ok())
+        && matches!(
+            optional_json::<pptx_parse::GraphicFrameData, _>(&shape, txn, "graphicJson")?,
+            Some(pptx_parse::GraphicFrameData::Unknown { picture: None, .. })
+        )
+    {
+        insert_json(&shape, txn, "graphicJson", Some(&frame.data))?;
+    }
+    if let ShapeNode::Group(group) = node {
+        for (index, child) in group.children.iter().enumerate() {
+            backfill_ole_picture(
+                txn,
+                shapes,
+                slide_id,
+                &seeded_child_path(path, index),
+                child,
+            )?;
+        }
     }
     Ok(())
 }
@@ -1858,11 +1969,150 @@ mod tests {
     }
 
     #[test]
+    fn v19_ole_pictures_recover_from_source_and_survive_update_only_loading() {
+        const SOURCE: &[u8] =
+            include_bytes!("../../pptx-render/tests/fixtures/metafile-pictures.pptx");
+        for update in [
+            include_bytes!("../tests/fixtures/metafile-pictures-v12.update.bin").as_slice(),
+            include_bytes!("../tests/fixtures/metafile-pictures-v18.update.bin").as_slice(),
+            include_bytes!("../tests/fixtures/metafile-pictures-v19.update.bin").as_slice(),
+        ] {
+            let session = DeckSession::open_from_update(update, 31801).unwrap();
+            {
+                let txn = session.doc.transact();
+                let meta = required_map(&txn, META).unwrap();
+                assert_eq!(map_number(&meta, &txn, "schemaVersion"), Some(20.0));
+                assert_eq!(
+                    map_bool(&meta, &txn, "olePicturesPendingSource"),
+                    Some(true)
+                );
+            }
+            let session = DeckSession::open_from_update_with_source(update, SOURCE, 31802).unwrap();
+            let snapshot = session.snapshot().unwrap();
+            let graphic = snapshot.slides[0].shapes[2].graphic.as_ref().unwrap();
+            assert!(matches!(
+                graphic,
+                pptx_parse::GraphicFrameData::Unknown {
+                    picture: Some(_),
+                    ..
+                }
+            ));
+            let restored =
+                DeckSession::open_from_update(&session.encode_state_as_update_v1(), 31803).unwrap();
+            assert_eq!(restored.snapshot().unwrap(), snapshot);
+            assert_eq!(
+                serde_json::to_value(restored.package()).unwrap(),
+                serde_json::to_value(session.package()).unwrap()
+            );
+            assert_eq!(
+                map_bool(
+                    &required_map(&session.doc.transact(), META).unwrap(),
+                    &session.doc.transact(),
+                    "olePicturesPendingSource"
+                ),
+                None
+            );
+            let bytes = session.encode_state_as_update_v1();
+            migrate_doc(&session.doc).unwrap();
+            assert_eq!(session.encode_state_as_update_v1(), bytes);
+        }
+    }
+
+    #[test]
     fn migration_leaves_a_current_document_untouched() {
         let session = DeckSession::open(FIXTURE, 102).unwrap();
         let before = session.encode_state_as_update_v1();
         migrate_doc(&session.doc).unwrap();
         assert_eq!(session.encode_state_as_update_v1(), before);
+    }
+
+    #[test]
+    fn ole_migration_follows_tracking_for_every_older_version() {
+        use std::sync::Mutex;
+
+        const V18: &[u8] = include_bytes!("../tests/fixtures/metafile-tracking-v18.update.bin");
+        const V19: &[u8] = include_bytes!("../tests/fixtures/metafile-tracking-v19.update.bin");
+        const SOURCE: &[u8] = include_bytes!("../tests/fixtures/metafile-tracking.pptx");
+        for version in 1..=19 {
+            let doc = crate::doc_with_client_id(31820);
+            let (update, seeded_version) = if version == 19 {
+                (V19, 19.0)
+            } else {
+                (V18, 18.0)
+            };
+            crate::hydrate_doc(&doc, update).unwrap();
+            {
+                let mut txn = doc.transact_mut();
+                let meta = required_map(&txn, META).unwrap();
+                assert_eq!(
+                    map_number(&meta, &txn, "schemaVersion"),
+                    Some(seeded_version)
+                );
+                assert_eq!(map_bool(&meta, &txn, "olePicturesPendingSource"), None);
+                assert_eq!(map_bool(&meta, &txn, "spacingPendingSource"), None);
+                if f64::from(version) != seeded_version {
+                    meta.insert(&mut txn, "schemaVersion", f64::from(version));
+                }
+            }
+            let observed = Arc::new(Mutex::new(Vec::new()));
+            let events = observed.clone();
+            let _subscription = doc
+                .observe_update_v1(move |txn, _| {
+                    let meta = required_map(txn, META).unwrap();
+                    events.lock().unwrap().push((
+                        map_number(&meta, txn, "schemaVersion").unwrap() as u32,
+                        map_bool(&meta, txn, "spacingPendingSource"),
+                        map_bool(&meta, txn, "olePicturesPendingSource"),
+                    ));
+                })
+                .unwrap();
+            migrate_doc(&doc).unwrap();
+            let expected: Vec<_> = ((version + 1).max(3)..=20)
+                .map(|step| {
+                    (
+                        step,
+                        (version < 19 && step >= 19).then_some(true),
+                        (step == 20).then_some(true),
+                    )
+                })
+                .collect();
+            assert_eq!(*observed.lock().unwrap(), expected, "starting at {version}");
+            migrate_doc(&doc).unwrap();
+            assert_eq!(*observed.lock().unwrap(), expected);
+            let update = doc
+                .transact()
+                .encode_state_as_update_v1(&Default::default());
+            let attached =
+                DeckSession::open_from_update_with_source(&update, SOURCE, 31821).unwrap();
+            let fresh = DeckSession::open(SOURCE, 31822).unwrap();
+            let snapshot = attached.snapshot().unwrap();
+            assert_eq!(snapshot, fresh.snapshot().unwrap());
+            assert_eq!(
+                snapshot.slides[0].shapes[4].text_stories[0].paragraphs[0].runs[0]
+                    .style
+                    .spacing_pt,
+                Some(6.0)
+            );
+            assert!(matches!(
+                snapshot.slides[0].shapes[2].graphic,
+                Some(pptx_parse::GraphicFrameData::Unknown {
+                    picture: Some(_),
+                    ..
+                })
+            ));
+            assert_eq!(attached.package(), fresh.package());
+            let current = attached.encode_state_as_update_v1();
+            let reopened = DeckSession::open_from_update(&current, 31823).unwrap();
+            assert_eq!(reopened.snapshot().unwrap(), snapshot);
+            assert_eq!(reopened.encode_state_as_update_v1(), current);
+            let reattached =
+                DeckSession::open_from_update_with_source(&current, SOURCE, 31824).unwrap();
+            assert_eq!(reattached.encode_state_as_update_v1(), current);
+            let txn = attached.doc.transact();
+            let meta = required_map(&txn, META).unwrap();
+            assert_eq!(map_bool(&meta, &txn, "spacingPendingSource"), None);
+            assert_eq!(map_bool(&meta, &txn, "olePicturesPendingSource"), None);
+        }
     }
 
     #[test]
@@ -1906,8 +2156,8 @@ mod tests {
                 })
                 .unwrap();
             migrate_doc(&doc).unwrap();
-            let expected: Vec<_> = ((version + 1).max(3)..=19)
-                .map(|step| (step, (step == 19).then_some(true)))
+            let expected: Vec<_> = ((version + 1).max(3)..=20)
+                .map(|step| (step, (step >= 19).then_some(true)))
                 .collect();
             assert_eq!(*observed.lock().unwrap(), expected, "starting at {version}");
             migrate_doc(&doc).unwrap();
@@ -1973,7 +2223,7 @@ mod tests {
                 })
                 .unwrap();
             migrate_doc(&doc).unwrap();
-            let expected: Vec<_> = ((version + 1).max(3)..=19)
+            let expected: Vec<_> = ((version + 1).max(3)..=20)
                 .map(|step| (step, if step >= 17 { 5 } else { 0 }))
                 .collect();
             assert_eq!(*observed.lock().unwrap(), expected, "starting at {version}");
@@ -2040,6 +2290,7 @@ mod tests {
                     (17.0, None, None),
                     (18.0, None, None),
                     (19.0, None, None),
+                    (20.0, None, None),
                 ],
             ),
             (
@@ -2050,6 +2301,7 @@ mod tests {
                     (17.0, None, None),
                     (18.0, None, None),
                     (19.0, None, None),
+                    (20.0, None, None),
                 ],
             ),
             (
@@ -2067,6 +2319,7 @@ mod tests {
                     (17.0, Some(true), Some(true)),
                     (18.0, Some(true), Some(true)),
                     (19.0, Some(true), Some(true)),
+                    (20.0, Some(true), Some(true)),
                 ],
             ),
             (
@@ -2083,6 +2336,7 @@ mod tests {
                     (17.0, Some(true), Some(true)),
                     (18.0, Some(true), Some(true)),
                     (19.0, Some(true), Some(true)),
+                    (20.0, Some(true), Some(true)),
                 ],
             ),
             (
@@ -2098,6 +2352,7 @@ mod tests {
                     (17.0, None, Some(true)),
                     (18.0, None, Some(true)),
                     (19.0, None, Some(true)),
+                    (20.0, None, Some(true)),
                 ],
             ),
             (
@@ -2113,6 +2368,7 @@ mod tests {
                     (17.0, None, Some(true)),
                     (18.0, None, Some(true)),
                     (19.0, None, Some(true)),
+                    (20.0, None, Some(true)),
                 ],
             ),
             (
@@ -2127,6 +2383,7 @@ mod tests {
                     (17.0, None, Some(true)),
                     (18.0, None, Some(true)),
                     (19.0, None, Some(true)),
+                    (20.0, None, Some(true)),
                 ],
             ),
             (
@@ -2141,6 +2398,7 @@ mod tests {
                     (17.0, None, Some(true)),
                     (18.0, None, Some(true)),
                     (19.0, None, Some(true)),
+                    (20.0, None, Some(true)),
                 ],
             ),
             (
@@ -2155,6 +2413,7 @@ mod tests {
                     (17.0, None, Some(true)),
                     (18.0, None, Some(true)),
                     (19.0, None, Some(true)),
+                    (20.0, None, Some(true)),
                 ],
             ),
             (
@@ -2168,6 +2427,7 @@ mod tests {
                     (17.0, None, Some(true)),
                     (18.0, None, Some(true)),
                     (19.0, None, Some(true)),
+                    (20.0, None, Some(true)),
                 ],
             ),
             (
@@ -2181,6 +2441,7 @@ mod tests {
                     (17.0, None, Some(true)),
                     (18.0, None, Some(true)),
                     (19.0, None, Some(true)),
+                    (20.0, None, Some(true)),
                 ],
             ),
             (
@@ -2194,6 +2455,7 @@ mod tests {
                     (17.0, None, Some(true)),
                     (18.0, None, Some(true)),
                     (19.0, None, Some(true)),
+                    (20.0, None, Some(true)),
                 ],
             ),
             (
@@ -2207,6 +2469,7 @@ mod tests {
                     (17.0, None, Some(true)),
                     (18.0, None, Some(true)),
                     (19.0, None, Some(true)),
+                    (20.0, None, Some(true)),
                 ],
             ),
             (
@@ -2219,6 +2482,7 @@ mod tests {
                     (17.0, None, Some(true)),
                     (18.0, None, Some(true)),
                     (19.0, None, Some(true)),
+                    (20.0, None, Some(true)),
                 ],
             ),
             (
@@ -2231,6 +2495,7 @@ mod tests {
                     (17.0, None, Some(true)),
                     (18.0, None, Some(true)),
                     (19.0, None, Some(true)),
+                    (20.0, None, Some(true)),
                 ],
             ),
             (
@@ -2243,6 +2508,7 @@ mod tests {
                     (17.0, None, Some(true)),
                     (18.0, None, Some(true)),
                     (19.0, None, Some(true)),
+                    (20.0, None, Some(true)),
                 ],
             ),
             (
@@ -2255,6 +2521,7 @@ mod tests {
                     (17.0, None, Some(true)),
                     (18.0, None, Some(true)),
                     (19.0, None, Some(true)),
+                    (20.0, None, Some(true)),
                 ],
             ),
             (
@@ -2267,6 +2534,7 @@ mod tests {
                     (17.0, None, Some(true)),
                     (18.0, None, Some(true)),
                     (19.0, None, Some(true)),
+                    (20.0, None, Some(true)),
                 ],
             ),
             (
@@ -2279,6 +2547,7 @@ mod tests {
                     (17.0, None, Some(true)),
                     (18.0, None, Some(true)),
                     (19.0, None, Some(true)),
+                    (20.0, None, Some(true)),
                 ],
             ),
         ] {
@@ -2313,7 +2582,7 @@ mod tests {
     }
 
     #[test]
-    fn legacy_migrations_commit_each_version_through_v19() {
+    fn legacy_migrations_commit_each_version_through_v20() {
         use std::sync::Mutex;
         use yrs::Update;
         use yrs::updates::decoder::Decode;
@@ -2327,21 +2596,21 @@ mod tests {
                 V1,
                 vec![
                     3.0, 4.0, 5.0, 6.0, 7.0, 8.0, 9.0, 10.0, 11.0, 12.0, 13.0, 14.0, 15.0, 16.0,
-                    17.0, 18.0, 19.0,
+                    17.0, 18.0, 19.0, 20.0,
                 ],
             ),
             (
                 V2,
                 vec![
                     3.0, 4.0, 5.0, 6.0, 7.0, 8.0, 9.0, 10.0, 11.0, 12.0, 13.0, 14.0, 15.0, 16.0,
-                    17.0, 18.0, 19.0,
+                    17.0, 18.0, 19.0, 20.0,
                 ],
             ),
             (
                 V3,
                 vec![
                     4.0, 5.0, 6.0, 7.0, 8.0, 9.0, 10.0, 11.0, 12.0, 13.0, 14.0, 15.0, 16.0, 17.0,
-                    18.0, 19.0,
+                    18.0, 19.0, 20.0,
                 ],
             ),
         ] {
@@ -2418,7 +2687,7 @@ mod tests {
                 V4_LEGACY,
                 vec![
                     3.0, 4.0, 5.0, 6.0, 7.0, 8.0, 9.0, 10.0, 11.0, 12.0, 13.0, 14.0, 15.0, 16.0,
-                    17.0, 18.0, 19.0,
+                    17.0, 18.0, 19.0, 20.0,
                 ],
                 1,
             ),
@@ -2427,7 +2696,7 @@ mod tests {
                 V4_STYLES,
                 vec![
                     5.0, 6.0, 7.0, 8.0, 9.0, 10.0, 11.0, 12.0, 13.0, 14.0, 15.0, 16.0, 17.0, 18.0,
-                    19.0,
+                    19.0, 20.0,
                 ],
                 1,
             ),
@@ -2436,7 +2705,7 @@ mod tests {
                 V4_NUMBERED,
                 vec![
                     5.0, 6.0, 7.0, 8.0, 9.0, 10.0, 11.0, 12.0, 13.0, 14.0, 15.0, 16.0, 17.0, 18.0,
-                    19.0,
+                    19.0, 20.0,
                 ],
                 10,
             ),
@@ -2505,19 +2774,20 @@ mod tests {
                 V2,
                 vec![
                     3.0, 4.0, 5.0, 6.0, 7.0, 8.0, 9.0, 10.0, 11.0, 12.0, 13.0, 14.0, 15.0, 16.0,
-                    17.0, 18.0, 19.0,
+                    17.0, 18.0, 19.0, 20.0,
                 ],
             ),
             (
                 V5,
                 vec![
                     6.0, 7.0, 8.0, 9.0, 10.0, 11.0, 12.0, 13.0, 14.0, 15.0, 16.0, 17.0, 18.0, 19.0,
+                    20.0,
                 ],
             ),
             (
                 V6,
                 vec![
-                    7.0, 8.0, 9.0, 10.0, 11.0, 12.0, 13.0, 14.0, 15.0, 16.0, 17.0, 18.0, 19.0,
+                    7.0, 8.0, 9.0, 10.0, 11.0, 12.0, 13.0, 14.0, 15.0, 16.0, 17.0, 18.0, 19.0, 20.0,
                 ],
             ),
         ] {
@@ -2769,7 +3039,8 @@ mod tests {
                 (16.0, before.clone(), Some("legacy".to_owned()), Some(true)),
                 (17.0, before.clone(), Some("legacy".to_owned()), Some(true)),
                 (18.0, before.clone(), Some("legacy".to_owned()), Some(true)),
-                (19.0, before, Some("legacy".to_owned()), Some(true))
+                (19.0, before.clone(), Some("legacy".to_owned()), Some(true)),
+                (20.0, before, Some("legacy".to_owned()), Some(true))
             ]
         );
     }

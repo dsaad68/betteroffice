@@ -138,13 +138,17 @@ function paintShape(
   deviceScale: number,
   shadowBudget: ShadowBudget
 ): void {
+  if (shape.clip) {
+    buildPath(ctx, shape.clip, shape.x, shape.y, shape.w, shape.h);
+    ctx.clip();
+  }
   if (shape.shadow && (shape.fill || shape.stroke)) {
     paintShadowedShape(ctx, shape, deviceScale, shadowBudget);
   }
   buildPath(ctx, shape.path, shape.x, shape.y, shape.w, shape.h);
   if (shape.fill) {
     ctx.fillStyle = paintStyle(ctx, shape.fill, shape.x, shape.y, shape.w, shape.h);
-    ctx.fill();
+    ctx.fill(shape.evenOdd ? 'evenodd' : 'nonzero');
   }
   if (shape.stroke) {
     strokeCurrentPath(ctx, shape.stroke, shape.x, shape.y, shape.w, shape.h);
