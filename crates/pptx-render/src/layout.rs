@@ -1067,7 +1067,6 @@ impl<'a> LayoutBuilder<'a> {
             scale,
             stacked,
         )?;
-        // PowerPoint fits an overlong stack by starting another column, not by shrinking it.
         if !stacked && matches!(autofit, Some(TextAutofit::Normal { .. })) {
             while laid_out.total_height > content_rect.h && scale > MIN_AUTOFIT_SCALE {
                 scale = (scale * 0.9).max(MIN_AUTOFIT_SCALE);
@@ -1877,7 +1876,10 @@ fn layout_paragraph(
         }]);
     }
     let ranges = if stacked {
+        // One cell per cluster, but a hard break shapes to no glyph at all and would stack as a
+        // blank cell. PowerPoint starts a column there; dropping it is the closer of the two.
         (0..clusters.len())
+            .filter(|index| !clusters[*index].glyphs.is_empty())
             .map(|index| (index, index + 1))
             .collect()
     } else {
@@ -4209,6 +4211,65 @@ mod tests {
     }
 
     #[test]
+    fn a_stack_puts_one_glyph_on_each_line_and_no_line_on_a_break() {
+        let mut renderer = SlideRenderer::new();
+        renderer
+            .register_font(
+                "Arial",
+                false,
+                false,
+                include_bytes!("../../ooxml-text/tests/fonts/LiberationSans-Regular.ttf"),
+            )
+            .unwrap();
+        let style = ResolvedStyle {
+            face: renderer.resolve_face("Arial", false, false).unwrap(),
+            family: "Arial".to_owned(),
+            font_size_pt: 24.0,
+            spacing_pt: 0.0,
+            baseline_shift_px: 0.0,
+            bold: false,
+            italic: false,
+            underline: false,
+            color: "#000000".to_owned(),
+        };
+        let stack = |text: &str| {
+            let paragraph = ResolvedParagraph {
+                align: TextAlign::Left,
+                justify: false,
+                level: 0,
+                margin_left_px: 0.0,
+                line_spacing: None,
+                compat_line_spacing: false,
+                indent_px: 0.0,
+                marker: None,
+                bullet_style: None,
+                runs: vec![ResolvedRun {
+                    text: text.to_owned(),
+                    start: 0,
+                    style: style.clone(),
+                }],
+            };
+            layout_paragraph(&renderer.fonts, &paragraph, 0.0, 0.0, 1000.0, 1.0, true)
+                .unwrap()
+                .iter()
+                .map(|line| {
+                    line.runs
+                        .iter()
+                        .map(|run| run.text.clone())
+                        .collect::<String>()
+                })
+                .collect::<Vec<_>>()
+        };
+
+        // A hard break shapes to no glyph; stacking it would leave a blank cell mid-word.
+        assert_eq!(stack("A\nB"), ["A", "B"]);
+        // A space is ink-less but shaped, and PowerPoint does stack it.
+        assert_eq!(stack("A B"), ["A", " ", "B"]);
+        // Latin letters stay one per cell rather than merging.
+        assert_eq!(stack("ffi"), ["f", "f", "i"]);
+    }
+
+    #[test]
     fn gradient_stops_reach_the_display_list_in_position_order() {
         use ooxml_drawingml::{ColorValue, GradientFill, GradientStop as ModelStop};
 
@@ -5712,7 +5773,8 @@ mod tests {
         };
         second.style.spacing_pt = 6.0;
         paragraph.runs.push(second);
-        let lines = layout_paragraph(&renderer.fonts, &paragraph, 0.0, 0.0, 1000.0, 1.0).unwrap();
+        let lines =
+            layout_paragraph(&renderer.fonts, &paragraph, 0.0, 0.0, 1000.0, 1.0, false).unwrap();
         assert_eq!(lines[0].runs.len(), 2);
         assert_eq!(lines[0].runs[0].letter_spacing_px, 0.0);
         assert_eq!(lines[0].runs[1].letter_spacing_px, 8.0);
@@ -5748,7 +5810,8 @@ mod tests {
         let renderer = renderer();
         let mut paragraph = paragraph(&renderer, "just", "AA BB CC AA BB CC");
         paragraph.runs[0].style.spacing_pt = 6.0;
-        let lines = layout_paragraph(&renderer.fonts, &paragraph, 0.0, 0.0, 160.0, 1.0).unwrap();
+        let lines =
+            layout_paragraph(&renderer.fonts, &paragraph, 0.0, 0.0, 160.0, 1.0, false).unwrap();
         assert!(lines.len() > 1);
         assert!((lines[0].width - 160.0).abs() < 0.001, "{}", lines[0].width);
     }
@@ -5758,7 +5821,8 @@ mod tests {
         let renderer = renderer();
         let mut paragraph = paragraph(&renderer, "ctr", "AA\nAA");
         paragraph.runs[0].style.spacing_pt = 6.0;
-        let lines = layout_paragraph(&renderer.fonts, &paragraph, 0.0, 0.0, 1000.0, 1.0).unwrap();
+        let lines =
+            layout_paragraph(&renderer.fonts, &paragraph, 0.0, 0.0, 1000.0, 1.0, false).unwrap();
         assert_eq!(lines.len(), 2);
         assert!((lines[0].width - lines[1].width).abs() < 0.001);
         assert!((lines[0].x - lines[1].x).abs() < 0.001);
@@ -5769,6 +5833,7 @@ mod tests {
             0.0,
             lines[1].width + 0.001,
             1.0,
+            false,
         )
         .unwrap();
         assert_eq!(tight.len(), 2);
