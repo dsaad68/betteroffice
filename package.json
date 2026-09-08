@@ -36,7 +36,7 @@
     "deploy:docs": "bun run --filter './apps/docs' deploy",
     "deploy:demo": "bun run --filter './apps/demo' deploy",
     "build": "bun run --filter './apps/web' build",
-    "test": "bun run build:xlsx-wasm && bun run build:docx-wasm && bun test packages apps/web/app apps/demo/lib scripts",
+    "test": "bun run build:xlsx-wasm && bun run build:docx-wasm && bun test packages apps/web/app apps/web/lib apps/demo/lib scripts",
     "pretypecheck:packages": "bun run build:fonts",
     "typecheck:packages": "bun run --filter './packages/*' typecheck",
     "pretypecheck": "bun run build:packages",
@@ -61,6 +61,8 @@
   },
   "devDependencies": {
     "@changesets/cli": "^2.31.0",
-    "jszip": "3.10.1"
+    "jszip": "3.10.1",
+    "vite": "8.1.4",
+    "playwright": "1.61.1"
   }
 }
