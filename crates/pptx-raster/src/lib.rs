@@ -1670,6 +1670,101 @@ mod tests {
         );
     }
 
+    fn opaque_mark() -> Vec<u8> {
+        let mut source = Pixmap::new(40, 40).unwrap();
+        for pixel in source.pixels_mut() {
+            *pixel = ColorU8::from_rgba(255, 0, 0, 255).premultiply();
+        }
+        source.encode_png().unwrap()
+    }
+
+    fn shadowed_image(asset: &str, shadow: SlideShadow) -> Primitive {
+        Primitive::Image {
+            object_id: 1,
+            shape_id: None,
+            name: "shadow probe".into(),
+            x: 40.0,
+            y: 40.0,
+            w: 40.0,
+            h: 40.0,
+            asset_id: Some(asset.into()),
+            effects: Vec::new(),
+            crop: ImageCrop::default(),
+            path: None,
+            stroke: None,
+            shadow: Some(shadow),
+            transform: SlideTransform::default(),
+        }
+    }
+
+    #[test]
+    fn an_opaque_picture_casts_the_shape_shadow_byte_for_byte() {
+        let bytes = opaque_mark();
+        let fonts = FontStore::new();
+        let images = AssetMap::from([("mark", bytes.as_slice())]);
+        let mut list = empty_list(160.0, 160.0);
+        list.primitives.push(shadowed_image(
+            "mark",
+            SlideShadow {
+                color: "#00000066".into(),
+                blur: 8.0,
+                dx: 60.0,
+                dy: 0.0,
+                scale_x: 1.0,
+                scale_y: 1.0,
+            },
+        ));
+        let picture = render_slide(
+            &list,
+            &resources(&fonts, &images),
+            &RenderOptions::default(),
+        )
+        .expect("the opaque picture renders");
+        let shape = render_probe(&shadow_probe(40.0, Some("#FF0000"), None, 8.0, 60.0), 1.0);
+        assert_eq!(Pixmap::decode_png(&picture.bytes).unwrap(), shape);
+    }
+
+    #[test]
+    fn picture_shadows_charge_the_slide_shadow_budget() {
+        let bytes = opaque_mark();
+        let fonts = FontStore::new();
+        let images = AssetMap::from([("mark", bytes.as_slice())]);
+        let resources = resources(&fonts, &images);
+        let mut list = empty_list(160.0, 160.0);
+        list.primitives.push(shadowed_image(
+            "mark",
+            SlideShadow {
+                color: "#00000066".into(),
+                blur: 0.0,
+                dx: 0.0,
+                dy: 0.0,
+                scale_x: 1.0,
+                scale_y: 1.0,
+            },
+        ));
+        let options = RenderOptions {
+            max_shadow_pixels: 42 * 42,
+            ..Default::default()
+        };
+        render_slide(&list, &resources, &options).expect("one picture shadow fits the budget");
+        let tight = RenderOptions {
+            max_shadow_pixels: 42 * 42 - 1,
+            ..options.clone()
+        };
+        assert!(
+            render_slide(&list, &resources, &tight)
+                .unwrap_err()
+                .contains("shadows cover")
+        );
+        let mut many = list.clone();
+        many.primitives = vec![list.primitives[0].clone(); 10_000];
+        assert!(
+            render_slide(&many, &resources, &options)
+                .unwrap_err()
+                .contains("shadows cover")
+        );
+    }
+
     #[test]
     fn outline_shadows_keep_the_center_hollow() {
         let stroke = SlideStroke {

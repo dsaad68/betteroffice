@@ -54,4 +54,7 @@ transparent. The left picture carries the same
 `outerShdw blurRad="76200" dist="38100" dir="2700000"` in 40% black; the right
 one carries no effect list. The left shadow must trace the opaque square, not
 the 64x64 frame, so a frame-shaped shadow shows up as ink in the transparent
-corners.
+corners. A third shape below them fills the same bitmap through `a:blipFill`
+under `ln/noFill` and the same effect list, covering the picture-filled shape
+that layout rewrites into an image; a fourth, a `p:graphicFrame` whose OLE
+fallback picture carries the same effect list, covers the graphic-frame path.

@@ -91,3 +91,35 @@ fn a_picture_without_an_effect_list_casts_nothing() {
         .expect("the plain mark is drawn");
     assert_eq!(*shadow, None);
 }
+
+#[test]
+fn a_picture_filled_shape_keeps_its_shadow_through_the_image_rewrite() {
+    let shadows = image_shadows();
+    let (_, shadow) = shadows
+        .iter()
+        .find(|(object_id, _)| *object_id == 6)
+        .expect("the picture-filled card is drawn as an image");
+    let shadow = shadow
+        .as_ref()
+        .expect("the picture-filled card keeps its shadow");
+    assert_eq!(shadow.color, "#00000066");
+    assert!((shadow.blur - 8.0).abs() < 0.01);
+    assert!((shadow.dx - 2.828).abs() < 0.01);
+    assert!((shadow.dy - 2.828).abs() < 0.01);
+}
+
+#[test]
+fn an_ole_fallback_picture_resolves_its_shadow_in_the_frame_space() {
+    let shadows = image_shadows();
+    let (_, shadow) = shadows
+        .iter()
+        .find(|(object_id, _)| *object_id == 7)
+        .expect("the OLE fallback picture is drawn");
+    let shadow = shadow
+        .as_ref()
+        .expect("the OLE fallback picture casts a shadow");
+    assert_eq!(shadow.color, "#00000066");
+    assert!((shadow.blur - 8.0).abs() < 0.01);
+    assert!((shadow.dx - 2.828).abs() < 0.01);
+    assert!((shadow.dy - 2.828).abs() < 0.01);
+}

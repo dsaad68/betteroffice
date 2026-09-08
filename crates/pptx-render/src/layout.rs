@@ -500,7 +500,7 @@ impl<'a> LayoutBuilder<'a> {
             .or_else(|| master_node.and_then(node_effects));
         let shadow = node_effects
             .filter(|_| match shape.kind {
-                ShapeKind::Shape => fill.is_some() || outline.is_some(),
+                ShapeKind::Shape => fill.is_some() || outline.is_some() || picture.is_some(),
                 ShapeKind::Picture => true,
                 ShapeKind::GraphicFrame | ShapeKind::Group => false,
             })
@@ -647,10 +647,14 @@ impl<'a> LayoutBuilder<'a> {
                 let outline = self
                     .resolved_outline(&[Some(shape)])
                     .and_then(|outline| stroke(&outline, self.theme));
+                let picture = resolved_fill
+                    .as_ref()
+                    .filter(|fill| fill.fill_type == PICTURE_FILL)
+                    .and(value.picture_fill.as_deref());
                 let shadow = value
                     .effects
                     .as_ref()
-                    .filter(|_| fill.is_some() || outline.is_some())
+                    .filter(|_| fill.is_some() || outline.is_some() || picture.is_some())
                     .and_then(|effects| {
                         shadow(
                             effects,
@@ -690,10 +694,7 @@ impl<'a> LayoutBuilder<'a> {
                         transform,
                     },
                     &value.paths,
-                    resolved_fill
-                        .as_ref()
-                        .filter(|fill| fill.fill_type == PICTURE_FILL)
-                        .and(value.picture_fill.as_deref()),
+                    picture,
                 )?;
             }
             ShapeNode::Picture(value) => {
