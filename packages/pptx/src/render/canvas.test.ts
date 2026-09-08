@@ -961,6 +961,25 @@ describe('blip colour effects', () => {
     expect([...data]).toEqual([0x73, 0x73, 0x73, 0xff, 255, 255, 255, 0xff]);
   });
 
+  test('lum maps each channel through the reference ramp', () => {
+    const cases: [number[], ImageEffect, number[]][] = [
+      [[0, 3, 64, 128], { kind: 'luminance', brightness: 0.7, contrast: -0.7 }, [205, 206, 225, 128]],
+      [[167, 223, 255, 64], { kind: 'luminance', brightness: 0.7, contrast: -0.7 }, [255, 255, 255, 64]],
+      [[0, 3, 167, 255], { kind: 'luminance', brightness: 0, contrast: -0.5 }, [64, 65, 148, 255]],
+      [[0, 3, 167, 255], { kind: 'luminance', brightness: 0.03, contrast: 0.77 }, [0, 0, 255, 255]],
+      [[0, 127, 128, 255], { kind: 'luminance', brightness: 0, contrast: 1 }, [0, 0, 128, 255]],
+      [[0, 127, 255, 255], { kind: 'luminance', brightness: 0, contrast: -1 }, [127, 128, 129, 255]],
+      [[0, 127, 255, 255], { kind: 'luminance', brightness: 1, contrast: 0 }, [255, 255, 255, 255]],
+      [[0, 127, 255, 255], { kind: 'luminance', brightness: -1, contrast: -1 }, [0, 0, 0, 255]],
+      [[3, 167, 223, 128], { kind: 'luminance', brightness: 0, contrast: 0 }, [3, 167, 223, 128]],
+    ];
+    for (const [source, effect, expected] of cases) {
+      const data = new Uint8ClampedArray(source);
+      applyImageEffects(data, [effect]);
+      expect([...data]).toEqual(expected);
+    }
+  });
+
   test('effects apply in list order', () => {
     const ordered: ImageEffect[] = [
       { kind: 'colorChange', from: '#ffffffff', to: '#ffffff00' },

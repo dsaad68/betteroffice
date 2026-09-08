@@ -337,6 +337,8 @@ pub enum BlipEffect {
     BiLevel { threshold: f64 },
     /// `a:grayscl`.
     Grayscale,
+    /// `a:lum`: brightness and contrast, each a fraction in `-1.0..=1.0`.
+    Luminance { brightness: f64, contrast: f64 },
     /// `a:duotone`: luminance interpolates between the two colours.
     Duotone {
         shadow: Option<ColorValue>,

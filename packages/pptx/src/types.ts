@@ -70,6 +70,7 @@ export interface ShapeOutline {
 export type BlipEffect =
   | { type: 'biLevel'; threshold: number }
   | { type: 'grayscale' }
+  | { type: 'luminance'; brightness: number; contrast: number }
   | { type: 'duotone'; shadow: ColorValue | null; highlight: ColorValue | null }
   | { type: 'colorChange'; from: ColorValue | null; to: ColorValue | null; useAlpha?: boolean };
 
@@ -309,6 +310,7 @@ export interface ShapePrimitive extends PrimitiveBase {
 export type ImageEffect =
   | { kind: 'biLevel'; threshold: number }
   | { kind: 'grayscale' }
+  | { kind: 'luminance'; brightness: number; contrast: number }
   | { kind: 'duotone'; shadow: string; highlight: string }
   | { kind: 'colorChange'; from: string; to: string; useAlpha?: boolean };
 export interface ImageCrop {

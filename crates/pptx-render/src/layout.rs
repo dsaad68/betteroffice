@@ -2980,6 +2980,13 @@ fn image_effects(effects: &[BlipEffect], theme: &Theme) -> Vec<ImageEffect> {
                 threshold: (*threshold as f32).clamp(0.0, 1.0),
             }),
             BlipEffect::Grayscale => Some(ImageEffect::Grayscale),
+            BlipEffect::Luminance {
+                brightness,
+                contrast,
+            } => Some(ImageEffect::Luminance {
+                brightness: (*brightness as f32).clamp(-1.0, 1.0),
+                contrast: (*contrast as f32).clamp(-1.0, 1.0),
+            }),
             BlipEffect::Duotone { shadow, highlight } => Some(ImageEffect::Duotone {
                 shadow: rgba(shadow.as_ref())?,
                 highlight: rgba(highlight.as_ref())?,
@@ -4078,6 +4085,25 @@ mod tests {
         );
 
         assert!(effects.is_empty());
+    }
+
+    #[test]
+    fn luminance_outside_the_legal_range_clamps() {
+        let effects = image_effects(
+            &[BlipEffect::Luminance {
+                brightness: 4.0,
+                contrast: -3.0,
+            }],
+            &Theme::default(),
+        );
+
+        assert_eq!(
+            effects,
+            vec![ImageEffect::Luminance {
+                brightness: 1.0,
+                contrast: -1.0,
+            }]
+        );
     }
 
     #[test]
