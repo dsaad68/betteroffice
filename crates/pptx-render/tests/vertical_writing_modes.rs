@@ -1,4 +1,5 @@
-use pptx_edit::DeckSession;
+use pptx_edit::{DeckSession, EditCtx};
+use pptx_parse::{ShapeNode, TextAutofit};
 use pptx_render::{Primitive, RenderedSlide, SlideRenderer};
 
 const DECK: &[u8] = include_bytes!("fixtures/vertical-writing-modes.pptx");
@@ -116,6 +117,59 @@ fn word_art_vertical_stacks_one_cluster_a_line_without_turning_the_box() {
             assert!(pair[0].y + pair[0].height <= pair[1].y, "shape {id}");
         }
     }
+}
+
+/// Point size of `source_id` after squeezing its box, with `normAutofit` on or off.
+fn squeezed_font_size(source_id: u32, autofit: bool) -> f32 {
+    let mut package = pptx_parse::parse_pptx(DECK).unwrap();
+    let session = DeckSession::open(DECK, 309).unwrap();
+    let snapshot = session.snapshot().unwrap();
+    let slide_id = snapshot.slides[0].id.clone();
+    let shape_id = snapshot.slides[0]
+        .shapes
+        .iter()
+        .find(|shape| shape.source_id == source_id)
+        .unwrap()
+        .id
+        .clone();
+    session
+        .resize_shape(
+            &EditCtx::local("test"),
+            &slide_id,
+            &shape_id,
+            1_600_200,
+            200_000,
+        )
+        .unwrap();
+    if autofit {
+        let ShapeNode::Shape(parsed) = package.slides[0]
+            .shapes
+            .iter_mut()
+            .find(|shape| shape.id() == source_id)
+            .unwrap()
+        else {
+            unreachable!()
+        };
+        parsed.text.as_mut().unwrap().autofit = Some(TextAutofit::Normal {
+            font_scale: None,
+            line_space_reduction: None,
+        });
+    }
+    let mut renderer = SlideRenderer::new();
+    renderer.register_font("Arial", false, false, FONT).unwrap();
+    let slide = renderer
+        .layout_slide(&package, &session.snapshot().unwrap(), 0)
+        .unwrap();
+    let Primitive::TextBox { paragraphs, .. } = text(&slide, source_id) else {
+        unreachable!()
+    };
+    paragraphs[0].runs[0].font_size_pt
+}
+
+#[test]
+fn autofit_shrinks_a_squeezed_horizontal_box_but_never_a_stack() {
+    assert_eq!(squeezed_font_size(42, true), squeezed_font_size(42, false));
+    assert!(squeezed_font_size(45, true) < squeezed_font_size(45, false));
 }
 
 #[test]
