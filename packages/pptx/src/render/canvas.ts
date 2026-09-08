@@ -618,6 +618,18 @@ function luma(data: Uint8ClampedArray, index: number): number {
   return 0.299 * data[index] + 0.587 * data[index + 1] + 0.114 * data[index + 2];
 }
 
+/** `a:lum` as a 256-entry ramp, fitted to what LibreOffice draws for the same
+ * brightness and contrast. */
+function luminanceMap(brightness: number, contrast: number): Uint8ClampedArray {
+  const clamped = Math.min(Math.max(contrast, -1), 1);
+  const slope = clamped >= 0 ? 128 / (128 - 127 * clamped) : (128 + 127 * clamped) / 128;
+  const offset =
+    128 - 128 * slope + (255 * Math.min(Math.max(brightness, -1), 1) * (1 + slope)) / 2;
+  const map = new Uint8ClampedArray(256);
+  for (let value = 0; value < 256; value += 1) map[value] = Math.round(slope * value + offset);
+  return map;
+}
+
 function rgba(color: string): [number, number, number, number] | null {
   const hex = color.startsWith('#') ? color.slice(1) : color;
   const expanded = hex.length === 3 || hex.length === 4 ? [...hex].map((c) => c + c).join('') : hex;
@@ -652,6 +664,15 @@ export function applyImageEffects(data: Uint8ClampedArray, effects: ImageEffect[
           data[index] = value;
           data[index + 1] = value;
           data[index + 2] = value;
+        }
+        break;
+      }
+      case 'luminance': {
+        const map = luminanceMap(effect.brightness, effect.contrast);
+        for (let index = 0; index < data.length; index += 4) {
+          data[index] = map[data[index]];
+          data[index + 1] = map[data[index + 1]];
+          data[index + 2] = map[data[index + 2]];
         }
         break;
       }

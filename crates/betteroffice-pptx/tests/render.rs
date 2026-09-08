@@ -143,6 +143,54 @@ fn dumps_slides_when_asked() {
 }
 
 #[test]
+fn lum_brightness_and_contrast_reach_the_bitmap() {
+    use betteroffice_pptx::{ImageEffect, Primitive};
+    let source = include_bytes!("../../pptx-render/tests/fixtures/blip-lum.pptx");
+    let deck = Presentation::open(source).unwrap();
+    let list = deck.render_slide(0).unwrap().display_list;
+    let effects: Vec<_> = list
+        .primitives
+        .iter()
+        .filter_map(|primitive| match primitive {
+            Primitive::Image { name, effects, .. } => Some((name.as_str(), effects.as_slice())),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(effects.len(), 5);
+    assert_eq!(effects[0], ("Control", [].as_slice()));
+    assert_eq!(
+        effects[1].1,
+        [ImageEffect::Luminance {
+            brightness: 0.7,
+            contrast: -0.7
+        }]
+    );
+
+    let png = deck.render_png(0, &RenderOptions::default()).unwrap();
+    let mut reader = png::Decoder::new(Cursor::new(&png.bytes))
+        .read_info()
+        .unwrap();
+    let mut pixels = vec![0; reader.output_buffer_size().unwrap()];
+    let info = reader.next_frame(&mut pixels).unwrap();
+    let pixel =
+        |x, y| &pixels[(y * info.width as usize + x) * 4..(y * info.width as usize + x) * 4 + 4];
+    for (x, y, expected) in [
+        (40, 40, [0, 0, 0, 255]),
+        (280, 40, [3, 167, 223, 255]),
+        (40, 100, [205, 205, 205, 255]),
+        (88, 100, [225, 225, 225, 255]),
+        (280, 100, [206, 255, 255, 255]),
+        (40, 160, [128, 128, 128, 255]),
+        (40, 220, [64, 64, 64, 255]),
+        (232, 220, [192, 192, 192, 255]),
+        (280, 220, [65, 148, 176, 255]),
+        (136, 280, [148, 148, 148, 255]),
+    ] {
+        assert_eq!(pixel(x, y), expected, "pixel ({x}, {y})");
+    }
+}
+
+#[test]
 fn blip_effects_render_on_slides_layouts_and_masters() {
     use betteroffice_pptx::{ImageEffect, Primitive};
     let source = include_bytes!("../../pptx-render/tests/fixtures/blip-effects.pptx");
