@@ -2,7 +2,7 @@
 //! through byte for byte; edited slides are patched at the XML level so
 //! unmodeled markup survives.
 
-use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
+use std::collections::{BTreeMap, HashMap, HashSet};
 
 use ooxml_drawingml::{
     ColorValue, GradientFill, ShapeFill, ShapeOutline, Theme, resolve_color_value_to_hex_with_theme,
@@ -1198,23 +1198,46 @@ fn patch_shape_children(
         .into_iter()
         .map(Some)
         .collect();
-    let shape_slots = shape_slots(&slots, elements);
-    // A wrapper whose every nested shape was deleted must go with them: it is not a shape element,
-    // so the sibling flush would otherwise carry it through and the shapes would come back.
-    let mut orphaned: BTreeSet<usize> = shape_slots
-        .iter()
-        .filter(|slot| !slot.path.is_empty())
-        .map(|slot| slot.position)
-        .collect();
+    let mut shape_slots = shape_slots(&slots, elements);
+    let mut kept = vec![false; shape_slots.len()];
     for write in writes {
         if let ShapeWrite::Keep { source_index } | ShapeWrite::Patch { source_index, .. } = write
-            && let Some(slot) = shape_slots.get(*source_index)
+            && let Some(flag) = kept.get_mut(*source_index)
         {
-            orphaned.remove(&slot.position);
+            *flag = true;
         }
     }
-    for position in &orphaned {
-        slots[*position] = None;
+    // A wrapper is not a shape element, so the sibling flush carries it through whatever became of
+    // the shapes inside it: a deleted one leaves the branch, an emptied wrapper leaves the file.
+    let mut nested: BTreeMap<usize, (usize, Vec<Vec<usize>>)> = BTreeMap::new();
+    for (slot, kept) in shape_slots.iter().zip(&kept) {
+        if slot.path.is_empty() {
+            continue;
+        }
+        let entry = nested.entry(slot.position).or_default();
+        entry.0 += 1;
+        if !kept {
+            entry.1.push(slot.path.clone());
+        }
+    }
+    for (position, (total, mut paths)) in nested {
+        if paths.len() == total && branch_holds_only(&slots[position], &paths) {
+            slots[position] = None;
+            continue;
+        }
+        paths.sort();
+        for path in paths.iter().rev() {
+            let Some(node) = slots[position].as_mut() else {
+                continue;
+            };
+            remove_at_path(node, path);
+            for slot in shape_slots
+                .iter_mut()
+                .filter(|slot| slot.position == position)
+            {
+                shift_path(&mut slot.path, path);
+            }
+        }
     }
     let mut children = Vec::with_capacity(slots.len());
     let mut hosts: BTreeMap<usize, usize> = BTreeMap::new();
@@ -1362,6 +1385,43 @@ fn emit_source_element(
         hosts.insert(slot.position, children.len() - 1);
     }
     Some(children.len() - 1)
+}
+
+/// Whether the branch `slot` reads holds nothing but the elements at `paths`.
+fn branch_holds_only(slot: &Option<XmlNode>, paths: &[Vec<usize>]) -> bool {
+    let Some(XmlNode::Element(alternate)) = slot else {
+        return true;
+    };
+    let Some(index) = alternate_content_branch_index(alternate) else {
+        return true;
+    };
+    let XmlNode::Element(branch) = &alternate.children[index] else {
+        return true;
+    };
+    branch.children.iter().enumerate().all(|(child, node)| {
+        !matches!(node, XmlNode::Element(_)) || paths.iter().any(|path| path == &[index, child])
+    })
+}
+
+fn remove_at_path(node: &mut XmlNode, path: &[usize]) {
+    let Some((last, parents)) = path.split_last() else {
+        return;
+    };
+    if let Some(parent) = element_at_path(node, parents)
+        && *last < parent.children.len()
+    {
+        parent.children.remove(*last);
+    }
+}
+
+/// Closes the gap [`remove_at_path`] leaves in the paths of its later siblings.
+fn shift_path(path: &mut [usize], removed: &[usize]) {
+    let Some((last, parents)) = removed.split_last() else {
+        return;
+    };
+    if path.len() > parents.len() && path.starts_with(parents) && path[parents.len()] > *last {
+        path[parents.len()] -= 1;
+    }
 }
 
 fn element_at_path<'a>(node: &'a mut XmlNode, path: &[usize]) -> Option<&'a mut XmlElement> {
@@ -2673,6 +2733,65 @@ mod tests {
             })
             .collect();
         assert_eq!(names, ["one", "two", "three", "four"]);
+    }
+
+    #[test]
+    fn deleting_one_of_the_shapes_a_branch_holds_leaves_the_others_in_place() {
+        let limits = ParseLimits::default();
+        let mut budget = ParseBudget::new(&limits);
+        let part = "ppt/slides/slide1.xml";
+        let mut root = parse_xml(
+            br#"<p:sld><p:cSld><p:spTree><p:sp><p:nvSpPr><p:cNvPr id="2" name="one"/></p:nvSpPr><p:spPr/></p:sp><mc:AlternateContent><mc:Fallback><p:sp><p:nvSpPr><p:cNvPr id="3" name="two"/></p:nvSpPr><p:spPr/></p:sp><p:sp><p:nvSpPr><p:cNvPr id="4" name="three"/></p:nvSpPr><p:spPr/></p:sp></mc:Fallback></mc:AlternateContent></p:spTree></p:cSld></p:sld>"#,
+            part,
+            &mut budget,
+        )
+        .unwrap();
+
+        patch_slide(
+            &mut root,
+            &[
+                ShapeWrite::Keep { source_index: 0 },
+                ShapeWrite::Patch {
+                    source_index: 2,
+                    patch: Box::new(ShapePatch {
+                        fill: Some(ShapeFill {
+                            color: Some(ColorValue::from_attribute("DC2626")),
+                            ..ShapeFill::named("solid")
+                        }),
+                        ..ShapePatch::default()
+                    }),
+                },
+            ],
+            None,
+            part,
+            ShapeElements::WithConnectors,
+        )
+        .unwrap();
+
+        let xml = String::from_utf8(serialize_xml(&root)).unwrap();
+        assert!(xml.contains(r#"name="one""#));
+        assert!(!xml.contains(r#"name="two""#), "{xml}");
+        let survivor = xml.split(r#"name="three""#).nth(1).unwrap();
+        assert!(survivor.contains(r#"<a:srgbClr val="DC2626"/>"#), "{xml}");
+    }
+
+    #[test]
+    fn a_branch_that_still_holds_unmodeled_markup_outlives_its_only_shape() {
+        let limits = ParseLimits::default();
+        let mut budget = ParseBudget::new(&limits);
+        let part = "ppt/slides/slide1.xml";
+        let mut root = parse_xml(
+            br#"<p:sld><p:cSld><p:spTree><mc:AlternateContent><mc:Fallback><p:sp><p:nvSpPr><p:cNvPr id="2" name="one"/></p:nvSpPr></p:sp><p:cxnSp><p:nvCxnSpPr><p:cNvPr id="3" name="two"/></p:nvCxnSpPr></p:cxnSp></mc:Fallback></mc:AlternateContent></p:spTree></p:cSld></p:sld>"#,
+            part,
+            &mut budget,
+        )
+        .unwrap();
+
+        patch_slide(&mut root, &[], None, part, ShapeElements::WithoutConnectors).unwrap();
+
+        let xml = String::from_utf8(serialize_xml(&root)).unwrap();
+        assert!(!xml.contains(r#"name="one""#), "{xml}");
+        assert!(xml.contains(r#"name="two""#), "{xml}");
     }
 
     fn run_properties(xml: &[u8]) -> (XmlElement, Prefixes, RunProperties) {
