@@ -1059,11 +1059,24 @@ impl<'a> LayoutBuilder<'a> {
             }
             _ => 1.0,
         };
-        let mut laid_out = layout_content(&self.renderer.fonts, &resolved, content_rect, scale)?;
-        if matches!(autofit, Some(TextAutofit::Normal { .. })) {
+        let stacked = flow == TextFlow::Stacked;
+        let mut laid_out = layout_content(
+            &self.renderer.fonts,
+            &resolved,
+            content_rect,
+            scale,
+            stacked,
+        )?;
+        if !stacked && matches!(autofit, Some(TextAutofit::Normal { .. })) {
             while laid_out.total_height > content_rect.h && scale > MIN_AUTOFIT_SCALE {
                 scale = (scale * 0.9).max(MIN_AUTOFIT_SCALE);
-                laid_out = layout_content(&self.renderer.fonts, &resolved, content_rect, scale)?;
+                laid_out = layout_content(
+                    &self.renderer.fonts,
+                    &resolved,
+                    content_rect,
+                    scale,
+                    stacked,
+                )?;
                 if scale == MIN_AUTOFIT_SCALE {
                     break;
                 }
@@ -1093,6 +1106,9 @@ impl<'a> LayoutBuilder<'a> {
         };
         for line in &mut laid_out.lines {
             shift_line(line, 0.0, vertical_shift);
+        }
+        if flow == TextFlow::VertLeftToRight {
+            reverse_line_order(&mut laid_out.lines);
         }
         let display_paragraphs = resolved
             .paragraphs
@@ -1148,29 +1164,33 @@ enum TextFlow {
     Horizontal,
     Vert,
     Vert270,
+    VertLeftToRight,
+    Stacked,
 }
 
 impl TextFlow {
     fn from_body_vert(vertical: Option<&str>) -> Self {
         match vertical {
-            Some("vert") => Self::Vert,
+            Some("vert" | "eaVert") => Self::Vert,
             Some("vert270") => Self::Vert270,
+            Some("mongolianVert") => Self::VertLeftToRight,
+            Some("wordArtVert" | "wordArtVertRtl") => Self::Stacked,
             _ => Self::Horizontal,
         }
     }
 
     fn rotation_deg(self) -> f32 {
         match self {
-            Self::Horizontal => 0.0,
-            Self::Vert => 90.0,
+            Self::Horizontal | Self::Stacked => 0.0,
+            Self::Vert | Self::VertLeftToRight => 90.0,
             Self::Vert270 => -90.0,
         }
     }
 
     fn layout_rect(self, rect: PxRect) -> PxRect {
         match self {
-            Self::Horizontal => rect,
-            Self::Vert | Self::Vert270 => PxRect {
+            Self::Horizontal | Self::Stacked => rect,
+            Self::Vert | Self::Vert270 | Self::VertLeftToRight => PxRect {
                 x: rect.x + (rect.w - rect.h) / 2.0,
                 y: rect.y + (rect.h - rect.w) / 2.0,
                 w: rect.h,
@@ -1181,10 +1201,24 @@ impl TextFlow {
 
     fn layout_insets(self, [left, top, right, bottom]: [i64; 4]) -> [i64; 4] {
         match self {
-            Self::Horizontal => [left, top, right, bottom],
-            Self::Vert => [top, right, bottom, left],
+            Self::Horizontal | Self::Stacked => [left, top, right, bottom],
+            Self::Vert | Self::VertLeftToRight => [top, right, bottom, left],
             Self::Vert270 => [bottom, left, top, right],
         }
+    }
+}
+
+/// Mirrors the lines within the block they occupy, keeping the block in place.
+fn reverse_line_order(lines: &mut [PositionedTextLine]) {
+    let Some(top) = lines.iter().map(|line| line.y).reduce(f32::min) else {
+        return;
+    };
+    let bottom = lines
+        .iter()
+        .map(|line| line.y + line.height)
+        .fold(f32::MIN, f32::max);
+    for line in lines {
+        shift_line(line, 0.0, top + bottom - line.height - 2.0 * line.y);
     }
 }
 
@@ -1781,14 +1815,22 @@ fn layout_content(
     content: &ResolvedContent,
     rect: PxRect,
     scale: f32,
+    stacked: bool,
 ) -> Result<LayoutText, RenderError> {
     let mut lines = Vec::new();
     let mut y = rect.y;
     for paragraph in &content.paragraphs {
         let paragraph_x = rect.x + paragraph.margin_left_px.max(0.0);
         let paragraph_width = (rect.w - paragraph.margin_left_px.max(0.0)).max(1.0);
-        let mut paragraph_lines =
-            layout_paragraph(fonts, paragraph, paragraph_x, y, paragraph_width, scale)?;
+        let mut paragraph_lines = layout_paragraph(
+            fonts,
+            paragraph,
+            paragraph_x,
+            y,
+            paragraph_width,
+            scale,
+            stacked,
+        )?;
         if let Some(last) = paragraph_lines.last() {
             y = last.y + last.height;
         }
@@ -1807,6 +1849,7 @@ fn layout_paragraph(
     y: f32,
     width: f32,
     scale: f32,
+    stacked: bool,
 ) -> Result<Vec<PositionedTextLine>, RenderError> {
     let clusters = shape_paragraph(fonts, paragraph, scale)?;
     if clusters.is_empty() {
@@ -1832,7 +1875,15 @@ fn layout_paragraph(
             }],
         }]);
     }
-    let ranges = wrap_clusters(&clusters, width);
+    let ranges = if stacked {
+        // A hard break shapes to no glyph, so stacking it would leave a blank cell.
+        (0..clusters.len())
+            .filter(|index| !clusters[*index].glyphs.is_empty())
+            .map(|index| (index, index + 1))
+            .collect()
+    } else {
+        wrap_clusters(&clusters, width)
+    };
     let line_count = ranges.len();
     let mut output = Vec::with_capacity(line_count);
     let mut line_y = y;
@@ -3924,7 +3975,8 @@ mod tests {
             .take_while(|cluster| cluster_is_blank(cluster))
             .count();
         let width = prefix_width + clusters[second_break].width / 2.0;
-        let lines = layout_paragraph(&renderer.fonts, &justified, 20.0, 30.0, width, 1.0).unwrap();
+        let lines =
+            layout_paragraph(&renderer.fonts, &justified, 20.0, 30.0, width, 1.0, false).unwrap();
         let natural = layout_paragraph(
             &renderer.fonts,
             &paragraph(&renderer, "justLow", text),
@@ -3932,6 +3984,7 @@ mod tests {
             30.0,
             width,
             1.0,
+            false,
         )
         .unwrap();
 
@@ -4071,9 +4124,16 @@ mod tests {
                     .collect(),
             };
             for scale in [1.0, 0.5] {
-                let lines =
-                    layout_paragraph(&renderer.fonts, &paragraph, 10.0, 20.0, 10_000.0, scale)
-                        .unwrap();
+                let lines = layout_paragraph(
+                    &renderer.fonts,
+                    &paragraph,
+                    10.0,
+                    20.0,
+                    10_000.0,
+                    scale,
+                    false,
+                )
+                .unwrap();
                 assert_eq!(lines.len(), 1);
                 let runs = &lines[0].runs;
                 assert_eq!(runs.len(), 3);
@@ -4142,10 +4202,66 @@ mod tests {
         let joined = paragraph(&["alpha beta gamma delta"]);
         for width in [100.0, 10_000.0] {
             let render = |paragraph| {
-                layout_paragraph(&renderer.fonts, paragraph, 10.0, 20.0, width, 1.0).unwrap()
+                layout_paragraph(&renderer.fonts, paragraph, 10.0, 20.0, width, 1.0, false).unwrap()
             };
             assert_eq!(render(&split), render(&joined));
         }
+    }
+
+    #[test]
+    fn a_stack_puts_one_glyph_on_each_line_and_no_line_on_a_break() {
+        let mut renderer = SlideRenderer::new();
+        renderer
+            .register_font(
+                "Arial",
+                false,
+                false,
+                include_bytes!("../../ooxml-text/tests/fonts/LiberationSans-Regular.ttf"),
+            )
+            .unwrap();
+        let style = ResolvedStyle {
+            face: renderer.resolve_face("Arial", false, false).unwrap(),
+            family: "Arial".to_owned(),
+            font_size_pt: 24.0,
+            spacing_pt: 0.0,
+            baseline_shift_px: 0.0,
+            bold: false,
+            italic: false,
+            underline: false,
+            color: "#000000".to_owned(),
+        };
+        let stack = |text: &str| {
+            let paragraph = ResolvedParagraph {
+                align: TextAlign::Left,
+                justify: false,
+                level: 0,
+                margin_left_px: 0.0,
+                line_spacing: None,
+                compat_line_spacing: false,
+                indent_px: 0.0,
+                marker: None,
+                bullet_style: None,
+                runs: vec![ResolvedRun {
+                    text: text.to_owned(),
+                    start: 0,
+                    style: style.clone(),
+                }],
+            };
+            layout_paragraph(&renderer.fonts, &paragraph, 0.0, 0.0, 1000.0, 1.0, true)
+                .unwrap()
+                .iter()
+                .map(|line| {
+                    line.runs
+                        .iter()
+                        .map(|run| run.text.clone())
+                        .collect::<String>()
+                })
+                .collect::<Vec<_>>()
+        };
+
+        assert_eq!(stack("A\nB"), ["A", "B"]);
+        assert_eq!(stack("A B"), ["A", " ", "B"]);
+        assert_eq!(stack("ffi"), ["f", "f", "i"]);
     }
 
     #[test]
@@ -5099,6 +5215,14 @@ mod tests {
         assert_eq!(TextFlow::from_body_vert(Some("vert270")), TextFlow::Vert270);
         assert_eq!(TextFlow::from_body_vert(Some("horz")), TextFlow::Horizontal);
         assert_eq!(TextFlow::from_body_vert(None), TextFlow::Horizontal);
+        assert_eq!(TextFlow::from_body_vert(Some("eaVert")), TextFlow::Vert);
+        assert_eq!(
+            TextFlow::from_body_vert(Some("mongolianVert")),
+            TextFlow::VertLeftToRight
+        );
+        for mode in ["wordArtVert", "wordArtVertRtl"] {
+            assert_eq!(TextFlow::from_body_vert(Some(mode)), TextFlow::Stacked);
+        }
 
         let shape = |rotation_deg| Transform {
             rotation_deg,
@@ -5130,6 +5254,12 @@ mod tests {
             }
         );
         assert_eq!(TextFlow::Horizontal.layout_rect(rect), rect);
+        assert_eq!(
+            TextFlow::VertLeftToRight.layout_rect(rect),
+            TextFlow::Vert.layout_rect(rect)
+        );
+        assert_eq!(TextFlow::Stacked.layout_rect(rect), rect);
+        assert_eq!(TextFlow::Stacked.rotation_deg(), 0.0);
     }
 
     /// Renders a synthetic master text box.
@@ -5638,7 +5768,8 @@ mod tests {
         };
         second.style.spacing_pt = 6.0;
         paragraph.runs.push(second);
-        let lines = layout_paragraph(&renderer.fonts, &paragraph, 0.0, 0.0, 1000.0, 1.0).unwrap();
+        let lines =
+            layout_paragraph(&renderer.fonts, &paragraph, 0.0, 0.0, 1000.0, 1.0, false).unwrap();
         assert_eq!(lines[0].runs.len(), 2);
         assert_eq!(lines[0].runs[0].letter_spacing_px, 0.0);
         assert_eq!(lines[0].runs[1].letter_spacing_px, 8.0);
@@ -5674,7 +5805,8 @@ mod tests {
         let renderer = renderer();
         let mut paragraph = paragraph(&renderer, "just", "AA BB CC AA BB CC");
         paragraph.runs[0].style.spacing_pt = 6.0;
-        let lines = layout_paragraph(&renderer.fonts, &paragraph, 0.0, 0.0, 160.0, 1.0).unwrap();
+        let lines =
+            layout_paragraph(&renderer.fonts, &paragraph, 0.0, 0.0, 160.0, 1.0, false).unwrap();
         assert!(lines.len() > 1);
         assert!((lines[0].width - 160.0).abs() < 0.001, "{}", lines[0].width);
     }
@@ -5684,7 +5816,8 @@ mod tests {
         let renderer = renderer();
         let mut paragraph = paragraph(&renderer, "ctr", "AA\nAA");
         paragraph.runs[0].style.spacing_pt = 6.0;
-        let lines = layout_paragraph(&renderer.fonts, &paragraph, 0.0, 0.0, 1000.0, 1.0).unwrap();
+        let lines =
+            layout_paragraph(&renderer.fonts, &paragraph, 0.0, 0.0, 1000.0, 1.0, false).unwrap();
         assert_eq!(lines.len(), 2);
         assert!((lines[0].width - lines[1].width).abs() < 0.001);
         assert!((lines[0].x - lines[1].x).abs() < 0.001);
@@ -5695,6 +5828,7 @@ mod tests {
             0.0,
             lines[1].width + 0.001,
             1.0,
+            false,
         )
         .unwrap();
         assert_eq!(tight.len(), 2);
