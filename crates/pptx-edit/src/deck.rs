@@ -21,9 +21,9 @@ use crate::{
     ShapeStrokeReceipt, SlideReceipt, SlideSnapshot, TransformReceipt,
 };
 
-const SCHEMA_VERSION: f64 = 23.0;
+const SCHEMA_VERSION: f64 = 21.0;
 /// Versions [`migrate_doc`] can carry forward. Anything else is unreadable.
-const MIGRATABLE_SCHEMA_VERSIONS: [f64; 23] = [
+const MIGRATABLE_SCHEMA_VERSIONS: [f64; 21] = [
     1.0,
     2.0,
     3.0,
@@ -44,8 +44,6 @@ const MIGRATABLE_SCHEMA_VERSIONS: [f64; 23] = [
     18.0,
     19.0,
     20.0,
-    21.0,
-    22.0,
     SCHEMA_VERSION,
 ];
 const MAX_GEOMETRY: i64 = 1_000_000_000_000_000;
@@ -1045,12 +1043,6 @@ pub(crate) fn migrate_doc(doc: &Doc) -> EditResult<()> {
     if version < 21.0 {
         migrate_doc_to_v21(doc)?;
     }
-    if version < 22.0 {
-        migrate_doc_to_v22(doc)?;
-    }
-    if version < 23.0 {
-        migrate_doc_to_v23(doc)?;
-    }
     Ok(())
 }
 
@@ -1381,44 +1373,12 @@ fn migrate_doc_to_v20(doc: &Doc) -> EditResult<()> {
 }
 
 /// Carries this batch's model additions, each step before the stamp. A v20
-/// package has no `c:ser/c:spPr/a:ln`; [`import_source_render_data`] restores
-/// it once the source is reattached.
+/// package has neither `c:ser/c:spPr/a:ln` nor `a:pPr/@marR`;
+/// [`import_source_render_data`] restores both once the source is reattached.
 fn migrate_doc_to_v21(doc: &Doc) -> EditResult<()> {
     let mut txn = doc.transact_mut_with(MIGRATE_ORIGIN);
     let meta = required_map(&txn, META)?;
     meta.insert(&mut txn, "schemaVersion", 21.0);
-    Ok(())
-}
-
-/// Persists paragraph right margins in schema 22.
-fn migrate_doc_to_v22(doc: &Doc) -> EditResult<()> {
-    let mut txn = doc.transact_mut_with(MIGRATE_ORIGIN);
-    let meta = required_map(&txn, META)?;
-    let package = package_from_meta(&meta, &txn)?;
-    let package_json =
-        serde_json::to_vec(&package).map_err(|error| EditError::Json(error.to_string()))?;
-    meta.insert(
-        &mut txn,
-        "packageJson",
-        Any::Buffer(Arc::from(package_json)),
-    );
-    meta.insert(&mut txn, "schemaVersion", 22.0);
-    Ok(())
-}
-
-/// Persists paragraph spacing in schema 23.
-fn migrate_doc_to_v23(doc: &Doc) -> EditResult<()> {
-    let mut txn = doc.transact_mut_with(MIGRATE_ORIGIN);
-    let meta = required_map(&txn, META)?;
-    let package = package_from_meta(&meta, &txn)?;
-    let package_json =
-        serde_json::to_vec(&package).map_err(|error| EditError::Json(error.to_string()))?;
-    meta.insert(
-        &mut txn,
-        "packageJson",
-        Any::Buffer(Arc::from(package_json)),
-    );
-    meta.insert(&mut txn, "schemaVersion", 23.0);
     Ok(())
 }
 
@@ -2034,6 +1994,34 @@ mod tests {
     }
 
     #[test]
+    fn a_reattached_source_restores_the_right_margin_a_stored_package_lacks() {
+        let source = pptx_parse::ParagraphProperties {
+            margin_right: Some(914_400),
+            ..pptx_parse::ParagraphProperties::default()
+        };
+        let mut target = pptx_parse::ParagraphProperties::default();
+
+        assert!(merge_source_paragraph_properties(&mut target, &source));
+        assert_eq!(target.margin_right, Some(914_400));
+        assert!(!merge_source_paragraph_properties(&mut target, &source));
+    }
+
+    #[test]
+    fn a_reattached_source_restores_the_paragraph_spacing_a_stored_package_lacks() {
+        let source = pptx_parse::ParagraphProperties {
+            space_before: Some(pptx_parse::LineSpacing::Points { value: 10.0 }),
+            space_after: Some(pptx_parse::LineSpacing::Percent { value: 0.2 }),
+            ..pptx_parse::ParagraphProperties::default()
+        };
+        let mut target = pptx_parse::ParagraphProperties::default();
+
+        assert!(merge_source_paragraph_properties(&mut target, &source));
+        assert_eq!(target.space_before, source.space_before);
+        assert_eq!(target.space_after, source.space_after);
+        assert!(!merge_source_paragraph_properties(&mut target, &source));
+    }
+
+    #[test]
     fn an_unmigratable_schema_version_is_reported_before_package_json() {
         let session = DeckSession::open(FIXTURE, 100).unwrap();
         {
@@ -2072,7 +2060,7 @@ mod tests {
             {
                 let txn = session.doc.transact();
                 let meta = required_map(&txn, META).unwrap();
-                assert_eq!(map_number(&meta, &txn, "schemaVersion"), Some(23.0));
+                assert_eq!(map_number(&meta, &txn, "schemaVersion"), Some(21.0));
                 assert_eq!(
                     map_bool(&meta, &txn, "olePicturesPendingSource"),
                     Some(true)
@@ -2158,7 +2146,7 @@ mod tests {
                 })
                 .unwrap();
             migrate_doc(&doc).unwrap();
-            let expected: Vec<_> = ((version + 1).max(3)..=23)
+            let expected: Vec<_> = ((version + 1).max(3)..=21)
                 .map(|step| {
                     (
                         step,
@@ -2247,7 +2235,7 @@ mod tests {
                 })
                 .unwrap();
             migrate_doc(&doc).unwrap();
-            let expected: Vec<_> = ((version + 1).max(3)..=23)
+            let expected: Vec<_> = ((version + 1).max(3)..=21)
                 .map(|step| (step, (step >= 19).then_some(true)))
                 .collect();
             assert_eq!(*observed.lock().unwrap(), expected, "starting at {version}");
@@ -2314,7 +2302,7 @@ mod tests {
                 })
                 .unwrap();
             migrate_doc(&doc).unwrap();
-            let expected: Vec<_> = ((version + 1).max(3)..=23)
+            let expected: Vec<_> = ((version + 1).max(3)..=21)
                 .map(|step| (step, if step >= 17 { 5 } else { 0 }))
                 .collect();
             assert_eq!(*observed.lock().unwrap(), expected, "starting at {version}");
@@ -2383,8 +2371,6 @@ mod tests {
                     (19.0, None, None),
                     (20.0, None, None),
                     (21.0, None, None),
-                    (22.0, None, None),
-                    (23.0, None, None),
                 ],
             ),
             (
@@ -2397,8 +2383,6 @@ mod tests {
                     (19.0, None, None),
                     (20.0, None, None),
                     (21.0, None, None),
-                    (22.0, None, None),
-                    (23.0, None, None),
                 ],
             ),
             (
@@ -2418,8 +2402,6 @@ mod tests {
                     (19.0, Some(true), Some(true)),
                     (20.0, Some(true), Some(true)),
                     (21.0, Some(true), Some(true)),
-                    (22.0, Some(true), Some(true)),
-                    (23.0, Some(true), Some(true)),
                 ],
             ),
             (
@@ -2438,8 +2420,6 @@ mod tests {
                     (19.0, Some(true), Some(true)),
                     (20.0, Some(true), Some(true)),
                     (21.0, Some(true), Some(true)),
-                    (22.0, Some(true), Some(true)),
-                    (23.0, Some(true), Some(true)),
                 ],
             ),
             (
@@ -2457,8 +2437,6 @@ mod tests {
                     (19.0, None, Some(true)),
                     (20.0, None, Some(true)),
                     (21.0, None, Some(true)),
-                    (22.0, None, Some(true)),
-                    (23.0, None, Some(true)),
                 ],
             ),
             (
@@ -2476,8 +2454,6 @@ mod tests {
                     (19.0, None, Some(true)),
                     (20.0, None, Some(true)),
                     (21.0, None, Some(true)),
-                    (22.0, None, Some(true)),
-                    (23.0, None, Some(true)),
                 ],
             ),
             (
@@ -2494,8 +2470,6 @@ mod tests {
                     (19.0, None, Some(true)),
                     (20.0, None, Some(true)),
                     (21.0, None, Some(true)),
-                    (22.0, None, Some(true)),
-                    (23.0, None, Some(true)),
                 ],
             ),
             (
@@ -2512,8 +2486,6 @@ mod tests {
                     (19.0, None, Some(true)),
                     (20.0, None, Some(true)),
                     (21.0, None, Some(true)),
-                    (22.0, None, Some(true)),
-                    (23.0, None, Some(true)),
                 ],
             ),
             (
@@ -2530,8 +2502,6 @@ mod tests {
                     (19.0, None, Some(true)),
                     (20.0, None, Some(true)),
                     (21.0, None, Some(true)),
-                    (22.0, None, Some(true)),
-                    (23.0, None, Some(true)),
                 ],
             ),
             (
@@ -2547,8 +2517,6 @@ mod tests {
                     (19.0, None, Some(true)),
                     (20.0, None, Some(true)),
                     (21.0, None, Some(true)),
-                    (22.0, None, Some(true)),
-                    (23.0, None, Some(true)),
                 ],
             ),
             (
@@ -2564,8 +2532,6 @@ mod tests {
                     (19.0, None, Some(true)),
                     (20.0, None, Some(true)),
                     (21.0, None, Some(true)),
-                    (22.0, None, Some(true)),
-                    (23.0, None, Some(true)),
                 ],
             ),
             (
@@ -2581,8 +2547,6 @@ mod tests {
                     (19.0, None, Some(true)),
                     (20.0, None, Some(true)),
                     (21.0, None, Some(true)),
-                    (22.0, None, Some(true)),
-                    (23.0, None, Some(true)),
                 ],
             ),
             (
@@ -2598,8 +2562,6 @@ mod tests {
                     (19.0, None, Some(true)),
                     (20.0, None, Some(true)),
                     (21.0, None, Some(true)),
-                    (22.0, None, Some(true)),
-                    (23.0, None, Some(true)),
                 ],
             ),
             (
@@ -2614,8 +2576,6 @@ mod tests {
                     (19.0, None, Some(true)),
                     (20.0, None, Some(true)),
                     (21.0, None, Some(true)),
-                    (22.0, None, Some(true)),
-                    (23.0, None, Some(true)),
                 ],
             ),
             (
@@ -2630,8 +2590,6 @@ mod tests {
                     (19.0, None, Some(true)),
                     (20.0, None, Some(true)),
                     (21.0, None, Some(true)),
-                    (22.0, None, Some(true)),
-                    (23.0, None, Some(true)),
                 ],
             ),
             (
@@ -2646,8 +2604,6 @@ mod tests {
                     (19.0, None, Some(true)),
                     (20.0, None, Some(true)),
                     (21.0, None, Some(true)),
-                    (22.0, None, Some(true)),
-                    (23.0, None, Some(true)),
                 ],
             ),
             (
@@ -2662,8 +2618,6 @@ mod tests {
                     (19.0, None, Some(true)),
                     (20.0, None, Some(true)),
                     (21.0, None, Some(true)),
-                    (22.0, None, Some(true)),
-                    (23.0, None, Some(true)),
                 ],
             ),
             (
@@ -2678,8 +2632,6 @@ mod tests {
                     (19.0, None, Some(true)),
                     (20.0, None, Some(true)),
                     (21.0, None, Some(true)),
-                    (22.0, None, Some(true)),
-                    (23.0, None, Some(true)),
                 ],
             ),
             (
@@ -2694,8 +2646,6 @@ mod tests {
                     (19.0, None, Some(true)),
                     (20.0, None, Some(true)),
                     (21.0, None, Some(true)),
-                    (22.0, None, Some(true)),
-                    (23.0, None, Some(true)),
                 ],
             ),
         ] {
@@ -2744,21 +2694,21 @@ mod tests {
                 V1,
                 vec![
                     3.0, 4.0, 5.0, 6.0, 7.0, 8.0, 9.0, 10.0, 11.0, 12.0, 13.0, 14.0, 15.0, 16.0,
-                    17.0, 18.0, 19.0, 20.0, 21.0, 22.0, 23.0,
+                    17.0, 18.0, 19.0, 20.0, 21.0,
                 ],
             ),
             (
                 V2,
                 vec![
                     3.0, 4.0, 5.0, 6.0, 7.0, 8.0, 9.0, 10.0, 11.0, 12.0, 13.0, 14.0, 15.0, 16.0,
-                    17.0, 18.0, 19.0, 20.0, 21.0, 22.0, 23.0,
+                    17.0, 18.0, 19.0, 20.0, 21.0,
                 ],
             ),
             (
                 V3,
                 vec![
                     4.0, 5.0, 6.0, 7.0, 8.0, 9.0, 10.0, 11.0, 12.0, 13.0, 14.0, 15.0, 16.0, 17.0,
-                    18.0, 19.0, 20.0, 21.0, 22.0, 23.0,
+                    18.0, 19.0, 20.0, 21.0,
                 ],
             ),
         ] {
@@ -2835,7 +2785,7 @@ mod tests {
                 V4_LEGACY,
                 vec![
                     3.0, 4.0, 5.0, 6.0, 7.0, 8.0, 9.0, 10.0, 11.0, 12.0, 13.0, 14.0, 15.0, 16.0,
-                    17.0, 18.0, 19.0, 20.0, 21.0, 22.0, 23.0,
+                    17.0, 18.0, 19.0, 20.0, 21.0,
                 ],
                 1,
             ),
@@ -2844,7 +2794,7 @@ mod tests {
                 V4_STYLES,
                 vec![
                     5.0, 6.0, 7.0, 8.0, 9.0, 10.0, 11.0, 12.0, 13.0, 14.0, 15.0, 16.0, 17.0, 18.0,
-                    19.0, 20.0, 21.0, 22.0, 23.0,
+                    19.0, 20.0, 21.0,
                 ],
                 1,
             ),
@@ -2853,7 +2803,7 @@ mod tests {
                 V4_NUMBERED,
                 vec![
                     5.0, 6.0, 7.0, 8.0, 9.0, 10.0, 11.0, 12.0, 13.0, 14.0, 15.0, 16.0, 17.0, 18.0,
-                    19.0, 20.0, 21.0, 22.0, 23.0,
+                    19.0, 20.0, 21.0,
                 ],
                 10,
             ),
@@ -2922,21 +2872,21 @@ mod tests {
                 V2,
                 vec![
                     3.0, 4.0, 5.0, 6.0, 7.0, 8.0, 9.0, 10.0, 11.0, 12.0, 13.0, 14.0, 15.0, 16.0,
-                    17.0, 18.0, 19.0, 20.0, 21.0, 22.0, 23.0,
+                    17.0, 18.0, 19.0, 20.0, 21.0,
                 ],
             ),
             (
                 V5,
                 vec![
                     6.0, 7.0, 8.0, 9.0, 10.0, 11.0, 12.0, 13.0, 14.0, 15.0, 16.0, 17.0, 18.0, 19.0,
-                    20.0, 21.0, 22.0, 23.0,
+                    20.0, 21.0,
                 ],
             ),
             (
                 V6,
                 vec![
                     7.0, 8.0, 9.0, 10.0, 11.0, 12.0, 13.0, 14.0, 15.0, 16.0, 17.0, 18.0, 19.0,
-                    20.0, 21.0, 22.0, 23.0,
+                    20.0, 21.0,
                 ],
             ),
         ] {
@@ -3190,9 +3140,7 @@ mod tests {
                 (18.0, before.clone(), Some("legacy".to_owned()), Some(true)),
                 (19.0, before.clone(), Some("legacy".to_owned()), Some(true)),
                 (20.0, before.clone(), Some("legacy".to_owned()), Some(true)),
-                (21.0, before.clone(), Some("legacy".to_owned()), Some(true)),
-                (22.0, before.clone(), Some("legacy".to_owned()), Some(true)),
-                (23.0, before, Some("legacy".to_owned()), Some(true))
+                (21.0, before, Some("legacy".to_owned()), Some(true))
             ]
         );
     }

@@ -24,7 +24,7 @@ fn spacing(package: &PptxPackage) -> Vec<(Option<LineSpacing>, Option<LineSpacin
 #[test]
 fn saving_an_edited_deck_keeps_the_paragraph_spacing() {
     let session = DeckSession::open(DECK, 4_243).unwrap();
-    let story = session.snapshot().unwrap().slides[0].shapes[0].text_stories[0]
+    let story = session.snapshot().unwrap().slides[0].shapes[4].text_stories[0]
         .id
         .clone();
     session
@@ -35,6 +35,9 @@ fn saving_an_edited_deck_keeps_the_paragraph_spacing() {
             "Edited ",
             &TextStyle::default(),
         )
+        .unwrap();
+    session
+        .set_paragraph_alignment(&EditCtx::local("test"), &story, 0, 1, Some("ctr"))
         .unwrap();
     let saved = session.save().unwrap();
 
