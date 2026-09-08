@@ -1889,6 +1889,29 @@ mod tests {
     }
 
     #[test]
+    fn a_constant_blit_paints_its_own_colour_and_ignores_the_selected_brush() {
+        let bytes = emf(
+            vec![
+                solid_brush(1, 0x0000_00ff),
+                blit(ROP_BLACKNESS, [0, 0, 50, 50], false),
+                blit(ROP_WHITENESS, [50, 0, 50, 50], false),
+            ],
+            [0, 0, 99, 99],
+            [100, 100],
+        );
+
+        let drawing = decode(&bytes).expect("the blits decode");
+        assert_eq!(
+            drawing
+                .ops
+                .iter()
+                .map(|op| op.fill.clone().unwrap())
+                .collect::<Vec<_>>(),
+            ["#000000", "#ffffff"]
+        );
+    }
+
+    #[test]
     fn a_blit_with_source_bits_an_unknown_operation_or_a_short_record_is_rejected() {
         for records in [
             vec![blit(ROP_PATCOPY, [0, 0, 50, 50], true)],
@@ -1993,6 +2016,28 @@ mod tests {
                 record(59, &[]),
                 gradient(GRADIENT_RECT_V, &[(0, 0, 0), (100, 100, 4)], &[0, 1]),
             ],
+        ] {
+            let mut records = records;
+            records.push(record(43, &i32s(&[0, 0, 50, 50])));
+            let bytes = emf(records, [0, 0, 99, 99], [100, 100]);
+            assert!(decode(&bytes).is_none());
+        }
+    }
+
+    #[test]
+    fn a_gradient_declaring_more_vertices_or_shapes_than_the_cap_is_rejected_whole() {
+        let over = MAX_GRADIENT_VERTICES + 1;
+        let mut vertices = vec![(0, 0, 0), (100, 100, 4)];
+        vertices.resize(over, (0, 0, 0));
+        let mut indexes = vec![0u32, 1];
+        indexes.resize(over * 2, 0);
+        for records in [
+            vec![gradient(GRADIENT_RECT_V, &vertices, &[0, 1])],
+            vec![gradient(
+                GRADIENT_RECT_V,
+                &[(0, 0, 0), (100, 100, 4)],
+                &indexes,
+            )],
         ] {
             let mut records = records;
             records.push(record(43, &i32s(&[0, 0, 50, 50])));
