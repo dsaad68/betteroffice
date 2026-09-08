@@ -21,9 +21,9 @@ use crate::{
     ShapeStrokeReceipt, SlideReceipt, SlideSnapshot, TransformReceipt,
 };
 
-const SCHEMA_VERSION: f64 = 21.0;
+const SCHEMA_VERSION: f64 = 22.0;
 /// Versions [`migrate_doc`] can carry forward. Anything else is unreadable.
-const MIGRATABLE_SCHEMA_VERSIONS: [f64; 21] = [
+const MIGRATABLE_SCHEMA_VERSIONS: [f64; 22] = [
     1.0,
     2.0,
     3.0,
@@ -44,6 +44,7 @@ const MIGRATABLE_SCHEMA_VERSIONS: [f64; 21] = [
     18.0,
     19.0,
     20.0,
+    21.0,
     SCHEMA_VERSION,
 ];
 const MAX_GEOMETRY: i64 = 1_000_000_000_000_000;
@@ -946,8 +947,10 @@ fn merge_source_paragraph_properties(
     let mut changed = target.bullet_font != source.bullet_font
         || target.bullet_color != source.bullet_color
         || target.bullet_size != source.bullet_size
-        || target.line_spacing != source.line_spacing;
+        || target.line_spacing != source.line_spacing
+        || target.margin_right != source.margin_right;
     target.line_spacing = source.line_spacing;
+    target.margin_right = source.margin_right;
     if let (
         Some(pptx_parse::Bullet::AutoNumber {
             restart: target, ..
@@ -1036,6 +1039,9 @@ pub(crate) fn migrate_doc(doc: &Doc) -> EditResult<()> {
     }
     if version < 21.0 {
         migrate_doc_to_v21(doc)?;
+    }
+    if version < 22.0 {
+        migrate_doc_to_v22(doc)?;
     }
     Ok(())
 }
@@ -1373,6 +1379,22 @@ fn migrate_doc_to_v21(doc: &Doc) -> EditResult<()> {
     let mut txn = doc.transact_mut_with(MIGRATE_ORIGIN);
     let meta = required_map(&txn, META)?;
     meta.insert(&mut txn, "schemaVersion", 21.0);
+    Ok(())
+}
+
+/// Persists paragraph right margins in schema 22.
+fn migrate_doc_to_v22(doc: &Doc) -> EditResult<()> {
+    let mut txn = doc.transact_mut_with(MIGRATE_ORIGIN);
+    let meta = required_map(&txn, META)?;
+    let package = package_from_meta(&meta, &txn)?;
+    let package_json =
+        serde_json::to_vec(&package).map_err(|error| EditError::Json(error.to_string()))?;
+    meta.insert(
+        &mut txn,
+        "packageJson",
+        Any::Buffer(Arc::from(package_json)),
+    );
+    meta.insert(&mut txn, "schemaVersion", 22.0);
     Ok(())
 }
 
@@ -2026,7 +2048,7 @@ mod tests {
             {
                 let txn = session.doc.transact();
                 let meta = required_map(&txn, META).unwrap();
-                assert_eq!(map_number(&meta, &txn, "schemaVersion"), Some(21.0));
+                assert_eq!(map_number(&meta, &txn, "schemaVersion"), Some(22.0));
                 assert_eq!(
                     map_bool(&meta, &txn, "olePicturesPendingSource"),
                     Some(true)
@@ -2112,7 +2134,7 @@ mod tests {
                 })
                 .unwrap();
             migrate_doc(&doc).unwrap();
-            let expected: Vec<_> = ((version + 1).max(3)..=21)
+            let expected: Vec<_> = ((version + 1).max(3)..=22)
                 .map(|step| {
                     (
                         step,
@@ -2201,7 +2223,7 @@ mod tests {
                 })
                 .unwrap();
             migrate_doc(&doc).unwrap();
-            let expected: Vec<_> = ((version + 1).max(3)..=21)
+            let expected: Vec<_> = ((version + 1).max(3)..=22)
                 .map(|step| (step, (step >= 19).then_some(true)))
                 .collect();
             assert_eq!(*observed.lock().unwrap(), expected, "starting at {version}");
@@ -2268,7 +2290,7 @@ mod tests {
                 })
                 .unwrap();
             migrate_doc(&doc).unwrap();
-            let expected: Vec<_> = ((version + 1).max(3)..=21)
+            let expected: Vec<_> = ((version + 1).max(3)..=22)
                 .map(|step| (step, if step >= 17 { 5 } else { 0 }))
                 .collect();
             assert_eq!(*observed.lock().unwrap(), expected, "starting at {version}");
@@ -2337,6 +2359,7 @@ mod tests {
                     (19.0, None, None),
                     (20.0, None, None),
                     (21.0, None, None),
+                    (22.0, None, None),
                 ],
             ),
             (
@@ -2349,6 +2372,7 @@ mod tests {
                     (19.0, None, None),
                     (20.0, None, None),
                     (21.0, None, None),
+                    (22.0, None, None),
                 ],
             ),
             (
@@ -2368,6 +2392,7 @@ mod tests {
                     (19.0, Some(true), Some(true)),
                     (20.0, Some(true), Some(true)),
                     (21.0, Some(true), Some(true)),
+                    (22.0, Some(true), Some(true)),
                 ],
             ),
             (
@@ -2386,6 +2411,7 @@ mod tests {
                     (19.0, Some(true), Some(true)),
                     (20.0, Some(true), Some(true)),
                     (21.0, Some(true), Some(true)),
+                    (22.0, Some(true), Some(true)),
                 ],
             ),
             (
@@ -2403,6 +2429,7 @@ mod tests {
                     (19.0, None, Some(true)),
                     (20.0, None, Some(true)),
                     (21.0, None, Some(true)),
+                    (22.0, None, Some(true)),
                 ],
             ),
             (
@@ -2420,6 +2447,7 @@ mod tests {
                     (19.0, None, Some(true)),
                     (20.0, None, Some(true)),
                     (21.0, None, Some(true)),
+                    (22.0, None, Some(true)),
                 ],
             ),
             (
@@ -2436,6 +2464,7 @@ mod tests {
                     (19.0, None, Some(true)),
                     (20.0, None, Some(true)),
                     (21.0, None, Some(true)),
+                    (22.0, None, Some(true)),
                 ],
             ),
             (
@@ -2452,6 +2481,7 @@ mod tests {
                     (19.0, None, Some(true)),
                     (20.0, None, Some(true)),
                     (21.0, None, Some(true)),
+                    (22.0, None, Some(true)),
                 ],
             ),
             (
@@ -2468,6 +2498,7 @@ mod tests {
                     (19.0, None, Some(true)),
                     (20.0, None, Some(true)),
                     (21.0, None, Some(true)),
+                    (22.0, None, Some(true)),
                 ],
             ),
             (
@@ -2483,6 +2514,7 @@ mod tests {
                     (19.0, None, Some(true)),
                     (20.0, None, Some(true)),
                     (21.0, None, Some(true)),
+                    (22.0, None, Some(true)),
                 ],
             ),
             (
@@ -2498,6 +2530,7 @@ mod tests {
                     (19.0, None, Some(true)),
                     (20.0, None, Some(true)),
                     (21.0, None, Some(true)),
+                    (22.0, None, Some(true)),
                 ],
             ),
             (
@@ -2513,6 +2546,7 @@ mod tests {
                     (19.0, None, Some(true)),
                     (20.0, None, Some(true)),
                     (21.0, None, Some(true)),
+                    (22.0, None, Some(true)),
                 ],
             ),
             (
@@ -2528,6 +2562,7 @@ mod tests {
                     (19.0, None, Some(true)),
                     (20.0, None, Some(true)),
                     (21.0, None, Some(true)),
+                    (22.0, None, Some(true)),
                 ],
             ),
             (
@@ -2542,6 +2577,7 @@ mod tests {
                     (19.0, None, Some(true)),
                     (20.0, None, Some(true)),
                     (21.0, None, Some(true)),
+                    (22.0, None, Some(true)),
                 ],
             ),
             (
@@ -2556,6 +2592,7 @@ mod tests {
                     (19.0, None, Some(true)),
                     (20.0, None, Some(true)),
                     (21.0, None, Some(true)),
+                    (22.0, None, Some(true)),
                 ],
             ),
             (
@@ -2570,6 +2607,7 @@ mod tests {
                     (19.0, None, Some(true)),
                     (20.0, None, Some(true)),
                     (21.0, None, Some(true)),
+                    (22.0, None, Some(true)),
                 ],
             ),
             (
@@ -2584,6 +2622,7 @@ mod tests {
                     (19.0, None, Some(true)),
                     (20.0, None, Some(true)),
                     (21.0, None, Some(true)),
+                    (22.0, None, Some(true)),
                 ],
             ),
             (
@@ -2598,6 +2637,7 @@ mod tests {
                     (19.0, None, Some(true)),
                     (20.0, None, Some(true)),
                     (21.0, None, Some(true)),
+                    (22.0, None, Some(true)),
                 ],
             ),
             (
@@ -2612,6 +2652,7 @@ mod tests {
                     (19.0, None, Some(true)),
                     (20.0, None, Some(true)),
                     (21.0, None, Some(true)),
+                    (22.0, None, Some(true)),
                 ],
             ),
         ] {
@@ -2660,21 +2701,21 @@ mod tests {
                 V1,
                 vec![
                     3.0, 4.0, 5.0, 6.0, 7.0, 8.0, 9.0, 10.0, 11.0, 12.0, 13.0, 14.0, 15.0, 16.0,
-                    17.0, 18.0, 19.0, 20.0, 21.0,
+                    17.0, 18.0, 19.0, 20.0, 21.0, 22.0,
                 ],
             ),
             (
                 V2,
                 vec![
                     3.0, 4.0, 5.0, 6.0, 7.0, 8.0, 9.0, 10.0, 11.0, 12.0, 13.0, 14.0, 15.0, 16.0,
-                    17.0, 18.0, 19.0, 20.0, 21.0,
+                    17.0, 18.0, 19.0, 20.0, 21.0, 22.0,
                 ],
             ),
             (
                 V3,
                 vec![
                     4.0, 5.0, 6.0, 7.0, 8.0, 9.0, 10.0, 11.0, 12.0, 13.0, 14.0, 15.0, 16.0, 17.0,
-                    18.0, 19.0, 20.0, 21.0,
+                    18.0, 19.0, 20.0, 21.0, 22.0,
                 ],
             ),
         ] {
@@ -2751,7 +2792,7 @@ mod tests {
                 V4_LEGACY,
                 vec![
                     3.0, 4.0, 5.0, 6.0, 7.0, 8.0, 9.0, 10.0, 11.0, 12.0, 13.0, 14.0, 15.0, 16.0,
-                    17.0, 18.0, 19.0, 20.0, 21.0,
+                    17.0, 18.0, 19.0, 20.0, 21.0, 22.0,
                 ],
                 1,
             ),
@@ -2760,7 +2801,7 @@ mod tests {
                 V4_STYLES,
                 vec![
                     5.0, 6.0, 7.0, 8.0, 9.0, 10.0, 11.0, 12.0, 13.0, 14.0, 15.0, 16.0, 17.0, 18.0,
-                    19.0, 20.0, 21.0,
+                    19.0, 20.0, 21.0, 22.0,
                 ],
                 1,
             ),
@@ -2769,7 +2810,7 @@ mod tests {
                 V4_NUMBERED,
                 vec![
                     5.0, 6.0, 7.0, 8.0, 9.0, 10.0, 11.0, 12.0, 13.0, 14.0, 15.0, 16.0, 17.0, 18.0,
-                    19.0, 20.0, 21.0,
+                    19.0, 20.0, 21.0, 22.0,
                 ],
                 10,
             ),
@@ -2838,21 +2879,21 @@ mod tests {
                 V2,
                 vec![
                     3.0, 4.0, 5.0, 6.0, 7.0, 8.0, 9.0, 10.0, 11.0, 12.0, 13.0, 14.0, 15.0, 16.0,
-                    17.0, 18.0, 19.0, 20.0, 21.0,
+                    17.0, 18.0, 19.0, 20.0, 21.0, 22.0,
                 ],
             ),
             (
                 V5,
                 vec![
                     6.0, 7.0, 8.0, 9.0, 10.0, 11.0, 12.0, 13.0, 14.0, 15.0, 16.0, 17.0, 18.0, 19.0,
-                    20.0, 21.0,
+                    20.0, 21.0, 22.0,
                 ],
             ),
             (
                 V6,
                 vec![
                     7.0, 8.0, 9.0, 10.0, 11.0, 12.0, 13.0, 14.0, 15.0, 16.0, 17.0, 18.0, 19.0,
-                    20.0, 21.0,
+                    20.0, 21.0, 22.0,
                 ],
             ),
         ] {
@@ -3106,7 +3147,8 @@ mod tests {
                 (18.0, before.clone(), Some("legacy".to_owned()), Some(true)),
                 (19.0, before.clone(), Some("legacy".to_owned()), Some(true)),
                 (20.0, before.clone(), Some("legacy".to_owned()), Some(true)),
-                (21.0, before, Some("legacy".to_owned()), Some(true))
+                (21.0, before.clone(), Some("legacy".to_owned()), Some(true)),
+                (22.0, before, Some("legacy".to_owned()), Some(true))
             ]
         );
     }
