@@ -3120,7 +3120,7 @@ fn emit_radar<S: PlotSink + ?Sized>(
             commands.push(GeometryPathCommand::Close);
             push_path(ops, plot, commands, &color, None);
         }
-        if let (false, Some(width)) = (filled, series_line_width(series.series)) {
+        if !filled && let Some(width) = series_line_width(series.series) {
             for (from, to) in ring_edges(&ring) {
                 if ops.exhausted() {
                     return;

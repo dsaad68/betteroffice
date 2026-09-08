@@ -1366,9 +1366,9 @@ fn migrate_doc_to_v20(doc: &Doc) -> EditResult<()> {
     Ok(())
 }
 
-/// Carries this batch's model additions. A v20 package has no
-/// `c:ser/c:spPr/a:ln`; [`import_source_render_data`] restores it once the
-/// source is reattached, so the step only stamps the version.
+/// Carries this batch's model additions, each step before the stamp. A v20
+/// package has no `c:ser/c:spPr/a:ln`; [`import_source_render_data`] restores
+/// it once the source is reattached.
 fn migrate_doc_to_v21(doc: &Doc) -> EditResult<()> {
     let mut txn = doc.transact_mut_with(MIGRATE_ORIGIN);
     let meta = required_map(&txn, META)?;
