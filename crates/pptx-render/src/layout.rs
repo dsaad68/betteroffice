@@ -1876,8 +1876,7 @@ fn layout_paragraph(
         }]);
     }
     let ranges = if stacked {
-        // One cell per cluster, but a hard break shapes to no glyph at all and would stack as a
-        // blank cell. PowerPoint starts a column there; dropping it is the closer of the two.
+        // A hard break shapes to no glyph, so stacking it would leave a blank cell.
         (0..clusters.len())
             .filter(|index| !clusters[*index].glyphs.is_empty())
             .map(|index| (index, index + 1))
@@ -1891,8 +1890,7 @@ fn layout_paragraph(
     for (line_index, (start, end)) in ranges.into_iter().enumerate() {
         let slice = &clusters[start..end];
         let natural_width = line_advance(slice);
-        let stretchable = !stacked
-            && paragraph.justify
+        let stretchable = paragraph.justify
             && line_index + 1 < line_count
             && !slice.last().is_some_and(|cluster| cluster.mandatory);
         let padding = if stretchable {
@@ -4261,11 +4259,8 @@ mod tests {
                 .collect::<Vec<_>>()
         };
 
-        // A hard break shapes to no glyph; stacking it would leave a blank cell mid-word.
         assert_eq!(stack("A\nB"), ["A", "B"]);
-        // A space is ink-less but shaped, and PowerPoint does stack it.
         assert_eq!(stack("A B"), ["A", " ", "B"]);
-        // Latin letters stay one per cell rather than merging.
         assert_eq!(stack("ffi"), ["f", "f", "i"]);
     }
 

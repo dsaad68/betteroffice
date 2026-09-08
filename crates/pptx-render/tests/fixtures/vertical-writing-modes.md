@@ -28,4 +28,7 @@ does not, and neither does this renderer.
 Latin runs are laid out with the glyphs turned in `eaVert` and `mongolianVert`, as `vert` does.
 Keeping East Asian glyphs upright inside a turned line is not implemented, and neither is the
 column wrap that PowerPoint applies when a `wordArtVert` stack is taller than its box: the stack
-stays one column and reports `overflow`.
+stays one column and reports `overflow`. `mongolianVert` reverses its columns inside the block the
+anchor produced rather than restarting them at the opposite edge of the box, so a partly filled box
+anchored `t` or `b` keeps the block on the side `vert` would put it; the fixture anchors centred,
+where the two agree.
