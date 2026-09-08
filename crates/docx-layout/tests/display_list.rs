@@ -1061,15 +1061,13 @@ fn cell_anchored_floating_images_paint_at_cell_relative_geometry() {
     };
     let nf = |n: &serde_json::Number| n.as_f64().unwrap();
 
-    // cell content box origin: cx(50) + padLeft(7) = 57 x, cy(50) + padTop(1) = 51 y
-    // front float is flush-right: x = contentX + (contentWidth 186 - width 40) = 203
     let front = image("rIdFront");
     assert!(
         (nf(&front.x) - 203.0).abs() < 0.001,
         "front x {:?}",
         front.x
     );
-    assert!((nf(&front.y) - 51.0).abs() < 0.001, "front y {:?}", front.y);
+    assert!((nf(&front.y) - 50.0).abs() < 0.001, "front y {:?}", front.y);
     assert!((nf(&front.w) - 40.0).abs() < 0.001);
     assert!((nf(&front.h) - 30.0).abs() < 0.001);
     assert_eq!(front.alt_text.as_deref(), Some("front logo"));
@@ -1091,7 +1089,7 @@ fn cell_anchored_floating_images_paint_at_cell_relative_geometry() {
         behind.x
     );
     assert!(
-        (nf(&behind.y) - 51.0).abs() < 0.001,
+        (nf(&behind.y) - 50.0).abs() < 0.001,
         "behind y {:?}",
         behind.y
     );
@@ -1898,6 +1896,76 @@ fn table_cell_content_insets_border_and_honors_valign() {
         "date baseline {} (want 65: top-anchored)",
         date.3
     );
+}
+
+#[test]
+fn carried_table_borders_preserve_cell_content_across_slices() {
+    use serde_json::json;
+
+    for (alignment, first_baseline) in [("top", 14.0), ("center", 42.0), ("bottom", 70.0)] {
+        let paragraphs: Vec<_> = (0..4)
+            .map(|index| {
+                json!({ "kind": "paragraph", "id": 70 + index,
+                    "runs": [{ "kind": "text", "text": index.to_string() }] })
+            })
+            .collect();
+        let paragraph_measure = json!({ "kind": "paragraph", "totalHeight": 20.0,
+            "lines": [{ "headRun": 0, "headChar": 0, "tailRun": 0, "tailChar": 1,
+                "width": 8.0, "ascent": 12.0, "descent": 4.0, "lineHeight": 20.0 }] });
+        let mut input = json!({
+            "measured": [{
+                "block": { "kind": "table", "id": 7, "rows": [
+                    { "id": 0, "cells": [{ "id": 0, "blocks": [] }] },
+                    { "id": 1, "cells": [{ "id": 1, "verticalAlign": alignment,
+                        "borders": { "top": { "style": "single", "width": 8.0 },
+                            "bottom": { "style": "single", "width": 4.0 } },
+                        "blocks": paragraphs }] }
+                ] },
+                "measure": { "kind": "table", "columnWidths": [100.0],
+                    "totalWidth": 100.0, "totalHeight": 230.0, "rows": [
+                        { "height": 90.0, "cells": [{ "width": 100.0, "height": 0.0, "blocks": [] }] },
+                        { "height": 140.0, "cells": [{ "width": 100.0, "height": 80.0,
+                            "blocks": vec![paragraph_measure; 4] }] }
+                    ] }
+            }],
+            "options": { "pageSize": { "w": 200.0, "h": 100.0 },
+                "margins": { "top": 0.0, "right": 0.0, "bottom": 0.0, "left": 0.0 } }
+        });
+        input["layout"] = serde_json::from_str(
+            &docx_layout::layout_to_canonical_json(&input.to_string()).unwrap(),
+        )
+        .unwrap();
+        let dl = build_dl(&input.to_string());
+        assert_eq!(dl.pages.len(), 3, "{alignment}");
+        assert_eq!(input["layout"]["pages"][1]["fragments"][0]["rowStart"], 1);
+        assert!(dl.pages[1].primitives.iter().any(|primitive| {
+            matches!(primitive, Primitive::Line(line)
+                if line.attrs.cell.as_ref().is_some_and(|cell| cell.owns_top_border == Some(true)))
+        }));
+        let mut seen = Vec::new();
+        for (page_index, page) in dl.pages.iter().enumerate().skip(1) {
+            let fragment = &input["layout"]["pages"][page_index]["fragments"][0];
+            let clipped = fragment["clipTop"].as_f64().unwrap_or(0.0);
+            let height = fragment["height"].as_f64().unwrap();
+            for (text, _, _, baseline, _) in text_prims(&page.primitives) {
+                let index = text.parse::<usize>().unwrap();
+                assert_eq!(
+                    baseline + clipped,
+                    first_baseline + index as f64 * 20.0,
+                    "{alignment}, page {page_index}, line {index}"
+                );
+                if baseline - 14.0 >= height || baseline + 6.0 <= 0.0 {
+                    continue;
+                }
+                assert!(
+                    baseline >= 14.0 && baseline + 6.0 <= height,
+                    "{alignment}, line {index} crosses the fragment clip"
+                );
+                seen.push(index);
+            }
+        }
+        assert_eq!(seen, vec![0, 1, 2, 3], "{alignment}");
+    }
 }
 
 /// Cell paragraphs use max-collapsed inter-paragraph spacing.
