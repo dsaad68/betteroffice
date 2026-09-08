@@ -4035,6 +4035,25 @@ mod tests {
     }
 
     #[test]
+    fn luminance_outside_the_legal_range_clamps() {
+        let effects = image_effects(
+            &[BlipEffect::Luminance {
+                brightness: 4.0,
+                contrast: -3.0,
+            }],
+            &Theme::default(),
+        );
+
+        assert_eq!(
+            effects,
+            vec![ImageEffect::Luminance {
+                brightness: 1.0,
+                contrast: -1.0,
+            }]
+        );
+    }
+
+    #[test]
     fn adjacent_runs_keep_their_own_paint_attributes() {
         let renderer = renderer();
         let style = ResolvedStyle {
