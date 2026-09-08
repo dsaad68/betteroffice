@@ -21,9 +21,9 @@ use crate::{
     ShapeStrokeReceipt, SlideReceipt, SlideSnapshot, TransformReceipt,
 };
 
-const SCHEMA_VERSION: f64 = 20.0;
+const SCHEMA_VERSION: f64 = 21.0;
 /// Versions [`migrate_doc`] can carry forward. Anything else is unreadable.
-const MIGRATABLE_SCHEMA_VERSIONS: [f64; 20] = [
+const MIGRATABLE_SCHEMA_VERSIONS: [f64; 21] = [
     1.0,
     2.0,
     3.0,
@@ -43,6 +43,7 @@ const MIGRATABLE_SCHEMA_VERSIONS: [f64; 20] = [
     17.0,
     18.0,
     19.0,
+    20.0,
     SCHEMA_VERSION,
 ];
 const MAX_GEOMETRY: i64 = 1_000_000_000_000_000;
@@ -887,10 +888,17 @@ fn merge_source_render_shapes(target: &mut [ShapeNode], source: &[ShapeNode]) ->
     changed
 }
 
-/// Copies the chart-space fill and axis lines a source chart part declares.
+/// Copies the chart-space fill, axis lines and series lines a source chart part
+/// declares.
 fn merge_source_chart_properties(target: &mut ChartSpace, source: &ChartSpace) -> bool {
     let mut changed = target.fill != source.fill;
     target.fill.clone_from(&source.fill);
+    for (target, source) in target.plot_groups.iter_mut().zip(&source.plot_groups) {
+        for (target, source) in target.series.iter_mut().zip(&source.series) {
+            changed |= target.line != source.line;
+            target.line.clone_from(&source.line);
+        }
+    }
     let mut merge_axis = |target: Option<&mut ChartAxis>, source: Option<&ChartAxis>| {
         if let (Some(target), Some(source)) = (target, source) {
             changed |= target.line != source.line;
@@ -1025,6 +1033,9 @@ pub(crate) fn migrate_doc(doc: &Doc) -> EditResult<()> {
     }
     if version < 20.0 {
         migrate_doc_to_v20(doc)?;
+    }
+    if version < 21.0 {
+        migrate_doc_to_v21(doc)?;
     }
     Ok(())
 }
@@ -1352,6 +1363,16 @@ fn migrate_doc_to_v20(doc: &Doc) -> EditResult<()> {
         meta.insert(&mut txn, "olePicturesPendingSource", true);
     }
     meta.insert(&mut txn, "schemaVersion", 20.0);
+    Ok(())
+}
+
+/// Carries this batch's model additions, each step before the stamp. A v20
+/// package has no `c:ser/c:spPr/a:ln`; [`import_source_render_data`] restores
+/// it once the source is reattached.
+fn migrate_doc_to_v21(doc: &Doc) -> EditResult<()> {
+    let mut txn = doc.transact_mut_with(MIGRATE_ORIGIN);
+    let meta = required_map(&txn, META)?;
+    meta.insert(&mut txn, "schemaVersion", 21.0);
     Ok(())
 }
 
@@ -1943,6 +1964,30 @@ mod tests {
     const HIDDEN_FIXTURE: &[u8] = include_bytes!("../tests/fixtures/hidden-shapes.pptx");
 
     #[test]
+    fn a_reattached_source_restores_the_series_lines_a_stored_package_lacks() {
+        let source = ChartSpace {
+            plot_groups: vec![pptx_parse::ChartPlotGroup {
+                series: vec![pptx_parse::ChartSeries {
+                    line: Some(ooxml_drawingml::chart::ChartLine {
+                        none: false,
+                        color: Some("#FFFFFF".to_owned()),
+                        width_emu: Some(41275.0),
+                    }),
+                    ..pptx_parse::ChartSeries::default()
+                }],
+                ..pptx_parse::ChartPlotGroup::default()
+            }],
+            ..ChartSpace::default()
+        };
+        let mut target = source.clone();
+        target.plot_groups[0].series[0].line = None;
+
+        assert!(merge_source_chart_properties(&mut target, &source));
+        assert_eq!(target, source);
+        assert!(!merge_source_chart_properties(&mut target, &source));
+    }
+
+    #[test]
     fn an_unmigratable_schema_version_is_reported_before_package_json() {
         let session = DeckSession::open(FIXTURE, 100).unwrap();
         {
@@ -1981,7 +2026,7 @@ mod tests {
             {
                 let txn = session.doc.transact();
                 let meta = required_map(&txn, META).unwrap();
-                assert_eq!(map_number(&meta, &txn, "schemaVersion"), Some(20.0));
+                assert_eq!(map_number(&meta, &txn, "schemaVersion"), Some(21.0));
                 assert_eq!(
                     map_bool(&meta, &txn, "olePicturesPendingSource"),
                     Some(true)
@@ -2067,12 +2112,12 @@ mod tests {
                 })
                 .unwrap();
             migrate_doc(&doc).unwrap();
-            let expected: Vec<_> = ((version + 1).max(3)..=20)
+            let expected: Vec<_> = ((version + 1).max(3)..=21)
                 .map(|step| {
                     (
                         step,
                         (version < 19 && step >= 19).then_some(true),
-                        (step == 20).then_some(true),
+                        (step >= 20).then_some(true),
                     )
                 })
                 .collect();
@@ -2156,7 +2201,7 @@ mod tests {
                 })
                 .unwrap();
             migrate_doc(&doc).unwrap();
-            let expected: Vec<_> = ((version + 1).max(3)..=20)
+            let expected: Vec<_> = ((version + 1).max(3)..=21)
                 .map(|step| (step, (step >= 19).then_some(true)))
                 .collect();
             assert_eq!(*observed.lock().unwrap(), expected, "starting at {version}");
@@ -2223,7 +2268,7 @@ mod tests {
                 })
                 .unwrap();
             migrate_doc(&doc).unwrap();
-            let expected: Vec<_> = ((version + 1).max(3)..=20)
+            let expected: Vec<_> = ((version + 1).max(3)..=21)
                 .map(|step| (step, if step >= 17 { 5 } else { 0 }))
                 .collect();
             assert_eq!(*observed.lock().unwrap(), expected, "starting at {version}");
@@ -2291,6 +2336,7 @@ mod tests {
                     (18.0, None, None),
                     (19.0, None, None),
                     (20.0, None, None),
+                    (21.0, None, None),
                 ],
             ),
             (
@@ -2302,6 +2348,7 @@ mod tests {
                     (18.0, None, None),
                     (19.0, None, None),
                     (20.0, None, None),
+                    (21.0, None, None),
                 ],
             ),
             (
@@ -2320,6 +2367,7 @@ mod tests {
                     (18.0, Some(true), Some(true)),
                     (19.0, Some(true), Some(true)),
                     (20.0, Some(true), Some(true)),
+                    (21.0, Some(true), Some(true)),
                 ],
             ),
             (
@@ -2337,6 +2385,7 @@ mod tests {
                     (18.0, Some(true), Some(true)),
                     (19.0, Some(true), Some(true)),
                     (20.0, Some(true), Some(true)),
+                    (21.0, Some(true), Some(true)),
                 ],
             ),
             (
@@ -2353,6 +2402,7 @@ mod tests {
                     (18.0, None, Some(true)),
                     (19.0, None, Some(true)),
                     (20.0, None, Some(true)),
+                    (21.0, None, Some(true)),
                 ],
             ),
             (
@@ -2369,6 +2419,7 @@ mod tests {
                     (18.0, None, Some(true)),
                     (19.0, None, Some(true)),
                     (20.0, None, Some(true)),
+                    (21.0, None, Some(true)),
                 ],
             ),
             (
@@ -2384,6 +2435,7 @@ mod tests {
                     (18.0, None, Some(true)),
                     (19.0, None, Some(true)),
                     (20.0, None, Some(true)),
+                    (21.0, None, Some(true)),
                 ],
             ),
             (
@@ -2399,6 +2451,7 @@ mod tests {
                     (18.0, None, Some(true)),
                     (19.0, None, Some(true)),
                     (20.0, None, Some(true)),
+                    (21.0, None, Some(true)),
                 ],
             ),
             (
@@ -2414,6 +2467,7 @@ mod tests {
                     (18.0, None, Some(true)),
                     (19.0, None, Some(true)),
                     (20.0, None, Some(true)),
+                    (21.0, None, Some(true)),
                 ],
             ),
             (
@@ -2428,6 +2482,7 @@ mod tests {
                     (18.0, None, Some(true)),
                     (19.0, None, Some(true)),
                     (20.0, None, Some(true)),
+                    (21.0, None, Some(true)),
                 ],
             ),
             (
@@ -2442,6 +2497,7 @@ mod tests {
                     (18.0, None, Some(true)),
                     (19.0, None, Some(true)),
                     (20.0, None, Some(true)),
+                    (21.0, None, Some(true)),
                 ],
             ),
             (
@@ -2456,6 +2512,7 @@ mod tests {
                     (18.0, None, Some(true)),
                     (19.0, None, Some(true)),
                     (20.0, None, Some(true)),
+                    (21.0, None, Some(true)),
                 ],
             ),
             (
@@ -2470,6 +2527,7 @@ mod tests {
                     (18.0, None, Some(true)),
                     (19.0, None, Some(true)),
                     (20.0, None, Some(true)),
+                    (21.0, None, Some(true)),
                 ],
             ),
             (
@@ -2483,6 +2541,7 @@ mod tests {
                     (18.0, None, Some(true)),
                     (19.0, None, Some(true)),
                     (20.0, None, Some(true)),
+                    (21.0, None, Some(true)),
                 ],
             ),
             (
@@ -2496,6 +2555,7 @@ mod tests {
                     (18.0, None, Some(true)),
                     (19.0, None, Some(true)),
                     (20.0, None, Some(true)),
+                    (21.0, None, Some(true)),
                 ],
             ),
             (
@@ -2509,6 +2569,7 @@ mod tests {
                     (18.0, None, Some(true)),
                     (19.0, None, Some(true)),
                     (20.0, None, Some(true)),
+                    (21.0, None, Some(true)),
                 ],
             ),
             (
@@ -2522,6 +2583,7 @@ mod tests {
                     (18.0, None, Some(true)),
                     (19.0, None, Some(true)),
                     (20.0, None, Some(true)),
+                    (21.0, None, Some(true)),
                 ],
             ),
             (
@@ -2535,6 +2597,7 @@ mod tests {
                     (18.0, None, Some(true)),
                     (19.0, None, Some(true)),
                     (20.0, None, Some(true)),
+                    (21.0, None, Some(true)),
                 ],
             ),
             (
@@ -2548,6 +2611,7 @@ mod tests {
                     (18.0, None, Some(true)),
                     (19.0, None, Some(true)),
                     (20.0, None, Some(true)),
+                    (21.0, None, Some(true)),
                 ],
             ),
         ] {
@@ -2582,7 +2646,7 @@ mod tests {
     }
 
     #[test]
-    fn legacy_migrations_commit_each_version_through_v20() {
+    fn legacy_migrations_commit_each_version_through_v21() {
         use std::sync::Mutex;
         use yrs::Update;
         use yrs::updates::decoder::Decode;
@@ -2596,21 +2660,21 @@ mod tests {
                 V1,
                 vec![
                     3.0, 4.0, 5.0, 6.0, 7.0, 8.0, 9.0, 10.0, 11.0, 12.0, 13.0, 14.0, 15.0, 16.0,
-                    17.0, 18.0, 19.0, 20.0,
+                    17.0, 18.0, 19.0, 20.0, 21.0,
                 ],
             ),
             (
                 V2,
                 vec![
                     3.0, 4.0, 5.0, 6.0, 7.0, 8.0, 9.0, 10.0, 11.0, 12.0, 13.0, 14.0, 15.0, 16.0,
-                    17.0, 18.0, 19.0, 20.0,
+                    17.0, 18.0, 19.0, 20.0, 21.0,
                 ],
             ),
             (
                 V3,
                 vec![
                     4.0, 5.0, 6.0, 7.0, 8.0, 9.0, 10.0, 11.0, 12.0, 13.0, 14.0, 15.0, 16.0, 17.0,
-                    18.0, 19.0, 20.0,
+                    18.0, 19.0, 20.0, 21.0,
                 ],
             ),
         ] {
@@ -2687,7 +2751,7 @@ mod tests {
                 V4_LEGACY,
                 vec![
                     3.0, 4.0, 5.0, 6.0, 7.0, 8.0, 9.0, 10.0, 11.0, 12.0, 13.0, 14.0, 15.0, 16.0,
-                    17.0, 18.0, 19.0, 20.0,
+                    17.0, 18.0, 19.0, 20.0, 21.0,
                 ],
                 1,
             ),
@@ -2696,7 +2760,7 @@ mod tests {
                 V4_STYLES,
                 vec![
                     5.0, 6.0, 7.0, 8.0, 9.0, 10.0, 11.0, 12.0, 13.0, 14.0, 15.0, 16.0, 17.0, 18.0,
-                    19.0, 20.0,
+                    19.0, 20.0, 21.0,
                 ],
                 1,
             ),
@@ -2705,7 +2769,7 @@ mod tests {
                 V4_NUMBERED,
                 vec![
                     5.0, 6.0, 7.0, 8.0, 9.0, 10.0, 11.0, 12.0, 13.0, 14.0, 15.0, 16.0, 17.0, 18.0,
-                    19.0, 20.0,
+                    19.0, 20.0, 21.0,
                 ],
                 10,
             ),
@@ -2774,20 +2838,21 @@ mod tests {
                 V2,
                 vec![
                     3.0, 4.0, 5.0, 6.0, 7.0, 8.0, 9.0, 10.0, 11.0, 12.0, 13.0, 14.0, 15.0, 16.0,
-                    17.0, 18.0, 19.0, 20.0,
+                    17.0, 18.0, 19.0, 20.0, 21.0,
                 ],
             ),
             (
                 V5,
                 vec![
                     6.0, 7.0, 8.0, 9.0, 10.0, 11.0, 12.0, 13.0, 14.0, 15.0, 16.0, 17.0, 18.0, 19.0,
-                    20.0,
+                    20.0, 21.0,
                 ],
             ),
             (
                 V6,
                 vec![
-                    7.0, 8.0, 9.0, 10.0, 11.0, 12.0, 13.0, 14.0, 15.0, 16.0, 17.0, 18.0, 19.0, 20.0,
+                    7.0, 8.0, 9.0, 10.0, 11.0, 12.0, 13.0, 14.0, 15.0, 16.0, 17.0, 18.0, 19.0,
+                    20.0, 21.0,
                 ],
             ),
         ] {
@@ -3040,7 +3105,8 @@ mod tests {
                 (17.0, before.clone(), Some("legacy".to_owned()), Some(true)),
                 (18.0, before.clone(), Some("legacy".to_owned()), Some(true)),
                 (19.0, before.clone(), Some("legacy".to_owned()), Some(true)),
-                (20.0, before, Some("legacy".to_owned()), Some(true))
+                (20.0, before.clone(), Some("legacy".to_owned()), Some(true)),
+                (21.0, before, Some("legacy".to_owned()), Some(true))
             ]
         );
     }
