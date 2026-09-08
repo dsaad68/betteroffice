@@ -18,6 +18,17 @@ pub fn apply_image_effects(data: &mut [u8], effects: &[ImageEffect]) {
                     pixel[..3].fill(value);
                 }
             }
+            ImageEffect::Luminance {
+                brightness,
+                contrast,
+            } => {
+                let map = luminance_map(f64::from(*brightness), f64::from(*contrast));
+                for pixel in pixels {
+                    for channel in &mut pixel[..3] {
+                        *channel = map[usize::from(*channel)];
+                    }
+                }
+            }
             ImageEffect::Duotone { shadow, highlight } => {
                 let (Some(shadow), Some(highlight)) = (rgba(shadow), rgba(highlight)) else {
                     continue;
@@ -55,6 +66,19 @@ pub fn apply_image_effects(data: &mut [u8], effects: &[ImageEffect]) {
             }
         }
     }
+}
+
+/// `a:lum` as a 256-entry ramp, fitted to what LibreOffice draws for the same
+/// brightness and contrast.
+fn luminance_map(brightness: f64, contrast: f64) -> [u8; 256] {
+    let contrast = contrast.clamp(-1.0, 1.0);
+    let slope = if contrast >= 0.0 {
+        128.0 / (128.0 - 127.0 * contrast)
+    } else {
+        (128.0 + 127.0 * contrast) / 128.0
+    };
+    let offset = 128.0 - 128.0 * slope + 255.0 * brightness.clamp(-1.0, 1.0) * (1.0 + slope) / 2.0;
+    std::array::from_fn(|value| (slope * value as f64 + offset).round().clamp(0.0, 255.0) as u8)
 }
 
 fn luma(pixel: &[u8; 4]) -> f64 {
@@ -106,6 +130,29 @@ mod tests {
             }],
         );
         assert_eq!(opaque, [255, 255, 255, 200]);
+    }
+
+    #[test]
+    fn lum_maps_each_channel_through_the_reference_ramp() {
+        let lum = |brightness, contrast| ImageEffect::Luminance {
+            brightness,
+            contrast,
+        };
+        let cases = [
+            ([0, 3, 64, 128], lum(0.7, -0.7), [205, 206, 225, 128]),
+            ([167, 223, 255, 64], lum(0.7, -0.7), [255, 255, 255, 64]),
+            ([0, 3, 167, 255], lum(0.0, -0.5), [64, 65, 148, 255]),
+            ([0, 3, 167, 255], lum(0.03, 0.77), [0, 0, 255, 255]),
+            ([0, 127, 128, 255], lum(0.0, 1.0), [0, 0, 128, 255]),
+            ([0, 127, 255, 255], lum(0.0, -1.0), [127, 128, 129, 255]),
+            ([0, 127, 255, 255], lum(1.0, 0.0), [255, 255, 255, 255]),
+            ([0, 127, 255, 255], lum(-1.0, -1.0), [0, 0, 0, 255]),
+            ([3, 167, 223, 128], lum(0.0, 0.0), [3, 167, 223, 128]),
+        ];
+        for (mut actual, effect, expected) in cases {
+            apply_image_effects(&mut actual, std::slice::from_ref(&effect));
+            assert_eq!(actual, expected, "{effect:?}");
+        }
     }
 
     #[test]

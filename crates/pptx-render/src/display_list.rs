@@ -61,6 +61,10 @@ pub enum ImageEffect {
         threshold: f32,
     },
     Grayscale,
+    Luminance {
+        brightness: f32,
+        contrast: f32,
+    },
     Duotone {
         shadow: String,
         highlight: String,
