@@ -1254,10 +1254,6 @@ struct HfVariantContentIn {
     #[serde(default)]
     flow_height: Option<f64>,
     #[serde(default)]
-    visual_top: Option<f64>,
-    #[serde(default)]
-    visual_bottom: Option<f64>,
-    #[serde(default)]
     field_widths: Vec<HfFieldWidthContentIn>,
 }
 
@@ -2143,6 +2139,10 @@ pub(crate) struct ShapeBlockIn {
     pm_start: Option<i64>,
     #[serde(default)]
     pm_end: Option<i64>,
+    #[serde(default)]
+    pub(crate) position: Option<crate::types::ImageRunPosition>,
+    #[serde(default)]
+    pub(crate) behind_doc: Option<bool>,
 }
 
 #[derive(Deserialize)]
@@ -4602,6 +4602,48 @@ fn resolve_hf_box_position(
     (geom.margin_left + x, geom.margin_top + y)
 }
 
+pub(crate) fn emit_hf_shape(
+    prims: &mut Vec<Primitive>,
+    block: &ShapeBlockIn,
+    measure: &BoxExtentIn,
+    ctx: &RenderCtx<'_>,
+    page: &PageIn,
+    flow_y: f64,
+) {
+    let (x, y) = crate::anchor::resolve_position(
+        block.position.as_ref(),
+        measure.width,
+        measure.height,
+        &crate::anchor::AnchorFrame {
+            page_width: page.size.w,
+            page_height: page.size.h,
+            margin_left: page.margins.left,
+            margin_right: page.margins.right,
+            margin_top: page.margins.top,
+            margin_bottom: page.margins.bottom,
+            flow_x: page.margins.left,
+            flow_y,
+            flow_width: page.size.w - page.margins.left - page.margins.right,
+            flow_height: 0.0,
+            odd_page: ctx.page_number % 2 == 1,
+        },
+    );
+    let fragment = ShapeFragmentIn {
+        block_id: block.id.clone(),
+        x,
+        y,
+        width: measure.width,
+        height: measure.height,
+        doc_start: block.doc_start,
+        doc_end: block.doc_end,
+        pm_start: block.pm_start,
+        pm_end: block.pm_end,
+        is_anchored: Some(block.position.is_some()),
+        z_index: None,
+    };
+    emit_shape_fragment(prims, &fragment, block, ctx);
+}
+
 fn recompose_hf_region(
     region: &mut HfRegion,
     hf: &HeadersFootersContentIn,
@@ -4642,8 +4684,6 @@ fn recompose_hf_region(
     let height = variant
         .height
         .unwrap_or_else(|| variant.measured.iter().map(measured_block_height).sum());
-    let visual_top = variant.visual_top.unwrap_or(0.0);
-    let visual_bottom = variant.visual_bottom.unwrap_or(height);
     let flow_height = variant.flow_height.unwrap_or(height);
     let (origin_y, flow_top) = match region.kind {
         HfKind::Header => {
@@ -4652,9 +4692,9 @@ fn recompose_hf_region(
         }
         HfKind::Footer => {
             let distance = hf.footer_distance.or(page.margins.footer).unwrap_or(48.0);
-            let actual = (visual_bottom - visual_top).max(24.0);
+            let actual = flow_height.max(24.0);
             (
-                page.size.h - distance - actual - visual_top,
+                page.size.h - distance - actual,
                 page.size.h - distance - flow_height,
             )
         }
@@ -4789,6 +4829,19 @@ fn recompose_hf_region(
                 if block.display_mode.as_deref() != Some("float")
                     && !is_floating_wrap_type(block.wrap_type.as_deref())
                 {
+                    cursor += measure.height;
+                }
+            }
+            (BlockIn::Shape(block), MeasureIn::Shape(measure)) => {
+                let prims = if block.position.is_none() {
+                    &mut flow
+                } else if block.behind_doc.unwrap_or(false) {
+                    &mut behind
+                } else {
+                    &mut front
+                };
+                emit_hf_shape(prims, block, measure, &ctx, page, origin_y + cursor);
+                if block.position.is_none() {
                     cursor += measure.height;
                 }
             }
@@ -8731,7 +8784,6 @@ pub(crate) fn emit_table_fragment(
             cx,
             cy,
             p.cell_h,
-            p.is_first_row,
             is_first_col,
             clip_top_y,
             clip_bottom_y,
@@ -8868,9 +8920,7 @@ pub(crate) fn emit_table_fragment(
 /// Adjacent paragraphs collapse `spacing.after` against the next
 /// `spacing.before`, a nested table flows after the previous paragraph's
 /// after-spacing, and a trailing after-spacing acts as the content box's bottom
-/// padding. Drawn border widths and padding inset the box on the sides this
-/// cell actually paints, and the resulting box is what `w:vAlign` measures its
-/// slack against.
+/// padding. Authored border insets remain stable across fragment cuts.
 #[allow(clippy::too_many_arguments)]
 fn emit_cell_content(
     prims: &mut Vec<Primitive>,
@@ -8880,7 +8930,6 @@ fn emit_cell_content(
     cx: f64,
     cy: f64,
     cell_h: f64,
-    is_first_row: bool,
     is_first_col: bool,
     clip_top_y: f64,
     clip_bottom_y: f64,
@@ -8896,9 +8945,9 @@ fn emit_cell_content(
         return;
     };
     let pad_left = cell.padding.and_then(|pd| pd.left).unwrap_or(7.0);
-    let pad_top = cell.padding.and_then(|pd| pd.top).unwrap_or(1.0);
+    let pad_top = cell.padding.and_then(|pd| pd.top).unwrap_or(0.0);
     let pad_right = cell.padding.and_then(|pd| pd.right).unwrap_or(7.0);
-    let pad_bottom = cell.padding.and_then(|pd| pd.bottom).unwrap_or(1.0);
+    let pad_bottom = cell.padding.and_then(|pd| pd.bottom).unwrap_or(0.0);
     let content_width = (p.width - pad_left - pad_right).max(0.0);
 
     // Drawn border widths inset the cell content box.
@@ -8911,7 +8960,11 @@ fn emit_cell_content(
     let (border_left, border_top, border_bottom) = match &cell.borders {
         Some(b) => (
             if is_first_col { edge_w(&b.left) } else { 0.0 },
-            if is_first_row { edge_w(&b.top) } else { 0.0 },
+            if p.row_index == 0 {
+                edge_w(&b.top)
+            } else {
+                0.0
+            },
             edge_w(&b.bottom),
         ),
         None => (0.0, 0.0, 0.0),
@@ -8968,17 +9021,14 @@ fn emit_cell_content(
     let content_height = stack_cursor + prev_after;
 
     // Content that fills or overflows the cell remains top-aligned.
-    let avail = (cell_h - border_top - border_bottom - pad_top - pad_bottom).max(0.0);
-    let content_fills = cell_measure.height >= cell_h - 0.5;
-    let v_offset = if content_fills {
-        0.0
-    } else {
-        match cell.vertical_align.as_deref() {
-            Some("center") => ((avail - content_height) / 2.0).max(0.0),
-            Some("bottom") => (avail - content_height).max(0.0),
-            _ => 0.0,
-        }
-    };
+    let v_offset = crate::cell_layout::cell_vertical_offset(
+        cell.vertical_align.as_deref(),
+        cell_h,
+        cell_measure.height,
+        content_height,
+        border_top + pad_top,
+        border_bottom + pad_bottom,
+    );
 
     let content_x = cx + border_left + pad_left;
     let content_top = cy + border_top + pad_top + v_offset;
