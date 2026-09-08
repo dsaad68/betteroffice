@@ -9,7 +9,7 @@ use crate::PptxError;
 use crate::custom_geometry::parse_custom_geometry;
 use crate::model::*;
 use crate::relationships::Relationship;
-use crate::xml::{ParseBudget, XmlElement};
+use crate::xml::{ParseBudget, XmlElement, alternate_content_branch};
 
 const MAX_SAFE_EMU: i64 = 1_000_000_000_000_000;
 const ANGLE_UNITS_PER_DEGREE: f64 = 60_000.0;
@@ -115,6 +115,18 @@ fn parse_shape_children(
 ) -> Result<Vec<ShapeNode>, PptxError> {
     let mut shapes = Vec::new();
     for child in parent.child_elements() {
+        if child.local_name() == "AlternateContent" {
+            if let Some(branch) = alternate_content_branch(child) {
+                shapes.extend(parse_shape_children(
+                    branch,
+                    relationships,
+                    part,
+                    budget,
+                    elements,
+                )?);
+            }
+            continue;
+        }
         let shape = match child.local_name() {
             "cxnSp" if elements == ShapeElements::WithoutConnectors => None,
             "sp" | "cxnSp" => Some(ShapeNode::Shape(parse_shape(
@@ -2455,5 +2467,114 @@ mod tests {
                 );
             }
         }
+    }
+
+    fn slide_shapes(body: &str, limits: &ParseLimits) -> Result<Vec<ShapeNode>, PptxError> {
+        let mut budget = ParseBudget::new(limits);
+        let xml = format!("<p:sld><p:cSld><p:spTree>{body}</p:spTree></p:cSld></p:sld>");
+        let root = parse_xml(xml.as_bytes(), "ppt/slides/slide1.xml", &mut budget).unwrap();
+        common_slide_data(
+            &root,
+            &[],
+            "ppt/slides/slide1.xml",
+            &mut budget,
+            ShapeElements::WithConnectors,
+        )
+        .map(|data| data.shapes)
+    }
+
+    fn shape_names(shapes: &[ShapeNode]) -> Vec<&str> {
+        shapes
+            .iter()
+            .map(|shape| match shape {
+                ShapeNode::Shape(shape) => shape.base.name.as_str(),
+                ShapeNode::Picture(picture) => picture.base.name.as_str(),
+                ShapeNode::GraphicFrame(frame) => frame.base.name.as_str(),
+                ShapeNode::Group(group) => group.base.name.as_str(),
+            })
+            .collect()
+    }
+
+    fn sp(name: &str) -> String {
+        format!(
+            r#"<p:sp><p:nvSpPr><p:cNvPr id="2" name="{name}"/><p:nvPr/></p:nvSpPr><p:spPr/></p:sp>"#
+        )
+    }
+
+    #[test]
+    fn an_unsupported_choice_falls_back_to_the_shapes_the_fallback_holds() {
+        let control = sp("control");
+        let choice = sp("choice");
+        let fallback = sp("fallback");
+        let shapes = slide_shapes(
+            &format!(
+                r#"{control}<mc:AlternateContent><mc:Choice xmlns:p14="http://schemas.microsoft.com/office/powerpoint/2010/main" Requires="p14">{choice}</mc:Choice><mc:Fallback>{fallback}<p:pic><p:nvPicPr><p:cNvPr id="5" name="fallback-picture"/></p:nvPicPr></p:pic></mc:Fallback></mc:AlternateContent>"#
+            ),
+            &ParseLimits::default(),
+        )
+        .unwrap();
+
+        assert_eq!(
+            shape_names(&shapes),
+            ["control", "fallback", "fallback-picture"]
+        );
+    }
+
+    #[test]
+    fn a_choice_this_parser_supports_wins_over_the_fallback() {
+        let choice = sp("choice");
+        let fallback = sp("fallback");
+        let shapes = slide_shapes(
+            &format!(
+                r#"<mc:AlternateContent><mc:Choice xmlns:p="http://schemas.openxmlformats.org/presentationml/2006/main" Requires="p">{choice}</mc:Choice><mc:Fallback>{fallback}</mc:Fallback></mc:AlternateContent>"#
+            ),
+            &ParseLimits::default(),
+        )
+        .unwrap();
+
+        assert_eq!(shape_names(&shapes), ["choice"]);
+    }
+
+    #[test]
+    fn an_alternate_content_without_a_readable_branch_is_skipped() {
+        let control = sp("control");
+        let choice = sp("choice");
+        for body in [
+            "<mc:AlternateContent/>".to_owned(),
+            "<mc:AlternateContent>text</mc:AlternateContent>".to_owned(),
+            format!(
+                r#"<mc:AlternateContent><mc:Choice Requires="p14">{choice}</mc:Choice></mc:AlternateContent>"#
+            ),
+            format!(
+                r#"<mc:AlternateContent><mc:Choice>{choice}</mc:Choice></mc:AlternateContent>"#
+            ),
+            "<mc:AlternateContent><mc:Fallback/></mc:AlternateContent>".to_owned(),
+        ] {
+            let shapes =
+                slide_shapes(&format!("{control}{body}"), &ParseLimits::default()).unwrap();
+            assert_eq!(shape_names(&shapes), ["control"], "{body}");
+        }
+    }
+
+    #[test]
+    fn shapes_inside_an_alternate_content_are_charged_to_the_shape_budget() {
+        let control = sp("control");
+        let fallback = sp("fallback");
+        let limits = ParseLimits {
+            max_shapes: 1,
+            ..ParseLimits::default()
+        };
+        let error = slide_shapes(
+            &format!(
+                r#"{control}<mc:AlternateContent><mc:Fallback>{fallback}</mc:Fallback></mc:AlternateContent>"#
+            ),
+            &limits,
+        )
+        .unwrap_err();
+
+        assert!(matches!(
+            error,
+            PptxError::ResourceLimit { kind: "shapes", .. }
+        ));
     }
 }
