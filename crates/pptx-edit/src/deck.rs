@@ -1381,8 +1381,10 @@ fn migrate_doc_to_v20(doc: &Doc) -> EditResult<()> {
 }
 
 /// Carries this batch's model additions, each step before the stamp. A v20
-/// package has neither `c:ser/c:spPr/a:ln` nor `a:pPr/@marR`;
-/// [`import_source_render_data`] restores both once the source is reattached.
+/// package has no `c:ser/c:spPr/a:ln`, no `a:pPr/@marR`, and no `a:defRPr/@spc`
+/// or title run properties on its chart text; none of it is recoverable from
+/// the stored package, and [`import_source_render_data`] restores all of it
+/// once the source is reattached.
 fn migrate_doc_to_v21(doc: &Doc) -> EditResult<()> {
     let mut txn = doc.transact_mut_with(MIGRATE_ORIGIN);
     let meta = required_map(&txn, META)?;

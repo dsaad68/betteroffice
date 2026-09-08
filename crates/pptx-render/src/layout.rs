@@ -1750,6 +1750,21 @@ fn resolve_style(
     })
 }
 
+/// Optional ligatures are off once glyphs are tracked apart.
+fn tracking_features(tracking: f32) -> &'static [ShapeFeature] {
+    const OFF: [ShapeFeature; 2] = [
+        ShapeFeature {
+            tag: *b"liga",
+            value: 0,
+        },
+        ShapeFeature {
+            tag: *b"clig",
+            value: 0,
+        },
+    ];
+    if tracking == 0.0 { &[] } else { &OFF }
+}
+
 /// One shaped line of chart text, in the family, weight, slant and pixel size
 /// the plot geometry asked for.
 fn chart_text_primitive(
@@ -1768,23 +1783,14 @@ fn chart_text_primitive(
     let face = renderer.resolve_face(&family, bold, italic)?;
     let size_px = safe_geometry(text.font.size_px as f32).clamp(1.0, 4_096.0);
     let tracking = safe_geometry(text.font.letter_spacing_px as f32);
-    let features = [
-        ShapeFeature {
-            tag: *b"liga",
-            value: 0,
-        },
-        ShapeFeature {
-            tag: *b"clig",
-            value: 0,
-        },
-    ];
-    let features = if tracking == 0.0 {
-        &[][..]
-    } else {
-        &features[..]
-    };
-    let shaped = shape(&renderer.fonts, face.id, text.text, size_px, features)
-        .map_err(|error| RenderError::Font(error.to_string()))?;
+    let shaped = shape(
+        &renderer.fonts,
+        face.id,
+        text.text,
+        size_px,
+        tracking_features(tracking),
+    )
+    .map_err(|error| RenderError::Font(error.to_string()))?;
     let metrics = renderer
         .fonts
         .metrics(face.id)
@@ -2256,23 +2262,14 @@ fn add_shaped_segment(
     }
     let size_px = points_to_px(run.style.font_size_pt * scale);
     let tracking = points_to_px(run.style.spacing_pt * scale);
-    let features = [
-        ShapeFeature {
-            tag: *b"liga",
-            value: 0,
-        },
-        ShapeFeature {
-            tag: *b"clig",
-            value: 0,
-        },
-    ];
-    let features = if tracking == 0.0 {
-        &[][..]
-    } else {
-        &features[..]
-    };
-    let shaped = shape(fonts, run.style.face.id, text, size_px, features)
-        .map_err(|error| RenderError::Font(error.to_string()))?;
+    let shaped = shape(
+        fonts,
+        run.style.face.id,
+        text,
+        size_px,
+        tracking_features(tracking),
+    )
+    .map_err(|error| RenderError::Font(error.to_string()))?;
     let mut starts = shaped
         .iter()
         .map(|glyph| glyph.cluster as usize)

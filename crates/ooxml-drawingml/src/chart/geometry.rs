@@ -1738,9 +1738,9 @@ fn legend_text_width<S: PlotSink + ?Sized>(
         .unwrap_or_else(|| fallback_label_width(label, &style.font))
 }
 
-/// A label's width when the sink cannot measure text.
+/// A label's width when the sink cannot measure text: n - 1 tracked gaps, as a
+/// measured line has, and never below zero.
 fn fallback_label_width(label: &str, font: &PlotFont) -> f64 {
-    // n - 1 gaps, as a measured line has, and tightening never takes a label past zero.
     let count = label.chars().count() as f64;
     (count * font.size_px * 0.5 + (count - 1.0).max(0.0) * font.letter_spacing_px).max(0.0)
 }
@@ -3906,6 +3906,10 @@ fn group_thousands(body: &str) -> String {
 
 #[cfg(test)]
 mod tests {
+    use super::*;
+    use crate::chart::{
+        ChartDataLabels, ChartPlotGroup, ChartPointLabel, ChartSeries, ChartTextProperties,
+    };
 
     #[test]
     fn an_unmeasured_legend_label_is_never_negative_and_counts_gaps_between() {
@@ -3916,18 +3920,11 @@ mod tests {
             italic: false,
             letter_spacing_px: spacing,
         };
-        // Tight tracking must not invert the width when the sink cannot measure.
         assert!(fallback_label_width("Series", &font(-40.0)) >= 0.0);
-        // Six characters carry five gaps, not six.
         let loose = fallback_label_width("Series", &font(2.0));
         let plain = fallback_label_width("Series", &font(0.0));
         assert!((loose - plain - 10.0).abs() < 1e-9, "{loose} vs {plain}");
     }
-
-    use super::*;
-    use crate::chart::{
-        ChartDataLabels, ChartPlotGroup, ChartPointLabel, ChartSeries, ChartTextProperties,
-    };
 
     struct Source {
         categories: Vec<String>,
