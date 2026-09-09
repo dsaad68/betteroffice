@@ -591,7 +591,6 @@ impl<'a> LayoutBuilder<'a> {
             style_color: shape_style_color(original),
         };
         let text = match shape.kind {
-            // A frame's stories are its table cells, laid out with the table itself.
             ShapeKind::GraphicFrame => None,
             ShapeKind::Shape | ShapeKind::Picture | ShapeKind::Group => {
                 shape.text_stories.first().map(content_from_story)
