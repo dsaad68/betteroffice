@@ -504,7 +504,7 @@ function oneCallPerTextRun(
       for (const line of primitive.lines) {
         for (const run of line.runs) calls.push({ text: run.text, x: run.x, y: line.baseline });
       }
-    } else if (primitive.kind === 'chart') {
+    } else if (primitive.kind === 'chart' || primitive.kind === 'table') {
       calls.push(...oneCallPerTextRun(primitive.primitives));
     } else if (primitive.kind === 'placeholder' && primitive.label) {
       calls.push({
