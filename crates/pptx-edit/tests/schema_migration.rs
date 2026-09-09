@@ -1054,3 +1054,61 @@ fn main_v14_and_v15_chart_and_overflow_settings_compose_and_preserve_edits() {
         assert_eq!(reattached.encode_state_as_update_v1(), update);
     }
 }
+
+/// Strips every chart text property and stamps `version`, standing in for a
+/// package stored before schema 21 read `c:txPr`.
+fn without_chart_text(update: &[u8], version: f64) -> Vec<u8> {
+    let doc = hydrated(update);
+    let meta = meta(&doc);
+    let mut package: serde_json::Value = serde_json::from_str(&package_json(update)).unwrap();
+    for chart in package["charts"].as_array_mut().unwrap() {
+        strip_chart_text(&mut chart["chart"]);
+    }
+    {
+        let mut txn = doc.transact_mut();
+        meta.insert(
+            &mut txn,
+            "packageJson",
+            Any::Buffer(serde_json::to_vec(&package).unwrap().into()),
+        );
+        meta.insert(&mut txn, "schemaVersion", version);
+    }
+    doc.transact()
+        .encode_state_as_update_v1(&StateVector::default())
+}
+
+fn strip_chart_text(value: &mut serde_json::Value) {
+    match value {
+        serde_json::Value::Object(map) => {
+            map.remove("text");
+            map.remove("titleText");
+            for value in map.values_mut() {
+                strip_chart_text(value);
+            }
+        }
+        serde_json::Value::Array(values) => values.iter_mut().for_each(strip_chart_text),
+        _ => {}
+    }
+}
+
+#[test]
+fn a_pre_v21_chart_carries_its_stored_text_and_recovers_it_from_a_source() {
+    let source = include_bytes!("../../pptx-render/tests/fixtures/chart-text-properties.pptx");
+    let fresh = DeckSession::open(source, 34700).unwrap();
+    let current = fresh.encode_state_as_update_v1();
+    assert_eq!(stamped_version(&current), Some(21.0));
+    assert!(package_json(&current).contains("\"spacingPt\":6.0"));
+
+    let stored = without_chart_text(&current, 20.0);
+    assert!(!package_json(&stored).contains("spacingPt"));
+    let migrated = DeckSession::open_from_update(&stored, 34701).unwrap();
+    let carried = migrated.encode_state_as_update_v1();
+    assert_eq!(stamped_version(&carried), Some(21.0));
+    assert_eq!(package_json(&carried), package_json(&stored));
+
+    let attached = DeckSession::open_from_update_with_source(&carried, source, 34702).unwrap();
+    let imported = attached.encode_state_as_update_v1();
+    assert_eq!(package_json(&imported), package_json(&current));
+    let reattached = DeckSession::open_from_update_with_source(&imported, source, 34703).unwrap();
+    assert_eq!(reattached.encode_state_as_update_v1(), imported);
+}

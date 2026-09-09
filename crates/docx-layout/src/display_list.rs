@@ -2207,6 +2207,8 @@ struct ChartTextIn {
     italic: Option<bool>,
     #[serde(default)]
     color: Option<String>,
+    #[serde(default)]
+    spacing_pt: Option<f64>,
 }
 
 #[derive(Deserialize, Default, Clone)]
@@ -7877,6 +7879,7 @@ fn plot_text_from(text: Option<&ChartTextIn>) -> PlotTextStyle<'_> {
         bold: text.bold,
         italic: text.italic,
         color: text.color.as_deref(),
+        spacing_pt: text.spacing_pt,
     })
     .unwrap_or_default()
 }
@@ -8076,9 +8079,9 @@ impl PlotSink for PrimitiveSink<'_> {
                 baseline_y: px(baseline_y),
                 width: px(width),
                 paint_clip: None,
+                letter_spacing: (font.letter_spacing_px != 0.0).then(|| px(font.letter_spacing_px)),
                 font: font.css(),
                 color,
-                letter_spacing: None,
                 word_spacing: None,
                 rtl: None,
                 opacity: None,

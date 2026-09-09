@@ -991,9 +991,14 @@ impl<'a> LayoutBuilder<'a> {
                 transform,
             };
             let (renderer, theme) = (self.renderer, self.theme);
-            let chart = chart_primitive(frame, space, self.chart_budget, &mut |text| {
-                chart_text_primitive(renderer, theme, shape_id, text)
-            })?;
+            let default_font = resolve_theme_font_ref(Some(theme), "+mn-lt");
+            let chart = chart_primitive(
+                frame,
+                space,
+                &default_font,
+                self.chart_budget,
+                &mut |text| chart_text_primitive(renderer, theme, shape_id, text),
+            )?;
             if let Primitive::Chart { primitives, .. } = &chart {
                 self.chart_budget -= primitives.len();
             }
@@ -1751,8 +1756,23 @@ fn resolve_style(
     })
 }
 
-/// One shaped line of chart text, in the deck's minor font at the weight and
-/// pixel size the plot geometry asked for.
+/// Optional ligatures are off once glyphs are tracked apart.
+fn tracking_features(tracking: f32) -> &'static [ShapeFeature] {
+    const OFF: [ShapeFeature; 2] = [
+        ShapeFeature {
+            tag: *b"liga",
+            value: 0,
+        },
+        ShapeFeature {
+            tag: *b"clig",
+            value: 0,
+        },
+    ];
+    if tracking == 0.0 { &[] } else { &OFF }
+}
+
+/// One shaped line of chart text, in the family, weight, slant and pixel size
+/// the plot geometry asked for.
 fn chart_text_primitive(
     renderer: &SlideRenderer,
     theme: &Theme,
@@ -1760,17 +1780,43 @@ fn chart_text_primitive(
     text: ChartText<'_>,
 ) -> Result<Primitive, RenderError> {
     let bold = text.font.weight >= 600;
-    let family = resolve_theme_font_ref(Some(theme), "+mn-lt");
-    let face = renderer.resolve_face(&family, bold, false)?;
+    let italic = text.font.italic;
+    let family = if text.font.family.starts_with('+') {
+        resolve_theme_font_ref(Some(theme), &text.font.family)
+    } else {
+        text.font.family.clone()
+    };
+    let face = renderer.resolve_face(&family, bold, italic)?;
     let size_px = safe_geometry(text.font.size_px as f32).clamp(1.0, 4_096.0);
-    let shaped = shape(&renderer.fonts, face.id, text.text, size_px, &[])
-        .map_err(|error| RenderError::Font(error.to_string()))?;
+    let tracking = safe_geometry(text.font.letter_spacing_px as f32);
+    let shaped = shape(
+        &renderer.fonts,
+        face.id,
+        text.text,
+        size_px,
+        tracking_features(tracking),
+    )
+    .map_err(|error| RenderError::Font(error.to_string()))?;
     let metrics = renderer
         .fonts
         .metrics(face.id)
         .map_err(|error| RenderError::Font(error.to_string()))?;
     let line_box = single_line_box(metrics, size_px, &CompatFlags::default());
-    let advance: f32 = shaped.iter().map(|glyph| glyph.x_advance).sum();
+    let mut offsets = Vec::with_capacity(shaped.len());
+    let mut cursor = 0.0_f32;
+    let mut cluster_advance = 0.0_f32;
+    let mut cluster = None;
+    for glyph in &shaped {
+        if cluster.is_some_and(|previous| previous != glyph.cluster) {
+            cursor += tracking.max(-cluster_advance);
+            cluster_advance = 0.0;
+        }
+        offsets.push(cursor);
+        cursor += glyph.x_advance;
+        cluster_advance += glyph.x_advance;
+        cluster = Some(glyph.cluster);
+    }
+    let advance = cursor;
     let box_x = safe_geometry(text.x as f32);
     let box_w = safe_geometry(text.width as f32);
     let align = match text.align {
@@ -1782,33 +1828,32 @@ fn chart_text_primitive(
         _ => box_x,
     };
     let baseline = safe_geometry(text.baseline_y as f32);
-    let mut glyphs = Vec::with_capacity(shaped.len());
-    let mut cursor = 0.0_f32;
-    for glyph in &shaped {
-        glyphs.push(PositionedGlyph {
+    let glyphs = shaped
+        .iter()
+        .zip(&offsets)
+        .map(|(glyph, offset)| PositionedGlyph {
             glyph_id: glyph.glyph_id,
             cluster: glyph.cluster,
-            x: x + cursor,
+            x: x + offset,
             advance: glyph.x_advance,
             x_offset: glyph.x_offset,
             y_offset: baseline + glyph.y_offset,
-        });
-        cursor += glyph.x_advance;
-    }
+        })
+        .collect();
     let run = PositionedTextRun {
         text: text.text.to_owned(),
         start: 0,
         end: utf16_len(text.text),
         x,
-        width: cursor.max(0.0),
+        width: advance.max(0.0),
         font_id: face.id.to_u32(),
         font_family: face.family.clone(),
         font_size_px: size_px,
         bold,
-        italic: false,
+        italic,
         underline: false,
         color: text.color.to_owned(),
-        letter_spacing_px: 0.0,
+        letter_spacing_px: tracking,
         baseline_offset_px: 0.0,
         glyphs,
     };
@@ -1830,7 +1875,7 @@ fn chart_text_primitive(
                 font_family: face.family.clone(),
                 font_size_pt: size_px * 72.0 / 96.0,
                 bold,
-                italic: false,
+                italic,
                 underline: false,
                 color: text.color.to_owned(),
             }],
@@ -2223,23 +2268,14 @@ fn add_shaped_segment(
     }
     let size_px = points_to_px(run.style.font_size_pt * scale);
     let tracking = points_to_px(run.style.spacing_pt * scale);
-    let features = [
-        ShapeFeature {
-            tag: *b"liga",
-            value: 0,
-        },
-        ShapeFeature {
-            tag: *b"clig",
-            value: 0,
-        },
-    ];
-    let features = if tracking == 0.0 {
-        &[][..]
-    } else {
-        &features[..]
-    };
-    let shaped = shape(fonts, run.style.face.id, text, size_px, features)
-        .map_err(|error| RenderError::Font(error.to_string()))?;
+    let shaped = shape(
+        fonts,
+        run.style.face.id,
+        text,
+        size_px,
+        tracking_features(tracking),
+    )
+    .map_err(|error| RenderError::Font(error.to_string()))?;
     let mut starts = shaped
         .iter()
         .map(|glyph| glyph.cluster as usize)
