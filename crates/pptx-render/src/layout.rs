@@ -4576,7 +4576,9 @@ mod tests {
                             run.font_id = u32::from(run.font_id != bold_id);
                         }
                     }
-                    Primitive::Chart { primitives, .. } => normalize_font_ids(primitives, bold_id),
+                    Primitive::Chart { primitives, .. } | Primitive::Table { primitives, .. } => {
+                        normalize_font_ids(primitives, bold_id)
+                    }
                     _ => {}
                 }
             }
@@ -5141,7 +5143,8 @@ mod tests {
             | Primitive::Image { shape_id, .. }
             | Primitive::TextBox { shape_id, .. }
             | Primitive::Placeholder { shape_id, .. }
-            | Primitive::Chart { shape_id, .. } => shape_id.as_deref(),
+            | Primitive::Chart { shape_id, .. }
+            | Primitive::Table { shape_id, .. } => shape_id.as_deref(),
         }
     }
 
