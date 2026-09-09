@@ -499,7 +499,7 @@ impl TableCell {
     }
 
     /// Compared against a cell built from this text alone, so a field added
-    /// later cannot be silently dropped by the schema-21 encoding.
+    /// later cannot be silently dropped by the released encoding.
     fn is_text_only(&self) -> bool {
         *self == Self::from_text(self.text.clone())
     }
@@ -550,7 +550,7 @@ fn is_false(value: &bool) -> bool {
     !*value
 }
 
-/// Writes rows that hold nothing but cell text in schema 21's encoding, so a
+/// Writes rows that hold nothing but cell text in the released encoding, so a
 /// stored package keeps its bytes until a table gains geometry.
 fn serialize_table_rows<S>(rows: &[TableRow], serializer: S) -> Result<S::Ok, S::Error>
 where
@@ -569,7 +569,7 @@ where
     sequence.end()
 }
 
-/// Also accepts schema 21's rows, which were bare `a:txBody` lists.
+/// Also accepts the released encoding's rows, which were bare `a:txBody` lists.
 fn deserialize_table_rows<'de, D>(deserializer: D) -> Result<Vec<TableRow>, D::Error>
 where
     D: serde::Deserializer<'de>,

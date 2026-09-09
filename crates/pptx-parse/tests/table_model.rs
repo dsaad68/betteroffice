@@ -92,7 +92,7 @@ fn folds_cell_properties_into_the_cell_text_body() {
 }
 
 #[test]
-fn a_text_only_table_round_trips_through_schema_21_json() {
+fn a_text_only_table_round_trips_through_the_released_json() {
     let legacy = r#"{"type":"table","rows":[[{"anchor":"ctr","vertical":null,"autofit":null,"insetLeft":null,"insetTop":null,"insetRight":null,"insetBottom":null,"paragraphs":[]}]]}"#;
     let data: GraphicFrameData = serde_json::from_str(legacy).unwrap();
     let GraphicFrameData::Table(stored) = &data else {
@@ -109,29 +109,53 @@ fn a_text_only_table_round_trips_through_schema_21_json() {
 }
 
 #[test]
-fn a_cell_carrying_anything_beyond_text_keeps_the_schema_22_encoding() {
+fn a_row_or_cell_carrying_anything_beyond_text_keeps_the_full_encoding() {
     let text = pptx_parse::TextBody::default();
-    for cell in [
-        pptx_parse::TableCell {
-            grid_span: 2,
-            ..pptx_parse::TableCell::from_text(text.clone())
-        },
-        pptx_parse::TableCell {
-            row_span: 2,
-            ..pptx_parse::TableCell::from_text(text.clone())
-        },
-        pptx_parse::TableCell {
-            merged: true,
-            ..pptx_parse::TableCell::from_text(text.clone())
-        },
-        pptx_parse::TableCell {
-            fill: Some(ooxml_drawingml::ShapeFill::named("solid")),
-            ..pptx_parse::TableCell::from_text(text.clone())
-        },
+    let borders = pptx_parse::TableCellBorders {
+        bottom: Some(ooxml_drawingml::ShapeOutline::default()),
+        ..pptx_parse::TableCellBorders::default()
+    };
+    for (height, cell) in [
+        (370_840, pptx_parse::TableCell::from_text(text.clone())),
+        (
+            0,
+            pptx_parse::TableCell {
+                grid_span: 2,
+                ..pptx_parse::TableCell::from_text(text.clone())
+            },
+        ),
+        (
+            0,
+            pptx_parse::TableCell {
+                row_span: 2,
+                ..pptx_parse::TableCell::from_text(text.clone())
+            },
+        ),
+        (
+            0,
+            pptx_parse::TableCell {
+                merged: true,
+                ..pptx_parse::TableCell::from_text(text.clone())
+            },
+        ),
+        (
+            0,
+            pptx_parse::TableCell {
+                fill: Some(ooxml_drawingml::ShapeFill::named("solid")),
+                ..pptx_parse::TableCell::from_text(text.clone())
+            },
+        ),
+        (
+            0,
+            pptx_parse::TableCell {
+                borders,
+                ..pptx_parse::TableCell::from_text(text.clone())
+            },
+        ),
     ] {
         let data = GraphicFrameData::Table(pptx_parse::Table {
             rows: vec![pptx_parse::TableRow {
-                height: 0,
+                height,
                 cells: vec![cell],
             }],
             ..pptx_parse::Table::default()
@@ -139,7 +163,7 @@ fn a_cell_carrying_anything_beyond_text_keeps_the_schema_22_encoding() {
         let json = serde_json::to_string(&data).unwrap();
         assert!(
             json.contains("\"cells\""),
-            "a cell with formatting must not serialize as a bare text list: {json}"
+            "a row or cell with formatting must not serialize as a bare text list: {json}"
         );
         assert_eq!(
             serde_json::from_str::<GraphicFrameData>(&json).unwrap(),
