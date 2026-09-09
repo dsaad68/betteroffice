@@ -797,6 +797,10 @@ pub(crate) fn import_source_render_data(doc: &Doc, source: &PptxPackage) -> Edit
             changed |= merge_source_chart_properties(&mut chart.chart, &source.chart);
         }
     }
+    if package.table_styles != source.table_styles {
+        package.table_styles.clone_from(&source.table_styles);
+        changed = true;
+    }
     if !changed {
         return Ok(());
     }

@@ -10,6 +10,7 @@ pub mod relationship_types {
     pub const THEME: &str = "/theme";
     pub const IMAGE: &str = "/image";
     pub const CHART: &str = "/chart";
+    pub const TABLE_STYLES: &str = "/tableStyles";
 
     pub const COMMENTS: &str =
         "http://schemas.openxmlformats.org/officeDocument/2006/relationships/comments";
