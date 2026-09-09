@@ -590,7 +590,12 @@ impl<'a> LayoutBuilder<'a> {
             placeholder: shape.placeholder.as_ref(),
             style_color: shape_style_color(original),
         };
-        let text = shape.text_stories.first().map(content_from_story);
+        let text = match shape.kind {
+            ShapeKind::GraphicFrame => None,
+            ShapeKind::Shape | ShapeKind::Picture | ShapeKind::Group => {
+                shape.text_stories.first().map(content_from_story)
+            }
+        };
         let text_hit = if let Some(content) = text {
             Some(self.render_text_box(
                 shape.source_id,
