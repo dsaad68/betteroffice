@@ -1,5 +1,6 @@
 import type {
   ChartPrimitive,
+  TablePrimitive,
   GeometryPathCommand,
   ImageEffect,
   ImagePrimitive,
@@ -97,7 +98,8 @@ async function paintPrimitive(
         paintPlaceholder(ctx, primitive);
         break;
       case 'chart':
-        await paintChart(ctx, primitive, options, deviceScale, shadowBudget);
+      case 'table':
+        await paintContainer(ctx, primitive, options, deviceScale, shadowBudget);
         break;
     }
   } finally {
@@ -105,9 +107,9 @@ async function paintPrimitive(
   }
 }
 
-async function paintChart(
+async function paintContainer(
   ctx: CanvasRenderingContext2D,
-  chart: ChartPrimitive,
+  chart: ChartPrimitive | TablePrimitive,
   options: PaintSlideOptions,
   deviceScale: number,
   shadowBudget: ShadowBudget

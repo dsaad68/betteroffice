@@ -5141,7 +5141,8 @@ mod tests {
             | Primitive::Image { shape_id, .. }
             | Primitive::TextBox { shape_id, .. }
             | Primitive::Placeholder { shape_id, .. }
-            | Primitive::Chart { shape_id, .. } => shape_id.as_deref(),
+            | Primitive::Chart { shape_id, .. }
+            | Primitive::Table { shape_id, .. } => shape_id.as_deref(),
         }
     }
 
