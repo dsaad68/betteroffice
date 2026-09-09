@@ -950,7 +950,7 @@ fn backfill_table(
     Ok(())
 }
 
-/// Restores the grid, spans and cell formatting a package written before tables were modelled dropped.
+/// Restores the grid, spans and cell formatting a stored package dropped.
 fn merge_source_table(target: &mut pptx_parse::Table, source: &pptx_parse::Table) -> bool {
     let mut changed = target.grid != source.grid || target.properties != source.properties;
     target.grid.clone_from(&source.grid);
@@ -1054,7 +1054,7 @@ pub(crate) fn migrate_doc(doc: &Doc) -> EditResult<()> {
 /// rewritten through the current model, hidden flags and bitmap effects are
 /// backfilled, the comment flavour is recorded, and everything a stored package
 /// cannot carry -- baselines, outline gradients, character spacing, OLE picture
-/// previews, chart and paragraph properties -- is deferred to
+/// previews, chart and paragraph properties, table geometry -- is deferred to
 /// [`import_source_render_data`] until the source is reattached.
 fn migrate_doc_to_v2_1(doc: &Doc) -> EditResult<()> {
     let mut txn = doc.transact_mut_with(MIGRATE_ORIGIN);
