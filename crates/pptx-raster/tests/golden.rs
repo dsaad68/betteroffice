@@ -650,6 +650,75 @@ fn an_empty_table_paints_nothing() {
     );
 }
 
+fn rotated(primitive: Primitive, rotation_deg: f32) -> Primitive {
+    let Primitive::Table {
+        object_id,
+        shape_id,
+        name,
+        x,
+        y,
+        w,
+        h,
+        label,
+        primitives,
+        ..
+    } = primitive
+    else {
+        unreachable!()
+    };
+    Primitive::Table {
+        object_id,
+        shape_id,
+        name,
+        x,
+        y,
+        w,
+        h,
+        label,
+        primitives,
+        transform: Transform {
+            rotation_deg,
+            ..Transform::default()
+        },
+    }
+}
+
+#[test]
+fn a_table_turns_its_cells_and_its_clip_under_its_own_transform() {
+    let turned = render(&slide(vec![rotated(table(table_children()), 30.0)]));
+    assert_ne!(turned, render(&slide(vec![table(table_children())])));
+    let Primitive::Table {
+        object_id,
+        shape_id,
+        name,
+        x,
+        y,
+        w,
+        h,
+        label,
+        primitives,
+        transform,
+    } = rotated(table(table_children()), 30.0)
+    else {
+        unreachable!()
+    };
+    assert_eq!(
+        turned,
+        render(&slide(vec![Primitive::Chart {
+            object_id,
+            shape_id,
+            name,
+            x,
+            y,
+            w,
+            h,
+            label,
+            primitives,
+            transform,
+        }]))
+    );
+}
+
 #[test]
 fn output_is_byte_deterministic() {
     let list = slide(vec![
