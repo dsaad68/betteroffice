@@ -947,9 +947,13 @@ fn merge_source_paragraph_properties(
         || target.bullet_color != source.bullet_color
         || target.bullet_size != source.bullet_size
         || target.line_spacing != source.line_spacing
-        || target.margin_right != source.margin_right;
+        || target.margin_right != source.margin_right
+        || target.space_before != source.space_before
+        || target.space_after != source.space_after;
     target.line_spacing = source.line_spacing;
     target.margin_right = source.margin_right;
+    target.space_before = source.space_before;
+    target.space_after = source.space_after;
     if let (
         Some(pptx_parse::Bullet::AutoNumber {
             restart: target, ..
@@ -1999,6 +2003,21 @@ mod tests {
 
         assert!(merge_source_paragraph_properties(&mut target, &source));
         assert_eq!(target.margin_right, Some(914_400));
+        assert!(!merge_source_paragraph_properties(&mut target, &source));
+    }
+
+    #[test]
+    fn a_reattached_source_restores_the_paragraph_spacing_a_stored_package_lacks() {
+        let source = pptx_parse::ParagraphProperties {
+            space_before: Some(pptx_parse::LineSpacing::Points { value: 10.0 }),
+            space_after: Some(pptx_parse::LineSpacing::Percent { value: 0.2 }),
+            ..pptx_parse::ParagraphProperties::default()
+        };
+        let mut target = pptx_parse::ParagraphProperties::default();
+
+        assert!(merge_source_paragraph_properties(&mut target, &source));
+        assert_eq!(target.space_before, source.space_before);
+        assert_eq!(target.space_after, source.space_after);
         assert!(!merge_source_paragraph_properties(&mut target, &source));
     }
 
