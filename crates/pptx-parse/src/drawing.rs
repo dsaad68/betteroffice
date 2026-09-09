@@ -279,20 +279,7 @@ fn parse_graphic_frame(
         .child("graphic")
         .and_then(|value| value.child("graphicData"));
     let frame_data = if let Some(table) = data.and_then(|value| value.child("tbl")) {
-        let mut rows = Vec::new();
-        for row in table.children_named("tr") {
-            let mut cells = Vec::new();
-            for cell in row.children_named("tc") {
-                cells.push(
-                    cell.child("txBody")
-                        .map(|body| parse_text_body(body, part, budget))
-                        .transpose()?
-                        .unwrap_or_default(),
-                );
-            }
-            rows.push(cells);
-        }
-        GraphicFrameData::Table { rows }
+        GraphicFrameData::Table(parse_table(table, part, budget)?)
     } else if let Some(chart) =
         data.and_then(|value| value.descendants_named("chart").first().copied())
     {
@@ -339,6 +326,122 @@ fn parse_graphic_frame(
         base: parse_base(element.child("nvGraphicFramePr"), element.child("xfrm")),
         data: frame_data,
     })
+}
+
+fn parse_table(
+    table: &XmlElement,
+    part: &str,
+    budget: &mut ParseBudget<'_>,
+) -> Result<Table, PptxError> {
+    let mut rows = Vec::new();
+    for row in table.children_named("tr") {
+        let mut cells = Vec::new();
+        for cell in row.children_named("tc") {
+            cells.push(parse_table_cell(cell, part, budget)?);
+        }
+        rows.push(TableRow {
+            height: numeric_attribute(Some(row), "h").unwrap_or_default().max(0),
+            cells,
+        });
+    }
+    Ok(Table {
+        grid: table
+            .child("tblGrid")
+            .into_iter()
+            .flat_map(|grid| grid.children_named("gridCol"))
+            .map(|column| {
+                numeric_attribute(Some(column), "w")
+                    .unwrap_or_default()
+                    .max(0)
+            })
+            .collect(),
+        properties: parse_table_properties(table.child("tblPr")),
+        rows,
+    })
+}
+
+fn parse_table_properties(properties: Option<&XmlElement>) -> TableProperties {
+    let flag = |name: &str| {
+        properties
+            .and_then(|value| value.attribute(name))
+            .is_some_and(parse_bool)
+    };
+    TableProperties {
+        first_row: flag("firstRow"),
+        last_row: flag("lastRow"),
+        first_col: flag("firstCol"),
+        last_col: flag("lastCol"),
+        band_row: flag("bandRow"),
+        band_col: flag("bandCol"),
+        style_id: properties
+            .and_then(|value| value.child("tableStyleId"))
+            .map(|value| value.text_content())
+            .filter(|value| !value.is_empty()),
+    }
+}
+
+fn parse_table_cell(
+    cell: &XmlElement,
+    part: &str,
+    budget: &mut ParseBudget<'_>,
+) -> Result<TableCell, PptxError> {
+    let properties = cell.child("tcPr");
+    let mut text = cell
+        .child("txBody")
+        .map(|body| parse_text_body(body, part, budget))
+        .transpose()?
+        .unwrap_or_default();
+    apply_cell_text_properties(&mut text, properties);
+    let merged = ["hMerge", "vMerge"]
+        .iter()
+        .any(|name| cell.attribute(name).is_some_and(parse_bool));
+    Ok(TableCell {
+        text,
+        grid_span: span_attribute(cell, "gridSpan"),
+        row_span: span_attribute(cell, "rowSpan"),
+        merged,
+        fill: properties.and_then(parse_fill),
+        borders: parse_cell_borders(properties),
+    })
+}
+
+/// `a:tcPr` outranks the cell's own `a:bodyPr`, which PowerPoint ignores.
+fn apply_cell_text_properties(text: &mut TextBody, properties: Option<&XmlElement>) {
+    let Some(properties) = properties else {
+        return;
+    };
+    if let Some(anchor) = properties.attribute("anchor") {
+        text.anchor = Some(anchor.to_owned());
+    }
+    if let Some(vertical) = properties.attribute("vert") {
+        text.vertical = Some(vertical.to_owned());
+    }
+    text.inset_left = numeric_attribute(Some(properties), "marL").or(text.inset_left);
+    text.inset_top = numeric_attribute(Some(properties), "marT").or(text.inset_top);
+    text.inset_right = numeric_attribute(Some(properties), "marR").or(text.inset_right);
+    text.inset_bottom = numeric_attribute(Some(properties), "marB").or(text.inset_bottom);
+}
+
+fn parse_cell_borders(properties: Option<&XmlElement>) -> TableCellBorders {
+    let border = |name: &str| {
+        properties
+            .and_then(|value| value.child(name))
+            .and_then(parse_line_element)
+    };
+    TableCellBorders {
+        left: border("lnL"),
+        top: border("lnT"),
+        right: border("lnR"),
+        bottom: border("lnB"),
+    }
+}
+
+fn span_attribute(element: &XmlElement, name: &str) -> u32 {
+    element
+        .attribute(name)
+        .and_then(|value| value.parse().ok())
+        .filter(|value| *value > 0)
+        .unwrap_or(1)
 }
 
 fn parse_group(
@@ -844,6 +947,11 @@ pub(crate) fn parse_outline_element(line: &XmlElement) -> Option<ShapeOutline> {
     if line.local_name() != "ln" {
         return None;
     }
+    parse_line_element(line)
+}
+
+/// Reads a line whatever it is named, for `a:lnL`-style table cell borders.
+fn parse_line_element(line: &XmlElement) -> Option<ShapeOutline> {
     if line.child("noFill").is_some() {
         return Some(ShapeOutline::default());
     }

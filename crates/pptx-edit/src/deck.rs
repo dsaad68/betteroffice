@@ -160,11 +160,11 @@ fn seed_shape(
             shape_map.insert(txn, "kind", "graphicFrame");
             shape_map.insert(txn, "geometry", "rect");
             insert_json(&shape_map, txn, "graphicJson", Some(&frame.data))?;
-            if let pptx_parse::GraphicFrameData::Table { rows } = &frame.data {
-                for (row_index, row) in rows.iter().enumerate() {
-                    for (cell_index, body) in row.iter().enumerate() {
+            if let pptx_parse::GraphicFrameData::Table(table) = &frame.data {
+                for (row_index, row) in table.rows.iter().enumerate() {
+                    for (cell_index, cell) in row.cells.iter().enumerate() {
                         let story_id = format!("story:{shape_id}:table:{row_index}:{cell_index}");
-                        seed_story(stories, txn, &story_id, body, theme)?;
+                        seed_story(stories, txn, &story_id, &cell.text, theme)?;
                         text_story_ids.push(story_id);
                     }
                 }
@@ -805,6 +805,7 @@ pub(crate) fn import_source_render_data(doc: &Doc, source: &PptxPackage) -> Edit
     let meta = required_map(&txn, META)?;
     meta.insert(&mut txn, "packageJson", Any::Buffer(Arc::from(bytes)));
     backfill_blip_effects(&mut txn, &package)?;
+    backfill_tables(&mut txn, &package)?;
     Ok(())
 }
 
@@ -849,15 +850,11 @@ fn merge_source_render_shapes(target: &mut [ShapeNode], source: &[ShapeNode]) ->
                     changed = true;
                 }
                 if let (
-                    pptx_parse::GraphicFrameData::Table { rows: target },
-                    pptx_parse::GraphicFrameData::Table { rows: source },
+                    pptx_parse::GraphicFrameData::Table(target),
+                    pptx_parse::GraphicFrameData::Table(source),
                 ) = (&mut target.data, &source.data)
                 {
-                    for (target, source) in target.iter_mut().zip(source) {
-                        for (target, source) in target.iter_mut().zip(source) {
-                            changed |= merge_source_text_body(target, source);
-                        }
-                    }
+                    changed |= merge_source_table(target, source);
                 }
             }
             _ => {}
@@ -898,6 +895,81 @@ fn merge_source_chart_properties(target: &mut ChartSpace, source: &ChartSpace) -
     if let (Some(target), Some(source)) = (&mut target.axis_list, &source.axis_list) {
         for (target, source) in target.iter_mut().zip(source) {
             merge_axis(Some(target), Some(source));
+        }
+    }
+    changed
+}
+
+fn backfill_tables(txn: &mut TransactionMut<'_>, package: &PptxPackage) -> EditResult<()> {
+    let shapes = required_map(txn, SHAPES)?;
+    for (index, (slide, reference)) in package
+        .slides
+        .iter()
+        .zip(&package.presentation.slides)
+        .enumerate()
+    {
+        let slide_id = seeded_slide_id(index, reference.id);
+        for (index, node) in slide.shapes.iter().enumerate() {
+            backfill_table(txn, &shapes, &slide_id, &index.to_string(), node)?;
+        }
+    }
+    Ok(())
+}
+
+fn backfill_table(
+    txn: &mut TransactionMut<'_>,
+    shapes: &MapRef,
+    slide_id: &str,
+    path: &str,
+    node: &ShapeNode,
+) -> EditResult<()> {
+    if let ShapeNode::GraphicFrame(frame) = node
+        && let pptx_parse::GraphicFrameData::Table(table) = &frame.data
+        && !table.grid.is_empty()
+        && let Some(shape) = shapes
+            .get(txn, &seeded_shape_id(slide_id, path))
+            .and_then(|value| value.cast::<MapRef>().ok())
+        && matches!(
+            optional_json::<pptx_parse::GraphicFrameData, _>(&shape, txn, "graphicJson")?,
+            Some(pptx_parse::GraphicFrameData::Table(stored)) if stored.grid.is_empty()
+        )
+    {
+        insert_json(&shape, txn, "graphicJson", Some(&frame.data))?;
+    }
+    if let ShapeNode::Group(group) = node {
+        for (index, child) in group.children.iter().enumerate() {
+            backfill_table(
+                txn,
+                shapes,
+                slide_id,
+                &seeded_child_path(path, index),
+                child,
+            )?;
+        }
+    }
+    Ok(())
+}
+
+/// Restores the grid, spans and cell formatting a package written before tables were modelled dropped.
+fn merge_source_table(target: &mut pptx_parse::Table, source: &pptx_parse::Table) -> bool {
+    let mut changed = target.grid != source.grid || target.properties != source.properties;
+    target.grid.clone_from(&source.grid);
+    target.properties.clone_from(&source.properties);
+    for (target, source) in target.rows.iter_mut().zip(&source.rows) {
+        changed |= target.height != source.height;
+        target.height = source.height;
+        for (target, source) in target.cells.iter_mut().zip(&source.cells) {
+            changed |= target.grid_span != source.grid_span
+                || target.row_span != source.row_span
+                || target.merged != source.merged
+                || target.fill != source.fill
+                || target.borders != source.borders;
+            target.grid_span = source.grid_span;
+            target.row_span = source.row_span;
+            target.merged = source.merged;
+            target.fill.clone_from(&source.fill);
+            target.borders.clone_from(&source.borders);
+            changed |= merge_source_text_body(&mut target.text, &source.text);
         }
     }
     changed
@@ -1000,6 +1072,7 @@ fn migrate_doc_to_v2_1(doc: &Doc) -> EditResult<()> {
     meta.insert(&mut txn, "baselinesPendingSource", true);
     meta.insert(&mut txn, "outlineGradientsPendingSource", true);
     backfill_blip_effects(&mut txn, &package)?;
+    backfill_tables(&mut txn, &package)?;
     meta.insert(&mut txn, "spacingPendingSource", true);
     if package_needs_ole_source(&package) {
         meta.insert(&mut txn, "olePicturesPendingSource", true);
