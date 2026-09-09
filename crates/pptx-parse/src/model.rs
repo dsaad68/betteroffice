@@ -2,7 +2,7 @@ use std::collections::BTreeMap;
 
 pub use ooxml_drawingml::ShapeStyle;
 use ooxml_drawingml::{
-    ColorValue, GeometryPathCommand, ShapeEffects, ShapeFill, ShapeOutline, Theme,
+    ColorValue, GeometryPathCommand, ShapeEffects, ShapeFill, ShapeOutline, TableStyleList, Theme,
     ThemeFormatScheme,
 };
 use serde::{Deserialize, Serialize};
@@ -47,6 +47,9 @@ pub struct PptxPackage {
     #[serde(default)]
     pub charts: Vec<ChartPart>,
     pub media: Vec<MediaPart>,
+    /// Absent from packages serialized before table styles were parsed.
+    #[serde(default, skip_serializing_if = "TableStyleList::is_empty")]
+    pub table_styles: TableStyleList,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub comment_authors: Vec<CommentAuthor>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
