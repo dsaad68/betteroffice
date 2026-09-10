@@ -39,8 +39,79 @@ const PRECEDENCE: [Part; 7] = [
 enum Defined {
     Absent,
     TextOnly,
-    Full,
+    Full(Borders),
 }
+
+/// One generated `a:tcBdr` edge: unset, an `a:noFill` clear, or a sentinel line.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Stroke {
+    Unset,
+    Clear,
+    Line,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct Borders {
+    left: Stroke,
+    right: Stroke,
+    top: Stroke,
+    bottom: Stroke,
+    inside_horizontal: Stroke,
+    inside_vertical: Stroke,
+}
+
+const UNSET_BORDERS: Borders = Borders {
+    left: Stroke::Unset,
+    right: Stroke::Unset,
+    top: Stroke::Unset,
+    bottom: Stroke::Unset,
+    inside_horizontal: Stroke::Unset,
+    inside_vertical: Stroke::Unset,
+};
+
+impl Borders {
+    fn get(self, edge: Edge) -> Stroke {
+        match edge {
+            Edge::Left => self.left,
+            Edge::Right => self.right,
+            Edge::Top => self.top,
+            Edge::Bottom => self.bottom,
+            Edge::InsideHorizontal => self.inside_horizontal,
+            Edge::InsideVertical => self.inside_vertical,
+        }
+    }
+}
+
+/// An edge of a style part's `a:tcBdr`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Edge {
+    Left,
+    Right,
+    Top,
+    Bottom,
+    InsideHorizontal,
+    InsideVertical,
+}
+
+const EDGES: [Edge; 6] = [
+    Edge::Left,
+    Edge::Right,
+    Edge::Top,
+    Edge::Bottom,
+    Edge::InsideHorizontal,
+    Edge::InsideVertical,
+];
+
+/// A side of a resolved cell.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Side {
+    Left,
+    Right,
+    Top,
+    Bottom,
+}
+
+const SIDES: [Side; 4] = [Side::Left, Side::Right, Side::Top, Side::Bottom];
 
 #[derive(Clone, Copy, Debug)]
 struct Parts {
@@ -98,32 +169,52 @@ fn text_sentinel(style: usize, part: Part) -> ColorValue {
     rgb(format!("C{style}{}CCC", part as usize))
 }
 
+fn border_sentinel(style: usize, part: Part, edge: Edge) -> ShapeOutline {
+    ShapeOutline {
+        width: Some(12700.0),
+        color: Some(rgb(format!("B{style}{}{}BB", part as usize, edge as usize))),
+        ..ShapeOutline::default()
+    }
+}
+
+fn build_edge(style: usize, part: Part, edge: Edge, stroke: Stroke) -> Option<TableCellBorder> {
+    match stroke {
+        Stroke::Unset => None,
+        Stroke::Clear => Some(TableCellBorder::None),
+        Stroke::Line => Some(TableCellBorder::Line(Box::new(border_sentinel(
+            style, part, edge,
+        )))),
+    }
+}
+
 fn build_part(style: usize, part: Part, defined: Defined) -> Option<TableStylePart> {
     let text = TableTextStyle {
         color: Some(text_sentinel(style, part)),
         ..TableTextStyle::default()
     };
-    let border = || Some(line(12700.0, format!("B{style}{}BBB", part as usize)));
     match defined {
         Defined::Absent => None,
         Defined::TextOnly => Some(TableStylePart {
             text,
             cell: TableCellStyle::default(),
         }),
-        Defined::Full => Some(TableStylePart {
-            text,
-            cell: TableCellStyle {
-                fill: Some(fill_sentinel(style, part)),
-                borders: TableCellBorders {
-                    left: border(),
-                    right: border(),
-                    top: border(),
-                    bottom: border(),
-                    inside_horizontal: border(),
-                    inside_vertical: border(),
+        Defined::Full(borders) => {
+            let edge = |edge| build_edge(style, part, edge, borders.get(edge));
+            Some(TableStylePart {
+                text,
+                cell: TableCellStyle {
+                    fill: Some(fill_sentinel(style, part)),
+                    borders: TableCellBorders {
+                        left: edge(Edge::Left),
+                        right: edge(Edge::Right),
+                        top: edge(Edge::Top),
+                        bottom: edge(Edge::Bottom),
+                        inside_horizontal: edge(Edge::InsideHorizontal),
+                        inside_vertical: edge(Edge::InsideVertical),
+                    },
                 },
-            },
-        }),
+            })
+        }
     }
 }
 
@@ -192,13 +283,91 @@ fn winner(
         .find(|&part| applies(part, flags, cell) && carries(parts.get(part)))
 }
 
+/// The part's own `side` edge when `cell` is on that side of the part's region, else its
+/// inside edge. `wholeTbl` covers the table, a column part its column, any other part its row.
+fn selected_edge(part: Part, side: Side, cell: TableCellPosition) -> Edge {
+    let (spans_rows, spans_columns) = match part {
+        Part::WholeTable => (true, true),
+        Part::FirstColumn | Part::LastColumn => (true, false),
+        _ => (false, true),
+    };
+    let on_boundary = match side {
+        Side::Left => !spans_columns || cell.column == 0,
+        Side::Right => !spans_columns || cell.column + 1 == cell.column_count,
+        Side::Top => !spans_rows || cell.row == 0,
+        Side::Bottom => !spans_rows || cell.row + 1 == cell.row_count,
+    };
+    match (side, on_boundary) {
+        (Side::Left, true) => Edge::Left,
+        (Side::Right, true) => Edge::Right,
+        (Side::Top, true) => Edge::Top,
+        (Side::Bottom, true) => Edge::Bottom,
+        (Side::Left | Side::Right, false) => Edge::InsideVertical,
+        (Side::Top | Side::Bottom, false) => Edge::InsideHorizontal,
+    }
+}
+
+/// The part and edge that should draw `side`, or `None` when no line survives the cascade.
+fn expected_edge(
+    parts: Parts,
+    flags: TableStyleFlags,
+    cell: TableCellPosition,
+    side: Side,
+) -> Option<(Part, Edge)> {
+    PRECEDENCE
+        .into_iter()
+        .filter(|&part| applies(part, flags, cell))
+        .fold(None, |current, part| {
+            let Defined::Full(borders) = parts.get(part) else {
+                return current;
+            };
+            let edge = selected_edge(part, side, cell);
+            match borders.get(edge) {
+                Stroke::Unset => current,
+                Stroke::Clear => None,
+                Stroke::Line => Some((part, edge)),
+            }
+        })
+}
+
+fn resolved_side(resolved: &ResolvedCellStyle, side: Side) -> Option<&ShapeOutline> {
+    match side {
+        Side::Left => resolved.left.as_ref(),
+        Side::Right => resolved.right.as_ref(),
+        Side::Top => resolved.top.as_ref(),
+        Side::Bottom => resolved.bottom.as_ref(),
+    }
+}
+
+fn drawn_by(outline: Option<&ShapeOutline>) -> Option<(Part, Edge)> {
+    let outline = outline?;
+    PRECEDENCE
+        .into_iter()
+        .flat_map(|part| EDGES.map(|edge| (part, edge)))
+        .find(|&(part, edge)| *outline == border_sentinel(0, part, edge))
+}
+
 fn check_precedence(
     parts: Parts,
     flags: TableStyleFlags,
     cell: TableCellPosition,
 ) -> Result<(), TestCaseError> {
     let resolved = build_style(0, parts).resolve_cell(flags, cell);
-    let fill_owner = winner(parts, flags, cell, |defined| defined == Defined::Full);
+    for side in SIDES {
+        let expected = expected_edge(parts, flags, cell, side);
+        let actual = resolved_side(&resolved, side);
+        prop_assert_eq!(
+            actual.cloned(),
+            expected.map(|(part, edge)| border_sentinel(0, part, edge)),
+            "{:?} should come from {:?}, not {:?}",
+            side,
+            expected,
+            drawn_by(actual)
+        );
+    }
+    let fill_owner = winner(parts, flags, cell, |defined| {
+        matches!(defined, Defined::Full(_))
+    });
     let text_owner = winner(parts, flags, cell, |defined| defined != Defined::Absent);
 
     prop_assert_eq!(
@@ -227,11 +396,28 @@ fn inherit_unless_set(
     }
 }
 
+fn stroke() -> impl Strategy<Value = Stroke> {
+    prop_oneof![Just(Stroke::Unset), Just(Stroke::Clear), Just(Stroke::Line)]
+}
+
+prop_compose! {
+    fn borders()(
+        left in stroke(),
+        right in stroke(),
+        top in stroke(),
+        bottom in stroke(),
+        inside_horizontal in stroke(),
+        inside_vertical in stroke(),
+    ) -> Borders {
+        Borders { left, right, top, bottom, inside_horizontal, inside_vertical }
+    }
+}
+
 fn defined() -> impl Strategy<Value = Defined> {
     prop_oneof![
         Just(Defined::Absent),
         Just(Defined::TextOnly),
-        Just(Defined::Full)
+        borders().prop_map(Defined::Full)
     ]
 }
 
@@ -359,8 +545,8 @@ proptest! {
         let flags = TableStyleFlags { band_row: true, ..flags };
         let style = build_style(0, Parts {
             whole_table,
-            band1_row: Defined::Full,
-            band2_row: Defined::Full,
+            band1_row: Defined::Full(UNSET_BORDERS),
+            band2_row: Defined::Full(UNSET_BORDERS),
             first_column: Defined::Absent,
             last_column: Defined::Absent,
             first_row: Defined::Absent,
