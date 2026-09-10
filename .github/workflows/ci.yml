@@ -134,8 +134,7 @@ jobs:
           cargo fmt --check --all --manifest-path bindings/Cargo.toml
           cargo clippy --locked --manifest-path bindings/Cargo.toml --workspace --all-targets -- -D warnings
 
-      # fuzz/ is a cargo-fuzz package with its own workspace, so nothing above compiles it or reads its
-      # lockfile. Running it needs nightly; checking it still builds and meets the policy does not.
+      # Running a fuzz target needs nightly; checking that the package still builds does not.
       - name: Lint the standalone fuzz package
         if: steps.ws.outputs.present == 'true'
         run: |
