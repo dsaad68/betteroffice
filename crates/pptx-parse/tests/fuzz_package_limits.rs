@@ -1,48 +1,33 @@
-use pptx_parse::{ParseLimits, PptxError, parse_pptx_with_limits};
+mod fuzz_harness;
+
+use std::path::Path;
+
+use pptx_parse::PptxError;
 
 const SLIDE_REFERENCED_TWICE: &[u8] =
-    include_bytes!("fixtures/fuzz/slide-referenced-twice.records");
+    include_bytes!("../../../fuzz/corpus/pptx-package-parse/slide-referenced-twice.records");
 
-/// The limits the `pptx-package-parse` fuzz target parses under.
-fn fuzz_limits() -> ParseLimits {
-    ParseLimits {
-        max_xml_bytes: 4 << 20,
-        max_xml_events: 200_000,
-        max_xml_text_bytes: 4 << 20,
-        max_xml_depth: 64,
-        max_attributes_per_element: 128,
-        max_attribute_bytes: 64 << 10,
-        max_relationships: 64,
-        max_shapes: 96,
-        max_paragraphs: 96,
-        max_runs: 128,
-        max_comments: 16,
+#[test]
+fn every_committed_seed_passes_the_fuzz_oracle() {
+    let corpus = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../fuzz/corpus/pptx-package-parse");
+    let mut seeds = 0;
+    for entry in std::fs::read_dir(&corpus).unwrap() {
+        let path = entry.unwrap().path();
+        let bytes = std::fs::read(&path).unwrap();
+        assert!(
+            fuzz_harness::run(&bytes).is_some(),
+            "{} does not decode to a package",
+            path.display()
+        );
+        seeds += 1;
     }
-}
-
-/// Zips the fuzz target's NUL-separated `path\ncontent` records.
-fn package(records: &[u8]) -> Vec<u8> {
-    let parts = records
-        .split(|byte| *byte == 0)
-        .map(|record| {
-            let split = record
-                .iter()
-                .position(|byte| *byte == b'\n')
-                .unwrap_or(record.len());
-            let (path, content) = record.split_at(split);
-            (
-                String::from_utf8_lossy(path).into_owned(),
-                content.get(1..).unwrap_or_default().to_vec(),
-            )
-        })
-        .collect::<Vec<_>>();
-    ooxml_opc::rezip_parts(&parts).unwrap()
+    assert!(seeds > 0, "no seeds in {}", corpus.display());
 }
 
 #[test]
 fn a_slide_referenced_twice_spends_one_package_shape_budget() {
     assert!(matches!(
-        parse_pptx_with_limits(&package(SLIDE_REFERENCED_TWICE), &fuzz_limits()),
-        Err(PptxError::ResourceLimit { kind: "shapes", .. })
+        fuzz_harness::run(SLIDE_REFERENCED_TWICE),
+        Some(Err(PptxError::ResourceLimit { kind: "shapes", .. }))
     ));
 }
