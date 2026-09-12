@@ -27,6 +27,5 @@ serde_json = "1"
 thiserror = "2"
 
 [dev-dependencies]
-proptest = "1"
 ooxml-opc.workspace = true
 betteroffice-pptx-render = { path = ".", features = ["fuzzing"] }
