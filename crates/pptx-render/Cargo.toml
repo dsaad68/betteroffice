@@ -28,4 +28,3 @@ thiserror = "2"
 
 [dev-dependencies]
 ooxml-opc.workspace = true
-betteroffice-pptx-render = { path = ".", features = ["fuzzing"] }

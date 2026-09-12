@@ -240,7 +240,6 @@ dependencies = [
  "betteroffice-opc",
  "betteroffice-pptx-edit",
  "betteroffice-pptx-parse",
- "betteroffice-pptx-render",
  "serde",
  "serde_json",
  "thiserror",
