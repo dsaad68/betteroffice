@@ -140,6 +140,27 @@ fn wrap_at_space_keeps_trailing_space_in_line_width() {
 }
 
 #[test]
+fn words_wrap_on_subpixel_overflow() {
+    let text = json!([{ "kind": "text", "text": "00 00" }]);
+    let width = 4.0 * W0 + SP;
+    for overflow in [0.01, 0.05, 0.25] {
+        let value = measure(text.clone(), width - overflow).unwrap();
+        assert_eq!(spans(&value), vec![(0, 0, 0, 3), (0, 3, 0, 5)]);
+    }
+    let value = measure(text, width).unwrap();
+    assert_eq!(spans(&value), vec![(0, 0, 0, 5)]);
+}
+
+#[test]
+fn unbreakable_words_wrap_on_subpixel_overflow() {
+    let text = json!([{ "kind": "text", "text": "000" }]);
+    let value = measure(text.clone(), 3.0 * W0 - 0.05).unwrap();
+    assert_eq!(spans(&value), vec![(0, 0, 0, 2), (0, 2, 0, 3)]);
+    let value = measure(text, 3.0 * W0).unwrap();
+    assert_eq!(spans(&value), vec![(0, 0, 0, 3)]);
+}
+
+#[test]
 fn trailing_spaces_can_overhang_without_wrapping_the_word() {
     for spaces in [" ", "   "] {
         let text = format!("0 00{spaces}0");
@@ -288,6 +309,36 @@ fn multi_run_line_takes_max_font_basis() {
         "24pt descent",
     );
     approx(line["lineHeight"].as_f64().unwrap(), 2.0 * LH, "24pt line");
+}
+
+#[test]
+fn a_shorter_font_does_not_add_leading_below_a_taller_font() {
+    let mut store = store();
+    store.register(NOTO_NASKH_ARABIC.to_vec()).unwrap();
+    let latin = json!({"kind": "text", "text": "x", "fontFamily": "Liberation Sans"});
+    let arabic = json!({"kind": "text", "text": "ا", "fontFamily": "Noto Naskh Arabic"});
+    for runs in [
+        json!([arabic, latin]),
+        json!([latin, arabic]),
+        json!([arabic, latin, arabic]),
+    ] {
+        let input = json!({
+            "block": {"kind": "paragraph", "runs": runs},
+            "maxWidth": 500,
+            "fontChains": {"liberation sans|0|0": [0], "noto naskh arabic|0|0": [1]},
+            "defaults": {"fontSize": 12, "fontFamily": "Liberation Sans"}
+        });
+        let out = measure_paragraph_json(&store, &input.to_string()).unwrap();
+        let result: Value = serde_json::from_str(&out).unwrap();
+        let line = &result["lines"][0];
+        approx(line["ascent"].as_f64().unwrap(), 16.0 * 1.405, "ascent");
+        approx(line["descent"].as_f64().unwrap(), 16.0 * 0.634, "descent");
+        approx(
+            line["lineHeight"].as_f64().unwrap(),
+            16.0 * 2.039,
+            "line height",
+        );
+    }
 }
 
 // 6. line rules preserve typography metrics
@@ -1965,7 +2016,7 @@ fn zone_composes_with_marker_and_first_line_indent() {
     let v = measure_with(block.clone(), 150.0).unwrap();
     assert_eq!(spans(&v), vec![(0, 0, 0, 11)]);
 
-    // zone leftMargin 40 → 62px: exactly two words fit (62.28 ≤ 62.5 slack),
+    // zone leftMargin 40 → 62px: exactly two words fit (57.84px visible),
     // the third wraps to a full-width second line
     let v = measure_block_floats(
         block,

@@ -6,9 +6,7 @@
 //! which [`TypesetRowOut`] fields come out. The rules it enforces:
 //!
 //! - Trailing spaces retain their advance but do not force a word to wrap.
-//!   A line accepts
-//!   an overshoot of up to [`WRAP_SLACK_PX`], so a sub-half-pixel rounding
-//!   artifact never forces a wrap that exact twip arithmetic would not make.
+//!   [`WRAP_SLACK_PX`] absorbs floating-point rounding at the line edge.
 //! - A word too wide for a whole line is chopped: the current line takes what
 //!   fits, then each following line takes the longest cluster prefix that
 //!   fits, with a forced minimum of one cluster so filling always terminates.
@@ -52,9 +50,8 @@ use crate::word_metrics as wm;
 
 use super::tabs;
 
-/// Half-pixel wrap tolerance: an overshoot this small must not force a wrap
-/// that exact twip arithmetic would never make.
-const WRAP_SLACK_PX: f32 = 0.5;
+/// Floating-point tolerance at the line edge.
+const WRAP_SLACK_PX: f32 = 1e-3;
 /// Empty-paragraph line height floor, as a multiple of the font size; applies
 /// under the `auto` and `atLeast` rules only.
 const WORD_SINGLE_LINE_FLOOR: f32 = 1.15;
@@ -100,7 +97,7 @@ struct LineState {
     max_font: Option<FontId>,
     max_ascent: f32,
     max_descent: f32,
-    max_leading: Option<f32>,
+    max_below_baseline: f32,
     /// Tallest inline-image footprint on the line.
     max_image_height_px: f32,
     available: f32,
@@ -213,7 +210,7 @@ pub(super) fn fill(p: FillParams) -> Result<ParagraphExtentOut, MeasureError> {
             max_font: None,
             max_ascent: 0.0,
             max_descent: 0.0,
-            max_leading: None,
+            max_below_baseline: 0.0,
             max_image_height_px: 0.0,
             available: first_available,
             left_offset: first_margins.left,
@@ -546,11 +543,7 @@ impl Filler<'_> {
         Ok(())
     }
 
-    /// Folds one font-bearing contribution into the line's metrics: the first
-    /// claims the line and only a strictly larger size displaces it, while
-    /// ascent, descent and leading accumulate as maxima across every
-    /// contribution. Super/subscript baseline shifts move ascent and descent
-    /// in opposite directions and never go negative.
+    /// Accumulates each run's extents above and below the shared baseline.
     fn update_max_font(&mut self, font_size_pt: f32, font: FontId, baseline_shift_px: f32) {
         if self.cur.max_font.is_none() || font_size_pt > self.cur.max_font_size_pt {
             self.cur.max_font_size_pt = font_size_pt;
@@ -566,11 +559,10 @@ impl Filler<'_> {
                 .cur
                 .max_descent
                 .max((line.descent - baseline_shift_px).max(0.0));
-            self.cur.max_leading = Some(
-                self.cur
-                    .max_leading
-                    .map_or(line.leading, |leading| leading.max(line.leading)),
-            );
+            self.cur.max_below_baseline = self
+                .cur
+                .max_below_baseline
+                .max((line.descent + line.leading - baseline_shift_px).max(0.0));
         }
     }
 
@@ -667,7 +659,7 @@ impl Filler<'_> {
             Some(_) => wm::LineBox {
                 ascent: self.cur.max_ascent,
                 descent: self.cur.max_descent,
-                leading: self.cur.max_leading.unwrap_or(0.0),
+                leading: self.cur.max_below_baseline - self.cur.max_descent,
             },
             // Fontless lines use a 0.8/0.2 em split.
             None => wm::LineBox {
@@ -832,7 +824,7 @@ impl Filler<'_> {
             max_font: None,
             max_ascent: 0.0,
             max_descent: 0.0,
-            max_leading: None,
+            max_below_baseline: 0.0,
             max_image_height_px: 0.0,
             available,
             left_offset: margins.left,
