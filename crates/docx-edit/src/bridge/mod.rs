@@ -62,6 +62,8 @@ const AUTO_PARAGRAPH_SPACING_PX: f64 = 14.0;
 #[derive(Clone, Debug, Default, PartialEq, serde::Deserialize, serde::Serialize)]
 #[serde(default, rename_all = "camelCase")]
 pub struct RenderEnv {
+    #[serde(skip_serializing_if = "BTreeSet::is_empty")]
+    pub toc_style_ids: BTreeSet<String>,
     /// Six-digit RGB values keyed by OOXML theme slot. A missing slot falls
     /// back to the default Office palette.
     pub theme_colors: BTreeMap<String, String>,
@@ -80,6 +82,8 @@ pub struct RenderEnv {
     pub show_hidden_text: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub paragraph_spacing_line_px: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub default_paragraph_style_id: Option<String>,
 }
 
 impl RenderEnv {
@@ -170,8 +174,22 @@ pub fn yrs_doc_to_layout_blocks(
     let txn = doc.yrs_doc().transact();
     let mut active_stories = BTreeSet::new();
     let mut list_state = ListState::default();
-    lower_story(&txn, story_id, env, 0, &mut active_stories, &mut list_state)
-        .map(|(blocks, _)| blocks)
+    lower_story(
+        &txn,
+        story_id,
+        env,
+        0,
+        &mut active_stories,
+        &mut list_state,
+        CellEdges::default(),
+    )
+    .map(|(blocks, _)| blocks)
+}
+
+#[derive(Clone, Copy, Default)]
+struct CellEdges {
+    before: bool,
+    after: bool,
 }
 
 fn lower_story<T: ReadTxn>(
@@ -181,6 +199,7 @@ fn lower_story<T: ReadTxn>(
     pm_base: u64,
     active_stories: &mut BTreeSet<String>,
     list_state: &mut ListState,
+    cell_edges: CellEdges,
 ) -> Result<(Vec<LayoutBlock>, u64), BridgeError> {
     if !active_stories.insert(story_id.to_owned()) {
         return Err(BridgeError::RecursiveStory(story_id.to_owned()));
@@ -223,7 +242,7 @@ fn lower_story<T: ReadTxn>(
                     at_block_boundary = false;
                 }
                 Out::YMap(pilcrow) if is_pilcrow(&pilcrow, txn) => {
-                    let paragraph_blocks = flush_paragraph_parts(
+                    let mut paragraph_blocks = flush_paragraph_parts(
                         paragraph_runs,
                         paragraph_drawings,
                         &pilcrow,
@@ -235,6 +254,15 @@ fn lower_story<T: ReadTxn>(
                         paragraph_pm_units,
                         list_state,
                     );
+                    let values = pilcrow_values(&pilcrow, txn);
+                    suppress_cell_edge_spacing(
+                        &mut paragraph_blocks,
+                        &values,
+                        CellEdges {
+                            before: cell_edges.before && paragraph_start == 0,
+                            after: cell_edges.after && story_index + 1 == story.len(txn),
+                        },
+                    );
                     pm_cursor = paragraph_pm_start + u64::from(paragraph_pm_units) + 2;
                     if !shared_map_string(&pilcrow, txn, "paraId")
                         .is_some_and(|id| hidden_field_paragraphs.contains(&id))
@@ -243,7 +271,6 @@ fn lower_story<T: ReadTxn>(
                     }
                     // A pilcrow carrying section properties ENDS its section,
                     // so the break block follows its paragraph.
-                    let values = pilcrow_values(&pilcrow, txn);
                     if let Some(section_break) = section_break_block(&values, &mut section_margins)
                     {
                         blocks.push(LayoutBlock::SectionBreak(section_break));
@@ -363,6 +390,10 @@ fn lower_story<T: ReadTxn>(
                         pm_cursor + 1,
                         active_stories,
                         list_state,
+                        CellEdges {
+                            before: cell_edges.before && story_index == 0,
+                            after: cell_edges.after && story_index + 1 == story.len(txn),
+                        },
                     )?;
                     stamp_sdt_group(&mut child_blocks, group);
                     blocks.extend(child_blocks);
@@ -414,6 +445,7 @@ fn lower_story<T: ReadTxn>(
                         story_end: story_index + 1,
                         pm_start: paragraph_pm_units,
                         pm_end: paragraph_pm_units + 1,
+                        inherited_hyperlink: inherited_hyperlink_style(attributes),
                         inline_sdt_widget: None,
                     });
                     story_index += 1;
@@ -456,6 +488,7 @@ fn lower_story<T: ReadTxn>(
                         story_end: story_index + 1,
                         pm_start: paragraph_pm_units,
                         pm_end: paragraph_pm_units + 1,
+                        inherited_hyperlink: inherited_hyperlink_style(attributes),
                         inline_sdt_widget: None,
                     });
                     story_index += 1;
@@ -472,6 +505,7 @@ fn lower_story<T: ReadTxn>(
                         story_end: story_index + 1,
                         pm_start: paragraph_pm_units,
                         pm_end: paragraph_pm_units + 1,
+                        inherited_hyperlink: inherited_hyperlink_style(attributes),
                         inline_sdt_widget: None,
                     });
                     story_index += 1;
@@ -489,6 +523,7 @@ fn lower_story<T: ReadTxn>(
                         story_end: story_index + 1,
                         pm_start: paragraph_pm_units,
                         pm_end: paragraph_pm_units + 1,
+                        inherited_hyperlink: inherited_hyperlink_style(attributes),
                         inline_sdt_widget: None,
                     });
                     story_index += 1;
@@ -533,6 +568,7 @@ fn lower_story<T: ReadTxn>(
                         story_end: story_index + 1,
                         pm_start: paragraph_pm_units,
                         pm_end: paragraph_pm_units + 1,
+                        inherited_hyperlink: inherited_hyperlink_style(attributes),
                         inline_sdt_widget: None,
                     });
                     story_index += 1;
@@ -560,6 +596,7 @@ fn lower_story<T: ReadTxn>(
                         story_end: story_index + 1,
                         pm_start: paragraph_pm_units,
                         pm_end: paragraph_pm_units + 1,
+                        inherited_hyperlink: inherited_hyperlink_style(attributes),
                         inline_sdt_widget: None,
                     });
                     story_index += 1;
@@ -836,6 +873,10 @@ fn lower_table<T: ReadTxn>(
                 cell_pm_start + 1,
                 active_stories,
                 list_state,
+                CellEdges {
+                    before: true,
+                    after: true,
+                },
             )?;
 
             let width_value = map_number(tc_pr, "width");
@@ -1059,7 +1100,23 @@ fn lower_image_values(
     let position = values
         .get("position")
         .and_then(any_json)
-        .and_then(|value| serde_json::from_value::<ImageRunPosition>(value).ok());
+        .and_then(|mut value| {
+            if let Some(position) = value.as_object_mut()
+                && let Some(height) = position.remove("relativeHeight")
+                && let Some(height) = height.as_f64().filter(|height| {
+                    height.is_finite()
+                        && *height >= 0.0
+                        && *height <= u32::MAX as f64
+                        && height.fract() == 0.0
+                })
+            {
+                position.insert(
+                    "relativeHeight".to_owned(),
+                    serde_json::json!(height as u64),
+                );
+            }
+            serde_json::from_value::<ImageRunPosition>(value).ok()
+        });
 
     ImageRun {
         src: map_string(values, "src").unwrap_or_default(),
@@ -1079,6 +1136,7 @@ fn lower_image_values(
         crop_right: map_number(values, "cropRight"),
         crop_bottom: map_number(values, "cropBottom"),
         crop_left: map_number(values, "cropLeft"),
+        shape_type: map_string(values, "shapeType"),
         opacity: map_number(values, "opacity"),
         rotation_deg,
         flip_h,
@@ -1484,6 +1542,7 @@ fn lower_inline_sdt_values(
                         story_end: story_index + 1,
                         pm_start: child_pm_start,
                         pm_end: child_pm_start + width,
+                        inherited_hyperlink: inherited_hyperlink_style(Some(&attrs)),
                         inline_sdt_widget: widget.clone(),
                     });
                 }
@@ -1497,6 +1556,7 @@ fn lower_inline_sdt_values(
                     story_end: story_index + 1,
                     pm_start: child_pm_start,
                     pm_end: child_pm_start + 1,
+                    inherited_hyperlink: inherited_hyperlink_style(Some(&attrs)),
                     inline_sdt_widget: None,
                 });
                 1
@@ -1509,6 +1569,7 @@ fn lower_inline_sdt_values(
                     story_end: story_index + 1,
                     pm_start: child_pm_start,
                     pm_end: child_pm_start + 1,
+                    inherited_hyperlink: inherited_hyperlink_style(Some(&attrs)),
                     inline_sdt_widget: None,
                 });
                 1
@@ -1522,6 +1583,7 @@ fn lower_inline_sdt_values(
                         story_end: story_index + 1,
                         pm_start: child_pm_start,
                         pm_end: child_pm_start + 1,
+                        inherited_hyperlink: inherited_hyperlink_style(Some(&attrs)),
                         inline_sdt_widget: None,
                     });
                 }
@@ -1553,6 +1615,7 @@ fn lower_inline_sdt_values(
                     story_end: story_index + 1,
                     pm_start: child_pm_start,
                     pm_end: child_pm_start + 1,
+                    inherited_hyperlink: inherited_hyperlink_style(Some(&attrs)),
                     inline_sdt_widget: None,
                 });
                 1
@@ -1574,6 +1637,7 @@ fn lower_inline_sdt_values(
                     story_end: story_index + 1,
                     pm_start: child_pm_start,
                     pm_end: child_pm_start + 1,
+                    inherited_hyperlink: inherited_hyperlink_style(Some(&attrs)),
                     inline_sdt_widget: None,
                 });
                 1
@@ -1600,6 +1664,7 @@ fn lower_inline_sdt_values(
                         story_end: story_index + 1,
                         pm_start: child_pm_start,
                         pm_end: child_pm_start + 1,
+                        inherited_hyperlink: inherited_hyperlink_style(Some(&attrs)),
                         inline_sdt_widget: widget.clone(),
                     });
                 }
@@ -1763,6 +1828,7 @@ enum RawRunKind {
 struct RawRun {
     kind: RawRunKind,
     formatting: RunFormatting,
+    inherited_hyperlink: (bool, bool),
     /// Story-global UTF-16 bounds of the source content.
     story_start: u32,
     story_end: u32,
@@ -1899,6 +1965,7 @@ fn push_text_chunks(
             story_end: end,
             pm_start: chunk_pm_start + start - chunk_start,
             pm_end: chunk_pm_start + end - chunk_start,
+            inherited_hyperlink: inherited_hyperlink_style(attributes),
             inline_sdt_widget: None,
         });
     }
@@ -2024,11 +2091,14 @@ fn flush_paragraph<T: ReadTxn>(
         .is_some_and(|suffix| suffix.parse::<usize>().is_ok());
     let style_id = paragraph_style_id(&values);
     let defaults = paragraph_run_defaults(&values);
+    let semantic_toc = style_id
+        .as_ref()
+        .is_some_and(|id| env.toc_style_ids.contains(id));
 
     for run in &mut raw_runs {
         apply_run_defaults(&mut run.formatting, &defaults);
-        if style_id.as_deref().is_some_and(is_toc_style) {
-            strip_toc_hyperlink_style(&mut run.formatting);
+        if semantic_toc || style_id.as_deref().is_some_and(is_toc_style) {
+            strip_toc_hyperlink_style(&mut run.formatting, run.inherited_hyperlink);
         }
     }
     let raw_runs = coalesce_runs(raw_runs);
@@ -2785,6 +2855,16 @@ fn lower_paragraph_attrs(
         style_id: paragraph_style_id(values),
         ..ParagraphAttrs::default()
     };
+    let raw_missing = result
+        .style_id
+        .as_deref()
+        .is_none_or(|style| style.is_empty());
+    if raw_missing {
+        result.effective_style_id = env
+            .default_paragraph_style_id
+            .clone()
+            .filter(|style| !style.is_empty());
+    }
     lower_paragraph_spacing(values, &mut result, env.paragraph_spacing_line_px);
     lower_paragraph_indent(values, &mut result);
     lower_paragraph_tabs(values, &mut result);
@@ -2939,6 +3019,40 @@ fn lower_paragraph_border(
     })
 }
 
+fn paragraph_auto_spacing(values: &BTreeMap<String, Any>, key: &str) -> bool {
+    values.get(key).and_then(any_bool).or_else(|| {
+        values
+            .get("_originalFormatting")
+            .and_then(any_map)
+            .and_then(|map| map_bool(map, key))
+    }) == Some(true)
+}
+
+fn suppress_cell_edge_spacing(
+    blocks: &mut [LayoutBlock],
+    values: &BTreeMap<String, Any>,
+    edges: CellEdges,
+) {
+    if edges.before
+        && paragraph_auto_spacing(values, "beforeAutospacing")
+        && let Some(spacing) = blocks.iter_mut().find_map(|block| match block {
+            LayoutBlock::Paragraph(paragraph) => paragraph.attrs.as_mut()?.spacing.as_mut(),
+            _ => None,
+        })
+    {
+        spacing.before = Some(0.0);
+    }
+    if edges.after
+        && paragraph_auto_spacing(values, "afterAutospacing")
+        && let Some(spacing) = blocks.iter_mut().rev().find_map(|block| match block {
+            LayoutBlock::Paragraph(paragraph) => paragraph.attrs.as_mut()?.spacing.as_mut(),
+            _ => None,
+        })
+    {
+        spacing.after = Some(0.0);
+    }
+}
+
 fn lower_paragraph_spacing(
     values: &BTreeMap<String, Any>,
     result: &mut ParagraphAttrs,
@@ -2948,17 +3062,8 @@ fn lower_paragraph_spacing(
         .filter(|line| line.is_finite() && *line > 0.0)
         .unwrap_or(16.0);
     let spacing_map = values.get("spacing").and_then(any_map);
-    let original = values.get("_originalFormatting").and_then(any_map);
-    let auto_before = values
-        .get("beforeAutospacing")
-        .and_then(any_bool)
-        .or_else(|| original.and_then(|map| map_bool(map, "beforeAutospacing")))
-        == Some(true);
-    let auto_after = values
-        .get("afterAutospacing")
-        .and_then(any_bool)
-        .or_else(|| original.and_then(|map| map_bool(map, "afterAutospacing")))
-        == Some(true);
+    let auto_before = paragraph_auto_spacing(values, "beforeAutospacing");
+    let auto_after = paragraph_auto_spacing(values, "afterAutospacing");
     let before_lines = (!auto_before)
         .then(|| value_number(values.get("spaceBeforeLines")))
         .flatten()
@@ -3189,11 +3294,23 @@ fn apply_run_defaults(target: &mut RunFormatting, defaults: &RunFormatting) {
     }
 }
 
-fn strip_toc_hyperlink_style(formatting: &mut RunFormatting) {
+fn inherited_hyperlink_style(attributes: Option<&Attrs>) -> (bool, bool) {
+    let inherited = |key| {
+        attribute_map(attributes, key).and_then(|map| map_bool(map, "inheritedHyperlink"))
+            == Some(true)
+    };
+    (inherited("textColor"), inherited("underline"))
+}
+
+fn strip_toc_hyperlink_style(formatting: &mut RunFormatting, inherited: (bool, bool)) {
     if let Some(hyperlink) = &mut formatting.hyperlink {
         hyperlink.no_default_style = Some(true);
-        formatting.color = None;
-        formatting.underline = None;
+        if inherited.0 {
+            formatting.color = None;
+        }
+        if inherited.1 {
+            formatting.underline = None;
+        }
     }
 }
 
@@ -4524,6 +4641,7 @@ mod tests {
                     },
                     {
                         "kind": "text", "text": "link", "italic": true, "fontSize": 10.0,
+                        "color": "#0563C1", "underline": { "style": "single", "color": "#00FF00" },
                         "hyperlink": {
                             "href": "https://example.test", "tooltip": "Example",
                             "noDefaultStyle": true

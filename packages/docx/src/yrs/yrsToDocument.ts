@@ -65,6 +65,7 @@ interface YrsImageAttrs {
   distLeft?: number;
   distRight?: number;
   position?: {
+    relativeHeight?: number;
     horizontal?: { relativeTo?: string; posOffset?: number; align?: string };
     vertical?: { relativeTo?: string; posOffset?: number; align?: string };
   };
@@ -77,6 +78,7 @@ interface YrsImageAttrs {
   cropRight?: number;
   cropBottom?: number;
   cropLeft?: number;
+  shapeType?: string;
   opacity?: number;
   layoutInCell?: boolean;
   allowOverlap?: boolean;
@@ -304,7 +306,7 @@ function attrsToTextFormatting(attributes: Attrs): TextFormatting {
   }
 
   const underline = asObject(attributes.underline);
-  if (underline) {
+  if (underline && underline.inheritedHyperlink !== true) {
     formatting.underline = {
       style: (asString(underline.style) || 'single') as NonNullable<
         TextFormatting['underline']
@@ -320,7 +322,7 @@ function attrsToTextFormatting(attributes: Attrs): TextFormatting {
   }
 
   const textColor = asObject(attributes.textColor);
-  if (textColor) {
+  if (textColor && textColor.inheritedHyperlink !== true) {
     formatting.color = {
       rgb: (asString(textColor.rgb) ?? null) as string | undefined,
       themeColor: (textColor.themeColor ?? null) as NonNullable<
@@ -631,6 +633,7 @@ function imageRunFromPayload(payload: Attrs): Run {
     src: asString(attrs.src) || '',
     alt: asString(attrs.alt) || undefined,
     title: asString(attrs.title) || undefined,
+    shapeType: asString(attrs.shapeType) || undefined,
     size: {
       width: pixelsToEmu(Number(attrs.width) || 0),
       height: pixelsToEmu(Number(attrs.height) || 0),
@@ -649,6 +652,7 @@ function imageRunFromPayload(payload: Attrs): Run {
 
   if (attrs.position?.horizontal && attrs.position.vertical) {
     image.position = {
+      relativeHeight: attrs.position.relativeHeight,
       horizontal: {
         relativeTo: (attrs.position.horizontal.relativeTo || 'column') as NonNullable<
           Image['position']
