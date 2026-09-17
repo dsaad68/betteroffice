@@ -17,6 +17,7 @@ export interface DiagramHandle {
   hitTest(x: number, y: number): HitTestResult | null;
   mediaBytes(assetId: string): Uint8Array;
   setCellFormula(pageId: string, shapeId: string, locator: CellLocator, formula: string): CellFormulaReceipt;
+  setControlHandle(pageId: string, shapeId: string, row: string, xFormula: string | null, yFormula: string | null): CellFormulaReceipt[];
   moveShape(pageId: string, shapeId: string, xFormula: string, yFormula: string): [CellFormulaReceipt, CellFormulaReceipt];
   setShapeBounds(pageId: string, shapeId: string, xFormula: string, yFormula: string, widthFormula: string, heightFormula: string): [CellFormulaReceipt, CellFormulaReceipt, CellFormulaReceipt, CellFormulaReceipt];
   resizeLocPin(pageId: string, shapeId: string, width: number, height: number): { x: number; y: number };
@@ -122,7 +123,7 @@ export function openDiagram(bytes: Uint8Array, options: OpenDiagramOptions = {})
     layoutPage: pageIndex => {
       hitIds.clear();
       const list = json<PageDisplayList>(() => renderer.layoutPageJson(doc, pageIndex));
-      if (list.contractVersion !== 4) throw new Error(`unsupported VSDX display-list contract version ${list.contractVersion}`);
+      if (list.contractVersion !== 5) throw new Error(`unsupported VSDX display-list contract version ${list.contractVersion}`);
       const page = json<DiagramSnapshot>(() => doc.snapshotJson()).pages[pageIndex];
       const shapes = [...page.shapes];
       while (shapes.length) { const shape = shapes.pop()!; hitIds.set(`${page.sourcePartPath}:${shape.sourceId}`, shape.id); shapes.push(...shape.children); }
@@ -135,6 +136,7 @@ export function openDiagram(bytes: Uint8Array, options: OpenDiagramOptions = {})
       return hit && shapeId ? { ...hit, shapeId } : null;
     }, mediaBytes: assetId => wasm(() => doc.mediaBytes(assetId).slice()),
     setCellFormula: (pageId, shapeId, locator, formula) => json(() => doc.setCellFormulaJson(JSON.stringify({ pageId, shapeId, locator, formula })), true),
+    setControlHandle: (pageId, shapeId, row, xFormula, yFormula) => json(() => doc.setControlHandleJson(JSON.stringify({ pageId, shapeId, row, xFormula, yFormula })), true),
     moveShape: (pageId, shapeId, xFormula, yFormula) => json(() => doc.moveShapeJson(JSON.stringify({ pageId, shapeId, xFormula, yFormula })), true),
     setShapeBounds: (pageId, shapeId, xFormula, yFormula, widthFormula, heightFormula) => json(() => doc.setShapeBoundsJson(JSON.stringify({ pageId, shapeId, xFormula, yFormula, widthFormula, heightFormula })), true),
     resizeLocPin: (pageId, shapeId, width, height) => { const [x, y] = wasm(() => doc.resizeLocPin(pageId, shapeId, width, height)); return { x, y }; },

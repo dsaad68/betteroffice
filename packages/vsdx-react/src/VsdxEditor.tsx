@@ -1,21 +1,23 @@
 import { createT, deepMerge, diagnosticMessage, en } from '@betteroffice/vsdx-i18n';
 import type { Translations } from '@betteroffice/vsdx-i18n';
-import { canvasPointToModel, initWasm, openDiagram, paintPage, sizeCanvasForPage } from '@betteroffice/vsdx';
+import { canvasPointToModel, modelPointToCanvas, initWasm, openDiagram, paintPage, sizeCanvasForPage } from '@betteroffice/vsdx';
 import type { Affine, CellLocator, PageLayer, PagePrimitive, CollaborationReplica, DiagramHandle, DiagramSnapshot, HitTestResult, ModelPoint, PageDisplayList, PageSnapshot, ShapeDataRow, ShapeSnapshot, TextDiagnostic, VsdxFontFace, VsdxPresence } from '@betteroffice/vsdx';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { CSSProperties, DragEvent, FocusEvent, KeyboardEvent, MouseEvent, PointerEvent, ReactNode } from 'react';
 import { Ribbon } from './components/ribbon/Ribbon';
+import { CanvasContextMenu } from './components/ribbon/CanvasContextMenu';
 import { ShapeContextMenu } from './components/ribbon/ShapeContextMenu';
-import { RibbonCommandsProvider, findShapePlacement, isHandleResizeBlocked, numericCellValue, useRibbonCommands } from './components/ribbon/commands';
+import { RibbonCommandsProvider, findShapePlacement, isCellWriteBlocked, isHandleResizeBlocked, numericCellValue, useRibbonCommands } from './components/ribbon/commands';
 import type { RibbonCommands } from './components/ribbon/commands';
 import { STENCIL_DRAG_MIME, ShapesPanel } from './components/shapes/ShapesPanel';
 import { LayersPanel } from './components/layers/LayersPanel';
 import { ShapeDataPanel } from './components/shapeData/ShapeDataPanel';
+import { DrawingExplorer } from './components/explorer/DrawingExplorer';
 import { standardShapeById, standardShapes } from './components/shapes/shapeLibrary';
 import type { StandardShape } from './components/shapes/shapeLibrary';
 import { StatusBar, clampZoom } from './components/statusbar';
-import { paintDragPreview, paintSelectionFrame, passedDragThreshold, previewOutline, hitTestSelection, isPrintableEntryKey, resolveDragGeometry, resolveNudgeGeometry, resolveRotationAngle, resizeCursor, canvasKeyboardIntent, textEditOverlay, withoutTextBox } from './interactions';
-import type { DragStart, ResizeHandle } from './interactions';
+import { paintDragPreview, paintSelectionFrame, passedDragThreshold, previewOutline, hitTestSelection, hitTestControlHandles, controlCellWriteBlocked, controlHandleCanvasPositions, controlHandlesForShape, isPrintableEntryKey, paintControlHandles, resolveControlDrag, resolveDragGeometry, resolveNudgeGeometry, resolveRotationAngle, resizeCursor, canvasKeyboardIntent, shapeLocalToPage, textEditOverlay, withoutTextBox } from './interactions';
+import type { ControlDrag, DragStart, ResizeHandle } from './interactions';
 export { resolveDragGeometry };
 export type { DragStart };
 
@@ -88,9 +90,10 @@ export function VsdxEditor({ file, fonts, clientId, collaboration, i18n, classNa
   const [zoom, setZoom] = useState(1);
   const [shapesCollapsed, setShapesCollapsed] = useState(false);
   const [layersCollapsed, setLayersCollapsed] = useState(false);
+  const [explorerCollapsed, setExplorerCollapsed] = useState(false);
   const [diagnostics, setDiagnostics] = useState<TextDiagnostic[]>([]);
   const [error, setError] = useState<string | null>(null);
-  const [contextMenu, setContextMenu] = useState<{ top: number; left: number } | null>(null);
+  const [contextMenu, setContextMenu] = useState<{ top: number; left: number; kind: 'shape' | 'canvas' } | null>(null);
   const pointerRef = useRef<DragStart | null>(null);
   const dragPreviewRef = useRef<ModelPoint | null>(null);
   const dragSnapRef = useRef(false);
@@ -132,6 +135,7 @@ export function VsdxEditor({ file, fonts, clientId, collaboration, i18n, classNa
       const pageIndex = Math.max(0, Math.min(requestedPage ?? (retainedIndex >= 0 ? retainedIndex : previous.pageIndex), Math.max(0, current.pages.length - 1)));
       const frame = current.pages.length ? handle.layoutPage(pageIndex) : null;
       const layers = current.pages.length ? readPageLayers(handle, pageIndex) : [];
+      if (pageIndex !== previous.pageIndex) setContextMenu(null);
       modelRef.current = { snapshot: current, pageIndex, frame, layers };
       setModel(modelRef.current);
       setDiagnostics(frame ? collectDiagnostics(frame) : []);
@@ -165,7 +169,7 @@ export function VsdxEditor({ file, fonts, clientId, collaboration, i18n, classNa
     let handle: DiagramHandle | null = null;
     let stopUpdates = () => {};
     let stopResync = () => {};
-    handleRef.current?.dispose(); handleRef.current = null; imageCache.current.clear(); setSelection(null); setEditing(null); setDraft(''); modelRef.current = { snapshot: null, pageIndex: 0, frame: null, layers: [] }; setModel(modelRef.current); setError(null); setDirty(false);
+    handleRef.current?.dispose(); handleRef.current = null; imageCache.current.clear(); setSelection(null); setContextMenu(null); setEditing(null); setDraft(''); modelRef.current = { snapshot: null, pageIndex: 0, frame: null, layers: [] }; setModel(modelRef.current); setError(null); setDirty(false);
     if (!file) { setLoading(false); return; }
     setLoading(true);
     const openingFonts = fontsRef.current;
@@ -262,7 +266,9 @@ export function VsdxEditor({ file, fonts, clientId, collaboration, i18n, classNa
         const corners = selectionCorners(page, frame, selection);
         const placement = findShapePlacement(page.shapes, selection.shapeId);
         const blocked = placement ? isHandleResizeBlocked(placement.shape) : false;
-        if (corners) paintSelectionFrame(context, corners, dpr, zoom, blocked ? [] : undefined);
+        const rotationBlocked = placement ? isCellWriteBlocked(placement.shape, 'Angle') : false;
+        if (corners) paintSelectionFrame(context, corners, dpr, zoom, blocked ? [] : undefined, !rotationBlocked);
+        if (placement) paintControlHandles(context, controlHandleCanvasPositions(placement.shape, shapeDragStart(page, placement.shape, frame), frame.paintTransform), dpr, zoom);
       } catch { void 0; }
     }
     const start = pointerRef.current; const release = dragPreviewRef.current;
@@ -321,7 +327,9 @@ export function VsdxEditor({ file, fonts, clientId, collaboration, i18n, classNa
         const corners = selectionCorners(page, frame, currentSelection);
         const placement = findShapePlacement(page.shapes, currentSelection.shapeId);
         const blocked = placement ? isHandleResizeBlocked(placement.shape) : false;
-        if (corners) paintSelectionFrame(context, corners, window.devicePixelRatio || 1, zoomRef.current, blocked ? [] : undefined);
+        const rotationBlocked = placement ? isCellWriteBlocked(placement.shape, 'Angle') : false;
+        if (corners) paintSelectionFrame(context, corners, window.devicePixelRatio || 1, zoomRef.current, blocked ? [] : undefined, !rotationBlocked);
+        if (placement) paintControlHandles(context, controlHandleCanvasPositions(placement.shape, shapeDragStart(page, placement.shape, frame), frame.paintTransform), window.devicePixelRatio || 1, zoomRef.current);
       } catch { void 0; }
     }
   };
@@ -337,12 +345,39 @@ export function VsdxEditor({ file, fonts, clientId, collaboration, i18n, classNa
       const active = selectionRef.current;
       if (active && active.pageId === page.id && !selectionHiddenByLayers(page, modelRef.current.layers, active)) {
         try {
+          const placement = findShapePlacement(page.shapes, active.shapeId);
+          if (placement) {
+            const base = shapeDragStart(page, placement.shape, frame, handle);
+            const controls = controlHandleCanvasPositions(placement.shape, base, frame.paintTransform);
+            const row = hitTestControlHandles(point.canvas, controls, zoomRef.current);
+            const hit = row ? controls.find((entry) => entry.row === row) : undefined;
+            const drag = hit && row ? controlDragStart(placement.shape, row, hit) : null;
+            if (hit && drag && !(drag.lockedX && drag.lockedY)) {
+              pointerRef.current = {
+                ...point,
+                ...base,
+                pointerId: event.pointerId,
+                startX: event.clientX,
+                startY: event.clientY,
+                resize: false,
+                control: drag,
+              };
+              event.currentTarget.setPointerCapture(event.pointerId);
+              return;
+            }
+          }
+        } catch { void 0; }
+        try {
           const corners = selectionCorners(page, frame, active);
           if (corners) {
             const target = hitTestSelection(point.canvas, corners, zoomRef.current);
             if (target) {
               const placement = findShapePlacement(page.shapes, active.shapeId);
               if (placement) {
+                if (target === 'rotate' && isCellWriteBlocked(placement.shape, 'Angle')) {
+                  reportError(new Error(t('errors.rotationGuarded')));
+                  return;
+                }
                 if (target !== 'rotate' && isHandleResizeBlocked(placement.shape)) {
                   reportError(new Error(t('errors.resizeLocked')));
                   return;
@@ -389,14 +424,22 @@ export function VsdxEditor({ file, fonts, clientId, collaboration, i18n, classNa
         const page = current.snapshot?.pages[current.pageIndex];
         const active = selectionRef.current;
         if (!frame || !page || !active || active.pageId !== page.id || selectionHiddenByLayers(page, current.layers, active)) { event.currentTarget.style.cursor = ''; return; }
+        const point = canvasPointerPosition(event, frame);
+        const placement = findShapePlacement(page.shapes, active.shapeId);
+        if (placement) {
+          try {
+            const controls = controlHandleCanvasPositions(placement.shape, shapeDragStart(page, placement.shape, frame), frame.paintTransform);
+            const row = hitTestControlHandles(point.canvas, controls, zoomRef.current);
+            const hit = row ? controls.find((entry) => entry.row === row) : undefined;
+            const drag = hit && row ? controlDragStart(placement.shape, row, hit) : null;
+            if (drag && !(drag.lockedX && drag.lockedY)) { event.currentTarget.style.cursor = 'move'; return; }
+          } catch { void 0; }
+        }
         const corners = selectionCorners(page, frame, active);
         if (!corners) { event.currentTarget.style.cursor = ''; return; }
-        const point = canvasPointerPosition(event, frame);
         const target = hitTestSelection(point.canvas, corners, zoomRef.current);
-        if (target !== 'rotate' && target) {
-          const placement = findShapePlacement(page.shapes, active.shapeId);
-          if (placement && isHandleResizeBlocked(placement.shape)) { event.currentTarget.style.cursor = ''; return; }
-        }
+        if (target === 'rotate' && placement && isCellWriteBlocked(placement.shape, 'Angle')) { event.currentTarget.style.cursor = ''; return; }
+        if (target !== 'rotate' && target && placement && isHandleResizeBlocked(placement.shape)) { event.currentTarget.style.cursor = ''; return; }
         event.currentTarget.style.cursor = target === 'rotate' ? 'grab' : target ? resizeCursor(target) : '';
       } catch { void 0; }
       return;
@@ -419,6 +462,24 @@ export function VsdxEditor({ file, fonts, clientId, collaboration, i18n, classNa
         if (!liveFrame || !liveStart || !release || !overlay) return;
         const context = overlay.getContext('2d'); if (!context) return;
         try {
+          if (liveStart.control) {
+            const livePage = modelRef.current.snapshot?.pages[modelRef.current.pageIndex];
+            const liveSelection = selectionRef.current;
+            const livePlacement = livePage && liveSelection ? findShapePlacement(livePage.shapes, liveSelection.shapeId) : null;
+            const corners = selectionCorners(livePage!, liveFrame, liveSelection!);
+            context.clearRect(0, 0, overlay.width, overlay.height);
+            if (corners) paintSelectionFrame(context, corners, window.devicePixelRatio || 1, zoomRef.current);
+            if (livePlacement) {
+              const positions = controlHandleCanvasPositions(livePlacement.shape, liveStart, liveFrame.paintTransform).map((position) => {
+                if (position.row !== liveStart.control!.row) return position;
+                const next = resolveControlDrag(liveStart, liveStart.control!.startLocal, release, liveStart.control!.lockedX, liveStart.control!.lockedY);
+                const page = shapeLocalToPage(liveStart, next);
+                return { ...position, canvas: modelPointToCanvas(liveFrame.paintTransform, page.x, page.y) };
+              });
+              paintControlHandles(context, positions, window.devicePixelRatio || 1, zoomRef.current);
+            }
+            return;
+          }
           const corners = previewOutline(liveStart, release, liveFrame.paintTransform, dragSnapRef.current);
           context.clearRect(0, 0, overlay.width, overlay.height);
           paintDragPreview(context, corners, window.devicePixelRatio || 1, zoomRef.current);
@@ -440,7 +501,21 @@ export function VsdxEditor({ file, fonts, clientId, collaboration, i18n, classNa
       const point = canvasPointerPosition(event, frame);
       if (!pointer.thresholdPassed && !hadPreview && pointer.startX !== undefined && pointer.startY !== undefined && !passedDragThreshold(pointer.startX, pointer.startY, event.clientX, event.clientY)) return;
       if (!pointer.thresholdPassed && !hadPreview && Math.abs(point.canvas.x - pointer.canvas.x) < 0.01 && Math.abs(point.canvas.y - pointer.canvas.y) < 0.01) return;
+      if (pointer.control) {
+        const livePage = handle.snapshot().pages.find((page) => page.id === selected.pageId);
+        const liveShape = livePage ? findShapePlacement(livePage.shapes, selected.shapeId)?.shape : undefined;
+        const lockedX = pointer.control.lockedX || (liveShape ? controlCellWriteBlocked(liveShape, pointer.control.row, 'X') : false);
+        const lockedY = pointer.control.lockedY || (liveShape ? controlCellWriteBlocked(liveShape, pointer.control.row, 'Y') : false);
+        if (lockedX && lockedY) return;
+        const next = resolveControlDrag(pointer, pointer.control.startLocal, point.model, lockedX, lockedY);
+        handle.setControlHandle(selected.pageId, selected.shapeId, pointer.control.row, lockedX ? null : inchFormula(next.x), lockedY ? null : inchFormula(next.y));
+        refresh(undefined, true);
+        return;
+      }
       if (pointer.rotate) {
+        const livePage = handle.snapshot().pages.find((page) => page.id === selected.pageId);
+        const livePlacement = livePage ? findShapePlacement(livePage.shapes, selected.shapeId) : null;
+        if (livePlacement && isCellWriteBlocked(livePlacement.shape, 'Angle')) throw new Error(t('errors.rotationGuarded'));
         handle.setCellFormula(selected.pageId, selected.shapeId, { cellName: 'Angle' }, String(resolveRotationAngle(pointer, point.model, event.shiftKey)));
         refresh(undefined, true);
         return;
@@ -496,13 +571,13 @@ export function VsdxEditor({ file, fonts, clientId, collaboration, i18n, classNa
       const hit = handle.hitTest(point.canvas.x, point.canvas.y);
       const next = hit ? selectionForHit(page, hit) : null;
       if (!next) {
-        closeContextMenu();
         setSelection(null);
+        setContextMenu({ top: event.clientY, left: event.clientX, kind: 'canvas' });
         return;
       }
       const active = selectionRef.current;
       if (!active || active.pageId !== next.pageId || active.shapeId !== next.shapeId) setSelection(next);
-      setContextMenu({ top: event.clientY, left: event.clientX });
+      setContextMenu({ top: event.clientY, left: event.clientX, kind: 'shape' });
     } catch (value) { reportError(value); }
   };
   const commandsRef = useRef<RibbonCommands | null>(null);
@@ -610,6 +685,11 @@ export function VsdxEditor({ file, fonts, clientId, collaboration, i18n, classNa
     handle.setCellFormula(selected.pageId, selected.shapeId, locator, formula);
     refresh(undefined, true);
   }, [refresh]);
+  const selectFromExplorer = useCallback((next: VsdxShapeSelection | null) => {
+    const { snapshot, pageIndex, layers } = modelRef.current;
+    if (next && !(snapshot && stillSelectable(snapshot, pageIndex, next, layers))) return;
+    setSelection(next);
+  }, []);
   const selectedShape = (() => {
     const page = model.snapshot?.pages[model.pageIndex];
     if (!page || !selection || selection.pageId !== page.id) return null;
@@ -627,9 +707,9 @@ export function VsdxEditor({ file, fonts, clientId, collaboration, i18n, classNa
   const fidelity = diagnostics.filter((diagnostic) => diagnostic.category === 'fidelity');
   return <div className={className} style={styles.root} aria-label={t('editor.appLabel')}>
     <header style={styles.titleBar}><strong>{t('ribbon.documentName')}</strong><span style={{ color: dirty ? '#a16207' : '#526273' }}>{dirty ? t('ribbon.dirty') : t('ribbon.saved')}</span></header>
-    <RibbonCommandsProvider handle={handleRef.current} snapshot={model.snapshot} pageId={model.snapshot?.pages[model.pageIndex]?.id} selection={selection} onMutation={() => refresh(undefined, true)} onError={reportError} onDownload={download}>
+    <RibbonCommandsProvider handle={handleRef.current} snapshot={model.snapshot} pageId={model.snapshot?.pages[model.pageIndex]?.id} selection={selection} frame={model.frame} onMutation={() => refresh(undefined, true)} onError={reportError} onDownload={download}>
     <RibbonCommandsBridge target={commandsRef} />
-    <Ribbon t={t} />
+    <Ribbon t={t} hasSelection={selection !== null} />
     <div style={styles.contentRow}>
     {leftPanel === undefined ? (
       <div style={styles.leftColumn}>
@@ -666,12 +746,18 @@ export function VsdxEditor({ file, fonts, clientId, collaboration, i18n, classNa
           </div>
         )}
       </div>
-      {contextMenu && selection && <ShapeContextMenu t={t} position={contextMenu} onClose={closeContextMenu} onCloseAndFocus={closeContextMenuAndFocus} />}
+      {contextMenu?.kind === 'shape' && selection && <ShapeContextMenu t={t} position={contextMenu} onClose={closeContextMenu} onCloseAndFocus={closeContextMenuAndFocus} />}
+      {contextMenu?.kind === 'canvas' && <CanvasContextMenu t={t} position={contextMenu} onClose={closeContextMenu} onCloseAndFocus={closeContextMenuAndFocus} />}
       {integrity.length > 0 && <section role="alert" style={styles.integrity}><strong>{t('diagnostics.integrityHeading')}</strong>{integrity.map((item, index) => <div key={`${item.code}-${index}`}>{diagnosticMessage(t, item.category, item.code)}</div>)}</section>}
       {fidelity.length > 0 && <details style={styles.fidelity}><summary>{t('diagnostics.fidelityHeading')}</summary>{fidelity.map((item, index) => <div key={`${item.code}-${index}`}>{diagnosticMessage(t, item.category, item.code)}</div>)}</details>}
       {error && <div role="alert" style={styles.error}>{error}</div>}
     </main>
-    {rightPanel === undefined ? <ShapeDataPanel shape={selectedShape} onCommit={commitShapeData} onError={reportError} t={t} /> : rightPanel}
+    {rightPanel === undefined ? (
+      <div style={styles.rightColumn}>
+        <DrawingExplorer snapshot={model.snapshot} activePageIndex={model.pageIndex} selection={selection} onSelectPage={(index) => refresh(index)} onSelectShape={selectFromExplorer} collapsed={explorerCollapsed} onToggleCollapsed={() => setExplorerCollapsed((value) => !value)} t={t} />
+        <ShapeDataPanel shape={selectedShape} onCommit={commitShapeData} onError={reportError} t={t} />
+      </div>
+    ) : rightPanel}
     </div>
     {statusBar === undefined ? <StatusBar pages={model.snapshot?.pages ?? []} activeIndex={model.pageIndex} onSelectPage={(index) => refresh(index)} onReorderPage={reorderPage} zoom={zoom} onZoomChange={setZoom} onFitToWindow={fitToWindow} t={t} /> : statusBar}
     </RibbonCommandsProvider>
@@ -803,6 +889,12 @@ export function selectionCorners(page: PageSnapshot, frame: PageDisplayList, sel
   return previewOutline(start, { x: 0, y: 0 }, frame.paintTransform);
 }
 
+export function controlDragStart(shape: ShapeSnapshot, row: string, hit: { lockedX: boolean; lockedY: boolean }): ControlDrag | null {
+  const handle = controlHandlesForShape(shape).find((entry) => entry.row === row);
+  if (!handle) return null;
+  return { row, startLocal: { x: handle.x, y: handle.y }, lockedX: hit.lockedX || controlCellWriteBlocked(shape, row, 'X'), lockedY: hit.lockedY || controlCellWriteBlocked(shape, row, 'Y') };
+}
+
 export function collectDiagnostics(frame: PageDisplayList): TextDiagnostic[] { const result: TextDiagnostic[] = []; const work = frame.primitives.map((primitive) => ({ primitive, depth: 0 })); while (work.length) { const current = work.pop(); if (!current || current.depth >= 256) continue; if (current.primitive.kind === 'shape') result.push(...(current.primitive.diagnostics ?? [])); if (current.primitive.kind === 'textBox') for (const paragraph of current.primitive.paragraphs) for (const run of paragraph.runs) result.push(...(run.diagnostics ?? [])); if (current.primitive.kind === 'group') for (const primitive of current.primitive.primitives) work.push({ primitive, depth: current.depth + 1 }); } return result; }
 /** Latest ribbon commands for the canvas keyboard layer, which lives outside the provider. */
 function RibbonCommandsBridge({ target }: { target: { current: RibbonCommands | null } }) {
@@ -836,4 +928,4 @@ function fontFaceEqual(left: VsdxFontFace, right: VsdxFontFace): boolean { retur
 function bytesEqual(left: Uint8Array, right: Uint8Array): boolean { return left === right || (left.byteLength === right.byteLength && left.every((byte, index) => byte === right[index])); }
 function resolveImage(assetId: string, handle: DiagramHandle | null, cache: { current: Map<string, Promise<CanvasImageSource | null>> }, message: string): Promise<CanvasImageSource | null> { const existing = cache.current.get(assetId); if (existing) return existing; const pending = decodeImage(handle?.mediaBytes(assetId), message); cache.current.set(assetId, pending); return pending; }
 async function decodeImage(bytes: Uint8Array | undefined, message: string): Promise<CanvasImageSource | null> { if (!bytes) return null; const blob = new Blob([bytes.slice()]); if (typeof createImageBitmap === 'function') return createImageBitmap(blob); const url = URL.createObjectURL(blob); try { return await new Promise<HTMLImageElement>((resolve, reject) => { const image = new Image(); image.onload = () => resolve(image); image.onerror = () => reject(new Error(message)); image.src = url; }); } finally { URL.revokeObjectURL(url); } }
-const styles: Record<string, CSSProperties> = { root: { display: 'flex', flexDirection: 'column', width: '100%', height: '100%', minHeight: 480, color: '#172033', background: '#f3f5f8', fontFamily: 'ui-sans-serif, system-ui, sans-serif' }, titleBar: { display: 'flex', alignItems: 'center', gap: 12, minHeight: 32, padding: '0 14px', background: '#f8fafc', borderBottom: '1px solid #d8dee9', fontSize: 13 }, contentRow: { display: 'flex', flex: 1, minHeight: 0 }, leftColumn: { display: 'flex', flexDirection: 'column', height: '100%', minHeight: 0 }, shapesWrap: { display: 'flex', flex: '1 1 auto', minHeight: 0 }, workspace: { position: 'relative', display: 'flex', flex: 1, alignItems: 'center', justifyContent: 'center', overflow: 'auto' }, canvasFrame: { position: 'relative', flex: '0 0 auto' }, canvas: { display: 'block', background: '#fff', boxShadow: '0 8px 32px rgba(27, 39, 61, 0.2)', touchAction: 'none' }, overlay: { position: 'absolute', inset: 0, pointerEvents: 'none' }, textEditWrap: { position: 'absolute', left: 0, top: 0, transformOrigin: '0 0', display: 'flex', alignItems: 'center', justifyContent: 'center', overflow: 'visible', background: 'transparent', border: '1px dashed #1d4ed8', zIndex: 2 }, textEditBox: { width: '100%', background: 'transparent', border: 'none', outline: 'none', resize: 'none', overflow: 'visible', textAlign: 'center', whiteSpace: 'pre-wrap', overflowWrap: 'break-word', wordBreak: 'break-word', lineHeight: 1.2, padding: 0, margin: 0 }, integrity: { position: 'absolute', right: 14, bottom: 14, maxWidth: 340, padding: 12, color: '#7f1d1d', background: '#fef2f2', border: '1px solid #fca5a5' }, fidelity: { position: 'absolute', right: 14, bottom: 14, maxWidth: 340, padding: 8, color: '#475569', background: '#fff', fontSize: 12 }, error: { position: 'absolute', left: 14, right: 14, bottom: 14, padding: 10, color: '#8b1e2d', background: '#fff0f2', border: '1px solid #efb8c0' } };
+const styles: Record<string, CSSProperties> = { root: { display: 'flex', flexDirection: 'column', width: '100%', height: '100%', minHeight: 480, color: '#172033', background: '#f3f5f8', fontFamily: 'ui-sans-serif, system-ui, sans-serif' }, titleBar: { display: 'flex', alignItems: 'center', gap: 12, minHeight: 32, padding: '0 14px', background: '#f8fafc', borderBottom: '1px solid #d8dee9', fontSize: 13 }, contentRow: { display: 'flex', flex: 1, minHeight: 0 }, leftColumn: { display: 'flex', flexDirection: 'column', height: '100%', minHeight: 0 }, rightColumn: { display: 'flex', height: '100%', minHeight: 0 }, shapesWrap: { display: 'flex', flex: '1 1 auto', minHeight: 0 }, workspace: { position: 'relative', display: 'flex', flex: 1, alignItems: 'center', justifyContent: 'center', overflow: 'auto' }, canvasFrame: { position: 'relative', flex: '0 0 auto' }, canvas: { display: 'block', background: '#fff', boxShadow: '0 8px 32px rgba(27, 39, 61, 0.2)', touchAction: 'none' }, overlay: { position: 'absolute', inset: 0, pointerEvents: 'none' }, textEditWrap: { position: 'absolute', left: 0, top: 0, transformOrigin: '0 0', display: 'flex', alignItems: 'center', justifyContent: 'center', overflow: 'visible', background: 'transparent', border: '1px dashed #1d4ed8', zIndex: 2 }, textEditBox: { width: '100%', background: 'transparent', border: 'none', outline: 'none', resize: 'none', overflow: 'visible', textAlign: 'center', whiteSpace: 'pre-wrap', overflowWrap: 'break-word', wordBreak: 'break-word', lineHeight: 1.2, padding: 0, margin: 0 }, integrity: { position: 'absolute', right: 14, bottom: 14, maxWidth: 340, padding: 12, color: '#7f1d1d', background: '#fef2f2', border: '1px solid #fca5a5' }, fidelity: { position: 'absolute', right: 14, bottom: 14, maxWidth: 340, padding: 8, color: '#475569', background: '#fff', fontSize: 12 }, error: { position: 'absolute', left: 14, right: 14, bottom: 14, padding: 10, color: '#8b1e2d', background: '#fff0f2', border: '1px solid #efb8c0' } };

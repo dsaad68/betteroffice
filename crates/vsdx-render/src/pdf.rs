@@ -132,7 +132,7 @@ fn rgb(color: &str) -> Option<(f64, f64, f64)> {
 fn solid(paint: &Option<Paint>) -> Option<(f64, f64, f64)> {
     match paint {
         Some(Paint::Solid { color }) => rgb(color),
-        Some(Paint::Gradient { stops }) => stops.first().and_then(|stop| rgb(&stop.color)),
+        Some(Paint::Gradient { stops, .. }) => stops.first().and_then(|stop| rgb(&stop.color)),
         None => None,
     }
 }

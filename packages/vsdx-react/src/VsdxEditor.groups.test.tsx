@@ -3,6 +3,7 @@ import { readFile } from 'node:fs/promises';
 import { resolve } from 'node:path';
 import { GlobalRegistrator } from '@happy-dom/global-registrator';
 import { initWasm } from '@betteroffice/vsdx';
+import { en } from '@betteroffice/vsdx-i18n';
 import type { Affine, DiagramHandle, PagePrimitive } from '@betteroffice/vsdx';
 import { VsdxEditor } from './VsdxEditor';
 
@@ -132,13 +133,14 @@ test('a right-click inside a group selects the group before opening the menu', a
   } finally { restore(); }
 });
 
-test('a right-click on empty canvas drops the menu and the selection it targeted', async () => {
+test('a right-click on empty canvas swaps in the canvas menu and drops the selection', async () => {
   const { main, restore } = await clickInsideTheGroup();
   try {
     await act(async () => { fireEvent.contextMenu(main, { clientX: INSIDE_CHILD.x, clientY: INSIDE_CHILD.y }); });
-    expect(document.querySelector('[role="menu"]')).not.toBeNull();
+    expect(document.querySelector(`[role="menu"][aria-label="${en.contextMenu.label}"]`)).not.toBeNull();
     await act(async () => { fireEvent.contextMenu(main, { clientX: 5, clientY: 5 }); });
-    expect(document.querySelector('[role="menu"]') === null).toBe(true);
+    expect(document.querySelector(`[role="menu"][aria-label="${en.contextMenu.label}"]`)).toBeNull();
+    expect(document.querySelector(`[role="menu"][aria-label="${en.contextMenu.canvasLabel}"]`)).not.toBeNull();
     expect(main.getAttribute('aria-label') ?? '').not.toContain(GROUP_ID);
   } finally { restore(); }
 });

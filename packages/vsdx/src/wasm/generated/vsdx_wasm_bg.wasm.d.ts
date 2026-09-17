@@ -36,6 +36,7 @@ export const vsdxdocument_resizeLocPin: (a: number, b: number, c: number, d: num
 export const vsdxdocument_resizeShapeJson: (a: number, b: number, c: number) => [number, number, number, number];
 export const vsdxdocument_save: (a: number) => [number, number, number, number];
 export const vsdxdocument_setCellFormulaJson: (a: number, b: number, c: number) => [number, number, number, number];
+export const vsdxdocument_setControlHandleJson: (a: number, b: number, c: number) => [number, number, number, number];
 export const vsdxdocument_setShapeBoundsJson: (a: number, b: number, c: number) => [number, number, number, number];
 export const vsdxdocument_setShapeTextJson: (a: number, b: number, c: number) => [number, number, number, number];
 export const vsdxdocument_shapeTextJson: (a: number, b: number, c: number) => [number, number, number, number];

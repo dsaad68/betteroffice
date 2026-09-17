@@ -76,6 +76,18 @@ struct SetCellFormulaArgs {
 
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
+struct SetControlHandleArgs {
+    page_id: String,
+    shape_id: String,
+    row: String,
+    #[serde(default)]
+    x_formula: Option<String>,
+    #[serde(default)]
+    y_formula: Option<String>,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
 struct MoveShapeArgs {
     page_id: String,
     shape_id: String,
@@ -345,6 +357,11 @@ impl VsdxDocument {
         self.set_cell_formula_json_inner(args).map_err(js_error)
     }
 
+    #[wasm_bindgen(js_name = setControlHandleJson)]
+    pub fn set_control_handle_json(&self, args: &str) -> Result<String, JsValue> {
+        self.set_control_handle_json_inner(args).map_err(js_error)
+    }
+
     #[wasm_bindgen(js_name = moveShapeJson)]
     pub fn move_shape_json(&self, args: &str) -> Result<String, JsValue> {
         self.move_shape_json_inner(args).map_err(js_error)
@@ -488,6 +505,21 @@ impl VsdxDocument {
     fn set_cell_formula_json_inner(&self, args: &str) -> Result<String, String> {
         let args = parse_args_inner(args)?;
         self.set_cell_formula(args)
+            .map_err(|error| error.to_string())
+            .and_then(json_inner)
+    }
+
+    fn set_control_handle_json_inner(&self, args: &str) -> Result<String, String> {
+        let args: SetControlHandleArgs = parse_args_inner(args)?;
+        self.session
+            .set_control_handle(
+                &local_context(),
+                &args.page_id,
+                &args.shape_id,
+                &args.row,
+                args.x_formula,
+                args.y_formula,
+            )
             .map_err(|error| error.to_string())
             .and_then(json_inner)
     }

@@ -768,6 +768,15 @@ impl DiagramSession {
         };
         let cell = cell_map(&mut txn, page_id, shape_id, &target)?;
         let before = map_string(&cell, &txn, "formula");
+        if before.as_deref() == Some(formula.as_str()) {
+            return Ok(CellFormulaReceipt {
+                page_id: page_id.to_owned(),
+                shape_id: shape_id.to_owned(),
+                cell_name: target.cell_name,
+                before,
+                after: formula,
+            });
+        }
         cell.insert(&mut txn, "formula", formula.as_str());
         Ok(CellFormulaReceipt {
             page_id: page_id.to_owned(),
@@ -776,6 +785,78 @@ impl DiagramSession {
             before,
             after: formula,
         })
+    }
+
+    /// Writes a `Control` row's `X` and `Y` in one transaction, so a handle drag is one undo entry.
+    pub fn set_control_handle(
+        &self,
+        context: &EditCtx,
+        page_id: &str,
+        shape_id: &str,
+        row: &str,
+        x_formula: Option<String>,
+        y_formula: Option<String>,
+    ) -> EditResult<Vec<CellFormulaReceipt>> {
+        let requested = [("X", x_formula), ("Y", y_formula)]
+            .into_iter()
+            .filter_map(|(name, formula)| formula.map(|formula| (name, formula)))
+            .collect::<Vec<_>>();
+        if requested.is_empty() {
+            return Err(EditError::InvalidState(
+                "control handle edit writes no axis".to_owned(),
+            ));
+        }
+        let mut txn = self.transact_for(context);
+        let context_for_policy = CrdtMutationContext::new(&txn, page_id, shape_id)?;
+        let mut targets = Vec::with_capacity(requested.len());
+        for (name, formula) in requested {
+            let locator = CellLocator {
+                sheet: CellSheet::Page(0),
+                shape_id: None,
+                section: Some("Control".to_owned()),
+                section_index: None,
+                row: Some(CellRow::Name(row.to_owned())),
+                cell_name: name.to_owned(),
+            };
+            match decide_mutation(
+                &context_for_policy,
+                context_for_policy.locator(locator),
+                MutationGesture::CellEdit,
+                formula.clone(),
+                &ParseLimits::default(),
+            ) {
+                MutationOutcome::Allowed { target, .. } => targets.push((target, formula)),
+                MutationOutcome::Refused { reason } | MutationOutcome::Unsupported { reason } => {
+                    return Err(EditError::InvalidState(reason));
+                }
+            }
+        }
+        for (index, (target, _)) in targets.iter().enumerate() {
+            if targets[..index].iter().any(|(seen, _)| seen == target) {
+                return Err(EditError::InvalidState(format!(
+                    "redirects converge on {} more than once",
+                    target.cell_name
+                )));
+            }
+        }
+        let mut prepared = Vec::with_capacity(targets.len());
+        for (target, formula) in targets {
+            let cell = cell_map(&mut txn, page_id, shape_id, &target)?;
+            prepared.push((target, formula, cell));
+        }
+        let mut receipts = Vec::with_capacity(prepared.len());
+        for (target, formula, cell) in prepared {
+            let before = map_string(&cell, &txn, "formula");
+            cell.insert(&mut txn, "formula", formula.as_str());
+            receipts.push(CellFormulaReceipt {
+                page_id: page_id.to_owned(),
+                shape_id: shape_id.to_owned(),
+                cell_name: target.cell_name,
+                before,
+                after: formula,
+            });
+        }
+        Ok(receipts)
     }
 
     pub fn shape_text(&self, page_id: &str, shape_id: &str) -> EditResult<String> {

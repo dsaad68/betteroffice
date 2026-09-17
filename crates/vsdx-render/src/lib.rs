@@ -618,6 +618,7 @@ impl Renderer {
                 page_part,
                 shape,
                 0,
+                (false, false),
                 &mut state,
                 &mut cache,
             )?;
@@ -659,6 +660,7 @@ impl Renderer {
         page_part: &str,
         shape: &Shape,
         depth: usize,
+        flips: (bool, bool),
         state: &mut State,
         cache: &mut LayoutCache,
     ) -> Result<(), RenderError> {
@@ -769,6 +771,14 @@ impl Renderer {
                 .map(|section| realize_geometry(section, bounds.width, bounds.height))
                 .collect::<Vec<_>>()
         });
+        let flips = (
+            flips.0
+                ^ evaluated(package, references, resolved, shape.id, "FlipX")
+                    .is_some_and(|value| value != 0.0),
+            flips.1
+                ^ evaluated(package, references, resolved, shape.id, "FlipY")
+                    .is_some_and(|value| value != 0.0),
+        );
         let child_shapes = shape.shapes().collect::<Vec<_>>();
         if !child_shapes.is_empty() {
             let group_transform = affine(transform.local);
@@ -785,6 +795,7 @@ impl Renderer {
                     page_part,
                     child,
                     depth + 1,
+                    flips,
                     state,
                     cache,
                 )?;
@@ -933,14 +944,16 @@ impl Renderer {
             resolved,
             id,
             bounds,
-            affine(transform.local).compose(Affine {
-                a: 1.0,
-                b: 0.0,
-                c: 0.0,
-                d: 1.0,
-                e: -bounds.x as f32,
-                f: -bounds.y as f32,
-            }),
+            affine(transform.local)
+                .compose(unmirror(flips, bounds))
+                .compose(Affine {
+                    a: 1.0,
+                    b: 0.0,
+                    c: 0.0,
+                    d: 1.0,
+                    e: -bounds.x as f32,
+                    f: -bounds.y as f32,
+                }),
             state,
             cache,
         )?;
@@ -1535,6 +1548,18 @@ impl Renderer {
         Ok(())
     }
 }
+/// Reflects a sheet's box about each axis the scene flips, cancelling the mirror a flip
+/// would otherwise put on its glyphs while leaving the box where the flip moved it.
+fn unmirror((flip_x, flip_y): (bool, bool), bounds: Bounds) -> Affine {
+    Affine {
+        a: if flip_x { -1.0 } else { 1.0 },
+        b: 0.0,
+        c: 0.0,
+        d: if flip_y { -1.0 } else { 1.0 },
+        e: if flip_x { bounds.width as f32 } else { 0.0 },
+        f: if flip_y { bounds.height as f32 } else { 0.0 },
+    }
+}
 fn affine(transform: vsdx_resolve::SceneAffine) -> Affine {
     Affine {
         a: transform.a as f32,
@@ -1897,7 +1922,10 @@ fn primitives_finite(primitives: &[Primitive]) -> bool {
 }
 fn paint_finite(paint: &Option<Paint>) -> bool {
     match paint {
-        Some(Paint::Gradient { stops }) => stops.iter().all(|stop| stop.position.is_finite()),
+        Some(Paint::Gradient { angle_deg, stops }) => {
+            angle_deg.is_none_or(f32::is_finite)
+                && stops.iter().all(|stop| stop.position.is_finite())
+        }
         _ => true,
     }
 }
@@ -2549,6 +2577,7 @@ mod tests {
         }
     }
 
+    mod gradient_fill;
     mod layers;
     mod section_controls;
 
@@ -2699,6 +2728,178 @@ mod tests {
             "{actual:?} != {expected:?}"
         );
     }
+    fn text_box_corners(list: &VsdxDisplayList) -> (f32, f32, f32, f32) {
+        let Primitive::TextBox {
+            x,
+            y,
+            width,
+            height,
+            transform,
+            ..
+        } = text_box_primitive(&list.primitives)
+        else {
+            unreachable!()
+        };
+        let matrix = group_chain(&list.primitives, Affine::identity()).compose(*transform);
+        let corners = [
+            matrix.apply_point(*x, *y),
+            matrix.apply_point(*x + *width, *y + *height),
+        ];
+        (
+            corners[0].0.min(corners[1].0),
+            corners[0].1.min(corners[1].1),
+            corners[0].0.max(corners[1].0),
+            corners[0].1.max(corners[1].1),
+        )
+    }
+
+    fn text_box_primitive(primitives: &[Primitive]) -> &Primitive {
+        primitives
+            .iter()
+            .find_map(|primitive| match primitive {
+                Primitive::TextBox { .. } => Some(primitive),
+                Primitive::Group { primitives, .. } => Some(text_box_primitive(primitives)),
+                _ => None,
+            })
+            .unwrap()
+    }
+
+    fn group_chain(primitives: &[Primitive], matrix: Affine) -> Affine {
+        primitives
+            .iter()
+            .find_map(|primitive| match primitive {
+                Primitive::Group {
+                    primitives,
+                    transform,
+                    ..
+                } => Some(group_chain(primitives, matrix.compose(*transform))),
+                _ => None,
+            })
+            .unwrap_or(matrix)
+    }
+
+    fn labelled(id: u32, pin_x: f64, pin_y: f64) -> Shape {
+        let mut shape = shape(id, pin_x, pin_y);
+        with_cell(&mut shape, "LocPinX", "0.25");
+        with_cell(&mut shape, "LocPinY", "0.25");
+        shape
+            .children
+            .push(ShapeChild::Text(vec![TextToken::Literal("ab".into())]));
+        shape
+    }
+
+    #[test]
+    fn flipping_a_shape_leaves_its_text_unmirrored_over_the_shape() {
+        for (flip_x, flip_y) in [(0, 0), (1, 0), (0, 1), (1, 1)] {
+            let mut flipped = labelled(1, 4.0, 4.0);
+            with_cell(&mut flipped, "FlipX", &flip_x.to_string());
+            with_cell(&mut flipped, "FlipY", &flip_y.to_string());
+            let list = render(vec![flipped]);
+            let Primitive::TextBox { transform, .. } = text_box(&list) else {
+                unreachable!()
+            };
+            assert_point_close((transform.a, transform.b), (1.0, 0.0));
+            assert_point_close((transform.c, transform.d), (0.0, 1.0));
+            let text = text_box_corners(&list);
+            let Primitive::Shape { path, .. } = shape_primitive(&list, 1) else {
+                unreachable!()
+            };
+            let box_of = path_bounds(path);
+            assert!(
+                text.0 >= box_of.0 - 1e-5
+                    && text.1 >= box_of.1 - 1e-5
+                    && text.2 <= box_of.2 + 1e-5
+                    && text.3 <= box_of.3 + 1e-5,
+                "flip ({flip_x},{flip_y}) put the text at {text:?}, outside {box_of:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn rotating_a_flipped_shape_keeps_the_rotation_without_the_mirror() {
+        for (flip_x, flip_y) in [(1, 0), (0, 1), (1, 1)] {
+            let mut flipped = labelled(1, 4.0, 4.0);
+            with_cell(
+                &mut flipped,
+                "Angle",
+                &std::f64::consts::FRAC_PI_4.to_string(),
+            );
+            with_cell(&mut flipped, "FlipX", &flip_x.to_string());
+            with_cell(&mut flipped, "FlipY", &flip_y.to_string());
+            let list = render(vec![flipped]);
+            let Primitive::TextBox { transform, .. } = text_box(&list) else {
+                unreachable!()
+            };
+            assert_point_close(
+                (transform.a, transform.b),
+                (
+                    std::f32::consts::FRAC_1_SQRT_2,
+                    std::f32::consts::FRAC_1_SQRT_2,
+                ),
+            );
+            assert_point_close(
+                (transform.c, transform.d),
+                (
+                    -std::f32::consts::FRAC_1_SQRT_2,
+                    std::f32::consts::FRAC_1_SQRT_2,
+                ),
+            );
+        }
+    }
+
+    #[test]
+    fn flipped_groups_keep_nested_text_unmirrored_over_its_own_shape() {
+        for (flip_x, flip_y) in [(1, 0), (0, 1), (1, 1)] {
+            let inner = labelled(3, 0.5, 0.5);
+            let middle = group(2, 1.0, 1.0, vec![inner]);
+            let mut outer = group(1, 4.0, 4.0, vec![middle]);
+            with_cell(&mut outer, "FlipX", &flip_x.to_string());
+            with_cell(&mut outer, "FlipY", &flip_y.to_string());
+            let list = render(vec![outer]);
+            let text = text_box_corners(&list);
+            let matrix = group_chain(&list.primitives, Affine::identity());
+            let Primitive::TextBox { transform, .. } = text_box_primitive(&list.primitives) else {
+                unreachable!()
+            };
+            let composed = matrix.compose(*transform);
+            assert_point_close((composed.a, composed.b), (1.0, 0.0));
+            assert_point_close((composed.c, composed.d), (0.0, 1.0));
+            let (mut path, shape_matrix) =
+                nested_shape(&list.primitives, "page:3", Affine::identity()).unwrap();
+            for command in &mut path {
+                transform_affine(command, shape_matrix);
+            }
+            let box_of = path_bounds(&path);
+            assert!(
+                text.0 >= box_of.0 - 1e-5
+                    && text.1 >= box_of.1 - 1e-5
+                    && text.2 <= box_of.2 + 1e-5
+                    && text.3 <= box_of.3 + 1e-5,
+                "group flip ({flip_x},{flip_y}) put the text at {text:?}, outside {box_of:?}"
+            );
+        }
+    }
+
+    fn path_bounds(path: &[GeometryPathCommand]) -> (f32, f32, f32, f32) {
+        path.iter().fold(
+            (
+                f32::INFINITY,
+                f32::INFINITY,
+                f32::NEG_INFINITY,
+                f32::NEG_INFINITY,
+            ),
+            |acc, command| {
+                let (x, y) = match *command {
+                    GeometryPathCommand::Move { x, y } | GeometryPathCommand::Line { x, y } => {
+                        (x as f32, y as f32)
+                    }
+                    _ => return acc,
+                };
+                (acc.0.min(x), acc.1.min(y), acc.2.max(x), acc.3.max(y))
+            },
+        )
+    }
+
     #[test]
     fn flip_is_only_final_paint_transform() {
         let transform = final_paint_transform(10.0);
@@ -4745,6 +4946,25 @@ mod tests {
     }
 
     #[test]
+    fn non_positive_stroke_width_falls_back_to_the_default() {
+        for weight in ["0", "-2"] {
+            let mut line = shape(1, 1.0, 1.0);
+            with_cell(&mut line, "LineWeight", weight);
+            let list = render(vec![line]);
+            let Primitive::Shape {
+                stroke,
+                diagnostics,
+                ..
+            } = &list.primitives[0]
+            else {
+                panic!("non-positive stroke width did not render");
+            };
+            assert_eq!(stroke.as_ref().unwrap().width, 0.01);
+            assert!(diagnostics.is_empty());
+        }
+    }
+
+    #[test]
     fn unresolvable_stroke_defaults_stroke_and_keeps_fill() {
         let mut lined = shape(1, 1.0, 1.0);
         lined.children.retain(
@@ -5238,19 +5458,23 @@ mod tests {
             unreachable!()
         };
         // The text box's own x/y/width/height stay in the shape's local, pre-transform frame;
-        // composing the group chain with the primitive's own transform carries the local text
-        // box, its lines and its caret stops into scene coordinates.
-        let page = group.compose(*transform);
+        // its transform is the half-turn about the shape's own box that cancels the outer
+        // FlipX and the inner FlipY, so the glyphs sit unmirrored over the same parallelogram
+        // the geometry covers and every page-space expectation below is the point reflection
+        // of the unflipped one about M(0.5, 0.5) = (8.577788, 9.756235).
+        let text_page = group.compose(*transform);
         assert_point_close((*x, *y), (0.0, 0.0));
         assert_point_close((*width, *height), (1.0, 1.0));
-        assert_eq!(*transform, Affine::identity());
+        assert_point_close((transform.a, transform.b), (-1.0, 0.0));
+        assert_point_close((transform.c, transform.d), (0.0, -1.0));
+        assert_point_close((transform.e, transform.f), (1.0, 1.0));
         assert_point_close(
-            page.apply_point(lines[0].x, lines[0].y),
-            (8.429537, 9.975697),
+            text_page.apply_point(lines[0].x, lines[0].y),
+            (8.726039, 9.536773),
         );
         assert_point_close(
-            page.apply_point(lines[0].caret_stops[1].x, lines[0].caret_stops[1].y),
-            (8.411563, 9.908618),
+            text_page.apply_point(lines[0].caret_stops[1].x, lines[0].caret_stops[1].y),
+            (8.744013, 9.603852),
         );
         let Primitive::Image {
             x,
@@ -5288,7 +5512,7 @@ mod tests {
         assert_point_close((*width, *height), (1.0, 1.0));
         let z_orders = inner.iter().map(z_order).collect::<Vec<_>>();
         assert_eq!(z_orders, vec![2, 3, 4, 5]);
-        let inside = group.apply_point(0.05, 0.05);
+        let inside = text_page.apply_point(0.05, 0.05);
         assert_eq!(
             hit_test(&list, inside.0 * 96.0, (11.0 - inside.1) * 96.0),
             Some(HitTestResult::Text {
@@ -5483,6 +5707,60 @@ mod tests {
             text.master_inherited,
         );
         assert_eq!(text.integrity_diagnostics, 0, "text-integrity diagnostics");
+    }
+
+    #[test]
+    fn every_shape_transform_resolves() {
+        let renderer = Renderer::default();
+        let totals = |bytes: &[u8]| {
+            let package = vsdx_parse::parse_vsdx(bytes).unwrap();
+            package
+                .page_part_paths
+                .iter()
+                .map(|page| {
+                    transform_totals(&renderer.layout_page(&package, page).unwrap().primitives)
+                })
+                .fold((0usize, 0usize), |sum, page| {
+                    (sum.0 + page.0, sum.1 + page.1)
+                })
+        };
+        let mut files = 1usize;
+        let (painted, mut unresolvable) = totals(include_bytes!(
+            "../../vsdx-parse/tests/fixtures/transform-sources.vsdx"
+        ));
+        assert_eq!(painted, 5, "painted transform-source shapes");
+        if let Ok(directory) = std::env::var("VSDX_CORPUS_DIR") {
+            let mut paths = std::fs::read_dir(&directory)
+                .unwrap()
+                .filter_map(|entry| entry.ok().map(|entry| entry.path()))
+                .filter(|path| {
+                    path.extension()
+                        .is_some_and(|extension| extension == "vsdx" || extension == "vstx")
+                })
+                .collect::<Vec<_>>();
+            paths.sort();
+            assert!(!paths.is_empty(), "expected VSDX files in VSDX_CORPUS_DIR");
+            files += paths.len();
+            for path in &paths {
+                unresolvable += totals(&std::fs::read(path).unwrap()).1;
+            }
+        }
+        eprintln!("VSDX transforms: files={files} unresolvable={unresolvable}");
+        assert_eq!(unresolvable, 0, "unresolvable transforms");
+    }
+
+    fn transform_totals(primitives: &[Primitive]) -> (usize, usize) {
+        primitives
+            .iter()
+            .map(|primitive| match primitive {
+                Primitive::Shape { .. } => (1, 0),
+                Primitive::Placeholder { reason, .. } => {
+                    (0, usize::from(reason == "unresolvable transform"))
+                }
+                Primitive::Group { primitives, .. } => transform_totals(primitives),
+                _ => (0, 0),
+            })
+            .fold((0, 0), |sum, item| (sum.0 + item.0, sum.1 + item.1))
     }
 
     #[test]
