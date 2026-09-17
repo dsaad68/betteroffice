@@ -4,6 +4,7 @@ use crate::GeometryPathCommand;
 
 const ELLIPSE_KAPPA: f64 = 0.552_284_749_830_793_6;
 const ROUND_RECT_ADJUSTMENT: f64 = 0.166_67;
+/// The `vf` that puts a hexagon's corners on its frame; larger values would leave it.
 const HEXAGON_VERTICAL_FACTOR: f64 = 1.154_7;
 
 pub fn preset_geometry_default_adjustments(shape_type: &str) -> HashMap<String, f64> {
@@ -112,11 +113,11 @@ pub fn preset_geometry_to_path(
         "hexagon" => {
             let adjustment =
                 shortest_side_adjustment(adjustments.get("adj").copied(), 0.25, 0.5, aspect_ratio);
-            let vertical_factor = adjustments
-                .get("vf")
-                .copied()
-                .filter(|value| value.is_finite())
-                .unwrap_or(HEXAGON_VERTICAL_FACTOR);
+            let vertical_factor = pin(
+                adjustments.get("vf").copied(),
+                HEXAGON_VERTICAL_FACTOR,
+                HEXAGON_VERTICAL_FACTOR,
+            );
             let rise = 0.5 * vertical_factor * std::f64::consts::FRAC_PI_3.sin();
             polygon(&[
                 (adjustment, 0.5 - rise),
@@ -760,6 +761,21 @@ mod tests {
             vertex("hexagon", &[("vf", 0.5)], 4.0, 0).1,
             0.5 - 0.25 * 3f64.sqrt() / 2.0,
         );
+    }
+
+    #[test]
+    fn hexagon_vertical_factor_pins_inside_the_frame() {
+        for vf in [1.2, 40.0, f64::INFINITY] {
+            assert_eq!(
+                vertex("hexagon", &[("vf", vf)], 4.0, 0),
+                vertex("hexagon", &[], 4.0, 0),
+                "{vf}"
+            );
+        }
+        for vf in [0.0, -3.0] {
+            assert_close(vertex("hexagon", &[("vf", vf)], 4.0, 0).1, 0.5);
+            assert_close(vertex("hexagon", &[("vf", vf)], 4.0, 3).1, 0.5);
+        }
     }
 
     #[test]
