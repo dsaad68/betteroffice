@@ -892,10 +892,15 @@ fn parse_change_target(doc: &EditingDoc, target_json: &str) -> Result<ChangeTarg
 
 /// Parses the render bridge's host context from JSON:
 /// `{ "themeColors": {name: hex}, "defaultTabStopTwips": number|null,
-/// "pageContentHeight": number|null, "numericIds": {yrsId: number} }`.
+/// "pageContentHeight": number|null, "numericIds": {yrsId: number},
+/// "showHiddenText": bool, "defaultParagraphStyleId": string }`.
 fn parse_render_env(env_json: &str) -> Result<crate::bridge::RenderEnv, JsValue> {
     let value: Value = serde_json::from_str(env_json).map_err(js_err)?;
     let mut env = crate::bridge::RenderEnv::default();
+    if let Some(Value::Array(ids)) = value.get("tocStyleIds") {
+        env.toc_style_ids
+            .extend(ids.iter().filter_map(Value::as_str).map(str::to_owned));
+    }
     if let Some(Value::Object(colors)) = value.get("themeColors") {
         for (key, entry) in colors {
             if let Some(hex) = entry.as_str() {
@@ -905,6 +910,15 @@ fn parse_render_env(env_json: &str) -> Result<crate::bridge::RenderEnv, JsValue>
     }
     env.default_tab_stop_twips = value.get("defaultTabStopTwips").and_then(Value::as_f64);
     env.page_content_height = value.get("pageContentHeight").and_then(Value::as_f64);
+    env.default_paragraph_style_id = value
+        .get("defaultParagraphStyleId")
+        .and_then(Value::as_str)
+        .filter(|style| !style.is_empty())
+        .map(str::to_owned);
+    env.show_hidden_text = value
+        .get("showHiddenText")
+        .and_then(Value::as_bool)
+        .unwrap_or(false);
     if let Some(Value::Object(ids)) = value.get("numericIds") {
         for (key, entry) in ids {
             if let Some(id) = entry.as_f64() {
@@ -3290,7 +3304,9 @@ impl EditSession {
     /// table vocabulary the layout engine consumes. `env_json` supplies the
     /// document-level values lowering cannot read off the story:
     /// `{"themeColors":{slot: hex},"defaultTabStopTwips":number|null,
-    /// "pageContentHeight":number|null,"numericIds":{yrsId: number}}`, all
+    /// "pageContentHeight":number|null,"numericIds":{yrsId: number},
+    /// "tocStyleIds":[styleId],"showHiddenText":bool,
+    /// "defaultParagraphStyleId":string}`, all
     /// optional. Errors when the story does not end in a pilcrow, holds a
     /// malformed table, references itself through a cell story, or contains an
     /// embed lowering does not support.
