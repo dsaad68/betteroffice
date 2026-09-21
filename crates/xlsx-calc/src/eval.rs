@@ -363,7 +363,17 @@ pub fn evaluate(expr: &Expr, ctx: &EvalContext<'_>) -> CellValue {
         Expr::Error(e) => err(*e),
         Expr::Ref { sheet, cell } => resolve_ref(sheet, *cell, ctx),
         // no implicit intersection: a bare range in scalar context is #VALUE!
-        Expr::Range { .. } | Expr::ColumnRange { .. } => err(ErrorValue::Value),
+        Expr::Range { .. } | Expr::ColumnRange { .. } | Expr::RowRange { .. } => {
+            err(ErrorValue::Value)
+        }
+        Expr::RangeJoin { start, end } => match range_join_area(start, end, ctx) {
+            Ok(area) if area.rows == 1 && area.cols == 1 => match area.get(ctx, 0, 0) {
+                Ok(value) => value,
+                Err(error) => err(error),
+            },
+            Ok(_) => err(ErrorValue::Value),
+            Err(error) => err(error),
+        },
         Expr::TableRef { table, spec } => match table_area(table, spec, ctx) {
             Ok(area) if area.rows == 1 && area.cols == 1 => match area.get(ctx, 0, 0) {
                 Ok(value) => value,
@@ -531,11 +541,13 @@ fn eval_unary(op: UnaryOp, expr: &Expr, ctx: &EvalContext<'_>) -> CellValue {
 }
 
 pub(crate) fn apply_unary(op: UnaryOp, v: &CellValue) -> CellValue {
+    // the lotus-style leading `+` passes its operand through whatever it is,
+    // so `+A1` on text is that text; only negation needs a number
+    if op == UnaryOp::Plus {
+        return v.clone();
+    }
     match to_number(v) {
-        Ok(n) => match op {
-            UnaryOp::Neg => num(-n),
-            UnaryOp::Plus => num(n),
-        },
+        Ok(n) => num(-n),
         Err(e) => err(e),
     }
 }
@@ -654,8 +666,25 @@ pub(crate) fn cmp_values(a: &CellValue, b: &CellValue) -> std::cmp::Ordering {
     }
 }
 
-fn cmp_text(a: &str, b: &str) -> std::cmp::Ordering {
-    a.to_lowercase().cmp(&b.to_lowercase())
+pub(crate) fn cmp_text(a: &str, b: &str) -> std::cmp::Ordering {
+    a.to_lowercase()
+        .chars()
+        .map(collation_key)
+        .cmp(b.to_lowercase().chars().map(collation_key))
+}
+
+/// excel orders text by a collation rather than by code point: punctuation
+/// and symbols come before digits, and digits before letters. that is what
+/// puts `[Person_1]` above `[Person_10]`, where `]` against `0` would not.
+fn collation_key(ch: char) -> (u8, char) {
+    let class = if ch.is_alphabetic() {
+        2
+    } else if ch.is_numeric() {
+        1
+    } else {
+        0
+    };
+    (class, ch)
 }
 
 fn type_rank(v: &CellValue) -> u8 {
@@ -709,10 +738,64 @@ pub(crate) fn to_bool(v: &CellValue) -> Result<bool, ErrorValue> {
 }
 
 pub(crate) fn parse_num(s: &str) -> Option<f64> {
-    s.trim()
-        .parse::<f64>()
-        .ok()
-        .filter(|value| value.is_finite())
+    let s = s.trim();
+    if let Ok(value) = s.parse::<f64>() {
+        return value.is_finite().then_some(value);
+    }
+    if let Some(rest) = s.strip_suffix('%') {
+        return parse_num(rest).map(|value| value / 100.0);
+    }
+    parse_mixed_fraction(s).or_else(|| parse_clock(s))
+}
+
+/// a mixed number — `"1 1/4"` — as excel coerces it. a bare `"1/4"` is not
+/// one: excel reads that as a date, so it stays for the caller to refuse.
+fn parse_mixed_fraction(s: &str) -> Option<f64> {
+    let (whole, fraction) = s.split_once(' ')?;
+    let (numerator, denominator) = fraction.trim_start().split_once('/')?;
+    let digits = |text: &str| {
+        (!text.is_empty() && text.bytes().all(|byte| byte.is_ascii_digit()))
+            .then(|| text.parse::<f64>().ok())
+            .flatten()
+    };
+    let (sign, whole) = match whole.strip_prefix('-') {
+        Some(rest) => (-1.0, rest),
+        None => (1.0, whole.strip_prefix('+').unwrap_or(whole)),
+    };
+    let whole = digits(whole)?;
+    let numerator = digits(numerator)?;
+    let denominator = digits(denominator).filter(|value| *value != 0.0)?;
+    Some(sign * (whole + numerator / denominator))
+}
+
+/// a text time — `"0:15"`, `"12:30:45"`, either with a meridiem — as the
+/// fraction of a day excel coerces it to.
+pub(crate) fn parse_clock(s: &str) -> Option<f64> {
+    let (body, pm) = match s.to_ascii_uppercase() {
+        upper if upper.ends_with("AM") => (s[..s.len() - 2].trim_end(), Some(false)),
+        upper if upper.ends_with("PM") => (s[..s.len() - 2].trim_end(), Some(true)),
+        _ => (s, None),
+    };
+    let mut parts = body.split(':');
+    let hour: f64 = parts.next()?.trim().parse().ok()?;
+    let minute: f64 = parts.next()?.trim().parse().ok()?;
+    let second: f64 = match parts.next() {
+        Some(text) => text.trim().parse().ok()?,
+        None => 0.0,
+    };
+    if parts.next().is_some() || !(0.0..60.0).contains(&minute) || !(0.0..60.0).contains(&second) {
+        return None;
+    }
+    if hour < 0.0 || hour.fract() != 0.0 || minute.fract() != 0.0 {
+        return None;
+    }
+    let hour = match pm {
+        Some(_) if !(1.0..=12.0).contains(&hour) => return None,
+        Some(true) if hour < 12.0 => hour + 12.0,
+        Some(false) if hour == 12.0 => 0.0,
+        _ => hour,
+    };
+    Some((hour * 3600.0 + minute * 60.0 + second) / 86400.0)
 }
 
 /// excel "general" number formatting, good enough for text coercion: integers
@@ -727,8 +810,33 @@ pub(crate) fn format_number(n: f64) -> String {
     format!("{n}")
 }
 
+/// a reference cut to the extent the sheet uses, so a whole-column or
+/// whole-row argument costs the authored data rather than a million blanks.
+pub(crate) fn bound_area(mut area: Area, ctx: &EvalContext<'_>) -> Area {
+    if area.rows >= xlsx_model::MAX_ROWS as usize {
+        area.rows = used_height(&area, ctx);
+    }
+    if area.cols >= xlsx_model::MAX_COLS as usize {
+        area.cols = used_width(&area, ctx);
+    }
+    area
+}
+
+pub(crate) fn used_height(area: &Area, ctx: &EvalContext<'_>) -> usize {
+    (ctx.provider.used_rows(area.sheet) as usize)
+        .saturating_sub(area.start.row as usize)
+        .max(1)
+}
+
+pub(crate) fn used_width(area: &Area, ctx: &EvalContext<'_>) -> usize {
+    (ctx.provider.used_cols(area.sheet) as usize)
+        .saturating_sub(area.start.col as usize)
+        .max(1)
+}
+
 /// a resolved rectangular reference: absolute top-left plus dimensions on a
 /// known sheet, for positional access by function modules.
+#[derive(Clone, Copy)]
 pub(crate) struct Area {
     pub sheet: SheetId,
     pub start: CellRef,
@@ -775,15 +883,19 @@ impl Area {
         &self,
         ctx: &EvalContext<'p>,
     ) -> Result<Vec<Cow<'p, CellValue>>, ErrorValue> {
-        let count = self.cell_count().ok_or(ErrorValue::Num)?;
+        // reading a whole-column or whole-row band for its values costs the
+        // extent the sheet reaches; the blanks past it contribute nothing and
+        // would spend the recalculation's budget on the address space
+        let area = bound_area(*self, ctx);
+        let count = area.cell_count().ok_or(ErrorValue::Num)?;
         if !ctx.consume_cells(count) {
             return Err(ErrorValue::Num);
         }
         let capacity = usize::try_from(count).map_err(|_| ErrorValue::Num)?;
         let mut out = Vec::with_capacity(capacity);
-        for row in 0..self.rows {
-            for col in 0..self.cols {
-                out.push(self.get_unmetered_ref(ctx, row, col));
+        for row in 0..area.rows {
+            for col in 0..area.cols {
+                out.push(area.get_unmetered_ref(ctx, row, col));
             }
         }
         Ok(out)
@@ -793,6 +905,18 @@ impl Area {
         u64::try_from(self.rows)
             .ok()?
             .checked_mul(u64::try_from(self.cols).ok()?)
+    }
+}
+
+/// the rectangle a reference argument designates, or the error excel reports
+/// for it: an unresolved name is #NAME? wherever it appears, not a bad value.
+pub(crate) fn required_area(arg: &Expr, ctx: &EvalContext<'_>) -> Result<Area, ErrorValue> {
+    match as_area(arg, ctx) {
+        Some(area) => Ok(area),
+        None => match evaluate(arg, ctx) {
+            CellValue::Error { value } => Err(value),
+            _ => Err(ErrorValue::Value),
+        },
     }
 }
 
@@ -828,6 +952,13 @@ pub(crate) fn as_area(arg: &Expr, ctx: &EvalContext<'_>) -> Option<Area> {
             rows: xlsx_model::addr::MAX_ROWS as usize,
             cols: (range.end - range.start + 1) as usize,
         }),
+        Expr::RowRange { sheet, range } => Some(Area {
+            sheet: resolve_sheet(sheet, ctx)?,
+            start: CellRef::new(range.start, 0),
+            rows: (range.end - range.start + 1) as usize,
+            cols: xlsx_model::addr::MAX_COLS as usize,
+        }),
+        Expr::RangeJoin { start, end } => range_join_area(start, end, ctx).ok(),
         Expr::TableRef { table, spec } => table_area(table, spec, ctx).ok(),
         Expr::Name { scope, name } => {
             if let Some(binding) = bound(scope, name, ctx) {
@@ -838,6 +969,57 @@ pub(crate) fn as_area(arg: &Expr, ctx: &EvalContext<'_>) -> Option<Area> {
             ctx.inside_defined_name(&definition, as_area)
         }
         _ => None,
+    }
+}
+
+/// the rectangle `start:end` designates, on the sheet both ends share. it
+/// reports why an end has no rectangle, so a failed `MATCH` inside
+/// `A1:INDEX(..)` surfaces as that end's own error.
+pub(crate) fn range_join_area(
+    start: &Expr,
+    end: &Expr,
+    ctx: &EvalContext<'_>,
+) -> Result<Area, ErrorValue> {
+    let a = endpoint_area(start, ctx)?;
+    let b = endpoint_area(end, ctx)?;
+    if a.sheet != b.sheet {
+        return Err(ErrorValue::Ref);
+    }
+    let last = |area: &Area| {
+        (
+            area.start.row.saturating_add(area.rows as u32 - 1),
+            area.start.col.saturating_add(area.cols as u32 - 1),
+        )
+    };
+    let (a_bottom, a_right) = last(&a);
+    let (b_bottom, b_right) = last(&b);
+    let top = a.start.row.min(b.start.row);
+    let left = a.start.col.min(b.start.col);
+    Ok(Area {
+        sheet: a.sheet,
+        start: CellRef::new(top, left),
+        rows: (a_bottom.max(b_bottom) - top + 1) as usize,
+        cols: (a_right.max(b_right) - left + 1) as usize,
+    })
+}
+
+/// one end of a `:` join. the reference-returning builtins already report
+/// their own errors, so those pass straight through.
+fn endpoint_area(expr: &Expr, ctx: &EvalContext<'_>) -> Result<Area, ErrorValue> {
+    match expr {
+        Expr::FuncCall { name, args, .. } if name.eq_ignore_ascii_case("OFFSET") => {
+            crate::functions::lookups::offset_area(args, ctx)
+        }
+        Expr::FuncCall { name, args, .. } if name.eq_ignore_ascii_case("INDEX") => {
+            crate::functions::lookups::index_area(args, ctx)
+        }
+        Expr::FuncCall { name, args, .. } if name.eq_ignore_ascii_case("INDIRECT") => {
+            crate::functions::lookups::indirect_area(args, ctx)
+        }
+        Expr::TableRef { table, spec } => table_area(table, spec, ctx),
+        Expr::RangeJoin { start, end } => range_join_area(start, end, ctx),
+        Expr::Error(value) => Err(*value),
+        _ => as_area(expr, ctx).ok_or(ErrorValue::Ref),
     }
 }
 
@@ -890,6 +1072,27 @@ fn provider_error(value: &CellValue) -> Option<ErrorValue> {
 
 #[cfg(test)]
 mod tests {
+
+    /// excel coerces a text time or percentage to a number, so `"0:15"+0` and
+    /// `MROUND(x,"0:15")` work on the strings a schedule is written with.
+    #[test]
+    fn text_coercion_reads_a_clock_and_a_percentage() {
+        assert_eq!(parse_num("12"), Some(12.0));
+        assert_eq!(parse_num(" 1.5 "), Some(1.5));
+        assert_eq!(parse_num("50%"), Some(0.5));
+        assert_eq!(parse_num("0:15"), Some(0.25 / 24.0));
+        assert_eq!(parse_num("12:00"), Some(0.5));
+        assert_eq!(
+            parse_num("12:30:45"),
+            Some((12.0 * 3600.0 + 30.0 * 60.0 + 45.0) / 86400.0)
+        );
+        assert_eq!(parse_num("1:30 PM"), Some(13.5 / 24.0));
+        assert_eq!(parse_num("12:00 AM"), Some(0.0));
+        assert_eq!(parse_num("abc"), None);
+        assert_eq!(parse_num("1:60"), None);
+        assert_eq!(parse_num("1:2:3:4"), None);
+        assert_eq!(parse_num("13:00 PM"), None);
+    }
     use super::*;
     use crate::parse_formula;
     use xlsx_model::{Cell, DefinedName, Sheet, Workbook};
@@ -1102,6 +1305,14 @@ mod tests {
         let mut workbook = Workbook::default();
         workbook.sheets.push(Sheet::new("Data"));
         workbook.sheets.push(Sheet::new("Formula"));
+        // a cell in the far corner gives Data the extent the guard is for
+        workbook.sheet_mut(SheetId(0)).unwrap().set_cell(
+            CellRef::parse_a1("XFD1048576").unwrap(),
+            xlsx_model::Cell {
+                value: CellValue::Number { value: 1.0 },
+                ..xlsx_model::Cell::default()
+            },
+        );
         let expression = parse_formula("SUM(Data!A1:XFD1048576)").unwrap();
         let context = EvalContext::new(&workbook, SheetId(1));
         assert_eq!(
