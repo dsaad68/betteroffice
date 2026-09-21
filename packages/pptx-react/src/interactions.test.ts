@@ -17,7 +17,6 @@ import {
   handleAnchor,
   hoverTargetAtPoint,
   indexShapes,
-  inheritsShapeRect,
   pointerTargetAtPoint,
   movedShapeRect,
   passedDragThreshold,
@@ -159,14 +158,19 @@ describe('pptx interactions', () => {
       width: 10_515_600,
       height: 1_325_563,
     });
-    expect(inheritsShapeRect(inherited)).toBe(true);
-    expect(inheritsShapeRect(picture)).toBe(false);
   });
 
   it('refuses a rotated inherited frame the same way it refuses a rotated local one', () => {
     const rotated = { ...inherited, inherited: { ...inherited.inherited!, rotationDeg: 90 } };
     expect(canResizeShape(rotated)).toBe(false);
     expect(canMoveShape(rotated)).toBe(true);
+    expect(resizedShapeBox(deck, frame, rotated, 'se', { x: 10, y: 10 })).toBeNull();
+    expect(movedShapeRect(deck, frame, rotated, { x: 0, y: 200 })).toEqual({
+      x: 838_200,
+      y: 365_125 + 1_905_000,
+      width: 10_515_600,
+      height: 1_325_563,
+    });
   });
 
   it('uses descendant primitive bounds for a group', () => {

@@ -133,12 +133,6 @@ export function effectiveShapeRect(shape: ShapeSnapshot): ShapeRect | null {
   };
 }
 
-/** Whether the first geometry edit has to materialize the inherited rectangle
- *  instead of moving the shape's own. */
-export function inheritsShapeRect(shape: ShapeSnapshot): boolean {
-  return (shape.width <= 0 || shape.height <= 0) && effectiveShapeRect(shape) !== null;
-}
-
 export function canMoveShape(shape: ShapeSnapshot): boolean {
   return effectiveShapeRect(shape) !== null;
 }

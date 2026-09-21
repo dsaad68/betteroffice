@@ -7,7 +7,7 @@ use ooxml_drawingml::{
     preset_geometry_to_path, resolve_color_value_to_hex, resolve_color_value_to_hex_with_theme,
 };
 use pptx_parse::{
-    ChartAxis, ChartSpace, GraphicFrameData, PptxPackage, ShapeBase, ShapeNode, Slide,
+    ChartAxis, ChartSpace, GraphicFrameData, Placeholder, PptxPackage, ShapeBase, ShapeNode, Slide,
 };
 use serde::de::DeserializeOwned;
 use yrs::{
@@ -18,7 +18,7 @@ use yrs::{
 use crate::comments::{
     baseline_comments, flavor_key, seed_comments, snapshot_comments, snapshot_flavor,
 };
-use crate::inherit::{SlideContext, record_inherited};
+use crate::inherit::{SlideContext, has_own_transform, inherited_transform, record_inherited};
 use crate::story::{baseline_story, seed_plain_story, seed_story, snapshot_story, validate_story};
 use crate::{
     DeckSession, DeckSnapshot, EditCtx, EditError, EditResult, META, MIGRATE_ORIGIN, PendingMedia,
@@ -748,6 +748,7 @@ impl DeckSession {
         let mut txn = self.transact_for(context);
         require_shape_membership(&txn, slide_id, shape_id)?;
         let shape = shape_ref(&txn, shape_id)?;
+        self.materialize_inherited(&mut txn, slide_id, &shape)?;
         let before = shape_rect(&shape, &txn)?;
         shape.insert(&mut txn, "x", x as f64);
         shape.insert(&mut txn, "y", y as f64);
@@ -861,6 +862,7 @@ impl DeckSession {
         let mut txn = self.transact_for(context);
         require_shape_membership(&txn, slide_id, shape_id)?;
         let shape = shape_ref(&txn, shape_id)?;
+        self.materialize_inherited(&mut txn, slide_id, &shape)?;
         let before = shape_rect(&shape, &txn)?;
         shape.insert(&mut txn, "width", width as f64);
         shape.insert(&mut txn, "height", height as f64);
@@ -887,6 +889,7 @@ impl DeckSession {
         let mut txn = self.transact_for(context);
         require_shape_membership(&txn, slide_id, shape_id)?;
         let shape = shape_ref(&txn, shape_id)?;
+        self.materialize_inherited(&mut txn, slide_id, &shape)?;
         let before = shape_rect(&shape, &txn)?;
         shape.insert(&mut txn, "x", rect.x as f64);
         shape.insert(&mut txn, "y", rect.y as f64);
@@ -898,6 +901,44 @@ impl DeckSession {
             before,
             after: rect,
         })
+    }
+
+    /// Writes the whole inherited transform onto a placeholder that still has
+    /// none of its own, so a geometry edit never leaves half of one behind.
+    fn materialize_inherited(
+        &self,
+        txn: &mut TransactionMut<'_>,
+        slide_id: &str,
+        shape: &MapRef,
+    ) -> EditResult<()> {
+        let rect = shape_rect(shape, txn)?;
+        if rect.width > 0 && rect.height > 0 {
+            return Ok(());
+        }
+        let placeholder: Option<Placeholder> = optional_json(shape, txn, "placeholderJson")?;
+        let source_id = required_u32(shape, txn, "sourceId")?;
+        let slide = slide_ref(txn, slide_id)?;
+        let source_part_path = map_string(&slide, txn, "sourcePartPath");
+        let layout_part_path = map_string(&slide, txn, "layoutPartPath");
+        let context = SlideContext::new(
+            &self.package,
+            source_part_path.as_deref(),
+            layout_part_path.as_deref(),
+        );
+        if has_own_transform(&context, source_id) {
+            return Ok(());
+        }
+        let Some(transform) = inherited_transform(placeholder.as_ref(), &context).cloned() else {
+            return Ok(());
+        };
+        shape.insert(txn, "x", transform.x as f64);
+        shape.insert(txn, "y", transform.y as f64);
+        shape.insert(txn, "width", transform.width as f64);
+        shape.insert(txn, "height", transform.height as f64);
+        shape.insert(txn, "rotationDeg", transform.rotation_deg);
+        shape.insert(txn, "flipH", transform.flip_h);
+        shape.insert(txn, "flipV", transform.flip_v);
+        Ok(())
     }
 }
 

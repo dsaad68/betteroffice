@@ -63,7 +63,6 @@ import {
   gestureOwnsPointer,
   pointerTargetAtPoint,
   indexShapes,
-  inheritsShapeRect,
   movedShapeRect,
   passedDragThreshold,
   handleAnchor,
@@ -1453,8 +1452,7 @@ function PptxEditorContent({
         y: gesture.last.y - gesture.start.y,
       });
       if (before && rect && (rect.x !== before.x || rect.y !== before.y)) {
-        if (inheritsShapeRect(shape)) handle.setShapeRect(slide.id, shape.id, rect);
-        else handle.moveShape(slide.id, shape.id, rect.x, rect.y);
+        handle.moveShape(slide.id, shape.id, rect.x, rect.y);
         refreshAt(undefined, true);
       }
       setShapeSelection({ slideId: slide.id, shapeId: shape.id });

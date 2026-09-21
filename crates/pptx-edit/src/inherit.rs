@@ -102,6 +102,27 @@ pub(crate) fn inherited_transform<'a>(
         .find(|transform| transform.width > 0 && transform.height > 0)
 }
 
+/// Whether the slide's own node spells out a transform, which an edit keeps
+/// instead of replacing with the inherited one.
+pub(crate) fn has_own_transform(context: &SlideContext<'_>, source_id: u32) -> bool {
+    find_source_node(context.source_shapes, source_id)
+        .is_some_and(|node| node_transform(node) != &ShapeTransform::default())
+}
+
+fn find_source_node(nodes: &[ShapeNode], source_id: u32) -> Option<&ShapeNode> {
+    for node in nodes {
+        if node.id() == source_id {
+            return Some(node);
+        }
+        if let ShapeNode::Group(group) = node
+            && let Some(found) = find_source_node(&group.children, source_id)
+        {
+            return Some(found);
+        }
+    }
+    None
+}
+
 fn find_placeholder<'a>(nodes: &'a [ShapeNode], target: &Placeholder) -> Option<&'a ShapeNode> {
     for node in nodes {
         if node_placeholder(node).is_some_and(|value| placeholders_match(value, target)) {
