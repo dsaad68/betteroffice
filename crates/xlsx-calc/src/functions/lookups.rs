@@ -10,7 +10,7 @@ use crate::eval::{Area, EvalContext, as_area, cmp_values, err, evaluate, num};
 use crate::parser::Expr;
 use crate::reference::offset_rect;
 
-use super::{nth_int, nth_number};
+use super::{nth_int, nth_int_lifted, nth_number};
 
 /// VLOOKUP(value, table, col_index, [range_lookup]). range_lookup defaults to
 /// TRUE (approximate match on a first column sorted ascending).
@@ -31,9 +31,9 @@ fn table_lookup(args: &[Expr], ctx: &EvalContext<'_>, vertical: bool) -> CellVal
     if let CellValue::Error { value } = target {
         return err(value);
     }
-    let area = match as_area(&args[1], ctx) {
-        Some(a) => a,
-        None => return err(ErrorValue::Value),
+    let area = match crate::eval::required_area(&args[1], ctx) {
+        Ok(a) => crate::eval::bound_area(a, ctx),
+        Err(error) => return err(error),
     };
     let index = match nth_int(args, ctx, 2) {
         Ok(n) => n,
@@ -58,27 +58,41 @@ fn table_lookup(args: &[Expr], ctx: &EvalContext<'_>, vertical: bool) -> CellVal
     if index as usize > depth {
         return err(ErrorValue::Ref);
     }
-    let mut found = None;
-    for i in 0..lines {
-        let key = if vertical {
+    let key = |i: usize| {
+        if vertical {
             area.get_ref(ctx, i, 0)
         } else {
             area.get_ref(ctx, 0, i)
-        };
-        let key = match key {
-            Ok(key) => key,
-            Err(error) => return err(error),
-        };
-        let ordering = cmp_values(key.as_ref(), &target);
-        if approximate {
-            if ordering != Ordering::Greater {
-                found = Some(i);
+        }
+    };
+    let mut found = None;
+    if approximate {
+        // excel binary-searches an approximate lookup, so a header or any
+        // other out-of-order row above the data does not end the search
+        let (mut lo, mut hi) = (0usize, lines);
+        while lo < hi {
+            let mid = lo + (hi - lo) / 2;
+            let key = match key(mid) {
+                Ok(key) => key,
+                Err(error) => return err(error),
+            };
+            if cmp_values(key.as_ref(), &target) == Ordering::Greater {
+                hi = mid;
             } else {
+                found = Some(mid);
+                lo = mid + 1;
+            }
+        }
+    } else {
+        for i in 0..lines {
+            let key = match key(i) {
+                Ok(key) => key,
+                Err(error) => return err(error),
+            };
+            if cmp_values(key.as_ref(), &target) == Ordering::Equal {
+                found = Some(i);
                 break;
             }
-        } else if ordering == Ordering::Equal {
-            found = Some(i);
-            break;
         }
     }
     match found {
@@ -109,10 +123,6 @@ pub(crate) fn match_(args: &[Expr], ctx: &EvalContext<'_>) -> CellValue {
     if let CellValue::Error { value } = target {
         return err(value);
     }
-    let area = match as_area(&args[1], ctx) {
-        Some(a) => a,
-        None => return err(ErrorValue::Value),
-    };
     let match_type = if args.len() == 3 {
         match nth_int(args, ctx, 2) {
             Ok(n) => n,
@@ -121,7 +131,7 @@ pub(crate) fn match_(args: &[Expr], ctx: &EvalContext<'_>) -> CellValue {
     } else {
         1
     };
-    let values = match area.values_ref(ctx) {
+    let values = match block_values(&args[1], ctx) {
         Ok(values) => values,
         Err(error) => return err(error),
     };
@@ -148,6 +158,25 @@ pub(crate) fn match_(args: &[Expr], ctx: &EvalContext<'_>) -> CellValue {
     }
 }
 
+/// the cells a lookup argument offers: a reference reads through to the sheet,
+/// anything else is evaluated as a block, so `MATCH(k, a:a&b:b, 0)` works.
+fn block_values<'p>(
+    arg: &Expr,
+    ctx: &EvalContext<'p>,
+) -> Result<Vec<Cow<'p, CellValue>>, ErrorValue> {
+    if let Some(area) = as_area(arg, ctx) {
+        return area.values_ref(ctx);
+    }
+    match crate::array::evaluate_array(arg, ctx) {
+        crate::array::Value::Array(array) => {
+            Ok(array.into_values().into_iter().map(Cow::Owned).collect())
+        }
+        crate::array::Value::Scalar(CellValue::Error { value }) => Err(value),
+        crate::array::Value::Scalar(value) => Ok(vec![Cow::Owned(value)]),
+        crate::array::Value::Lambda(_) => Err(ErrorValue::Value),
+    }
+}
+
 /// XMATCH(value, array, [match_mode], [search_mode]). match modes: 0 exact,
 /// -1 exact or next smaller, 1 exact or next larger, 2 wildcard (treated as
 /// exact here). a negative search mode scans from the end.
@@ -159,8 +188,9 @@ pub(crate) fn xmatch(args: &[Expr], ctx: &EvalContext<'_>) -> CellValue {
     if let CellValue::Error { value } = target {
         return err(value);
     }
-    let Some(area) = as_area(&args[1], ctx) else {
-        return err(ErrorValue::Value);
+    let area = match crate::eval::required_area(&args[1], ctx) {
+        Ok(area) => area,
+        Err(error) => return err(error),
     };
     let mode = match args.get(2) {
         Some(_) => match nth_int(args, ctx, 2) {
@@ -230,16 +260,16 @@ pub(crate) fn index(args: &[Expr], ctx: &EvalContext<'_>) -> CellValue {
     if args.len() < 2 || args.len() > 3 {
         return err(ErrorValue::Value);
     }
-    let area = match as_area(&args[0], ctx) {
-        Some(a) => a,
-        None => return err(ErrorValue::Value),
+    let area = match crate::eval::required_area(&args[0], ctx) {
+        Ok(a) => a,
+        Err(error) => return err(error),
     };
-    let first = match nth_int(args, ctx, 1) {
+    let first = match nth_int_lifted(args, ctx, 1) {
         Ok(n) => n,
         Err(e) => return err(e),
     };
     let second = if args.len() == 3 {
-        match nth_int(args, ctx, 2) {
+        match nth_int_lifted(args, ctx, 2) {
             Ok(n) => Some(n),
             Err(e) => return err(e),
         }
@@ -267,7 +297,7 @@ pub(crate) fn index_area(args: &[Expr], ctx: &EvalContext<'_>) -> Result<Area, E
     if args.len() < 2 || args.len() > 3 {
         return Err(ErrorValue::Value);
     }
-    let area = as_area(&args[0], ctx).ok_or(ErrorValue::Value)?;
+    let area = crate::eval::required_area(&args[0], ctx)?;
     let first = axis_index(args, ctx, 1)?;
     let second = match args.len() {
         3 => Some(axis_index(args, ctx, 2)?),
@@ -315,7 +345,7 @@ fn axis_index(args: &[Expr], ctx: &EvalContext<'_>, at: usize) -> Result<usize, 
     if args.get(at).is_some_and(crate::functions::omitted) {
         return Ok(0);
     }
-    let value = crate::functions::nth_int(args, ctx, at)?;
+    let value = crate::functions::nth_int_lifted(args, ctx, at)?;
     usize::try_from(value).map_err(|_| ErrorValue::Value)
 }
 
@@ -355,7 +385,7 @@ pub(crate) fn indirect_area(args: &[Expr], ctx: &EvalContext<'_>) -> Result<Area
     let expr = crate::parse_formula(&text).map_err(|_| ErrorValue::Ref)?;
     if !matches!(
         expr,
-        Expr::Ref { .. } | Expr::Range { .. } | Expr::ColumnRange { .. }
+        Expr::Ref { .. } | Expr::Range { .. } | Expr::ColumnRange { .. } | Expr::RowRange { .. }
     ) {
         return Err(ErrorValue::Ref);
     }
@@ -377,15 +407,15 @@ pub(crate) fn offset_area(args: &[Expr], ctx: &EvalContext<'_>) -> Result<Area, 
     if args.len() < 3 || args.len() > 5 {
         return Err(ErrorValue::Value);
     }
-    let anchor = as_area(&args[0], ctx).ok_or(ErrorValue::Value)?;
-    let rows = nth_int(args, ctx, 1)?;
-    let cols = nth_int(args, ctx, 2)?;
+    let anchor = crate::eval::required_area(&args[0], ctx)?;
+    let rows = nth_int_lifted(args, ctx, 1)?;
+    let cols = nth_int_lifted(args, ctx, 2)?;
     let height = match args.get(3) {
-        Some(arg) if !crate::functions::omitted(arg) => Some(nth_int(args, ctx, 3)?),
+        Some(arg) if !crate::functions::omitted(arg) => Some(nth_int_lifted(args, ctx, 3)?),
         _ => None,
     };
     let width = match args.get(4) {
-        Some(arg) if !crate::functions::omitted(arg) => Some(nth_int(args, ctx, 4)?),
+        Some(arg) if !crate::functions::omitted(arg) => Some(nth_int_lifted(args, ctx, 4)?),
         _ => None,
     };
     let bounds = CellRange::new(
@@ -475,13 +505,13 @@ pub(crate) fn xlookup(args: &[Expr], ctx: &EvalContext<'_>) -> CellValue {
     if let CellValue::Error { value } = target {
         return err(value);
     }
-    let lookup = match as_area(&args[1], ctx) {
-        Some(a) => a,
-        None => return err(ErrorValue::Value),
+    let lookup = match crate::eval::required_area(&args[1], ctx) {
+        Ok(a) => a,
+        Err(error) => return err(error),
     };
-    let result = match as_area(&args[2], ctx) {
-        Some(a) => a,
-        None => return err(ErrorValue::Value),
+    let result = match crate::eval::required_area(&args[2], ctx) {
+        Ok(a) => a,
+        Err(error) => return err(error),
     };
     if lookup.cell_count() != result.cell_count() {
         return err(ErrorValue::Value);
@@ -635,4 +665,136 @@ pub(crate) fn transpose(args: &[Expr], ctx: &EvalContext<'_>) -> CellValue {
         CellValue::Empty => num(0.0),
         value => value,
     }
+}
+
+/// ADDRESS(row, column, [abs], [a1], [sheet]): a reference written as text.
+/// `abs` 1..=4 runs `$A$1`, `A$1`, `$A1`, `A1`; `a1` false switches to R1C1.
+pub(crate) fn address(args: &[Expr], ctx: &EvalContext<'_>) -> CellValue {
+    if args.len() < 2 || args.len() > 5 {
+        return err(ErrorValue::Value);
+    }
+    let (row, col) = match (nth_int(args, ctx, 0), nth_int(args, ctx, 1)) {
+        (Ok(r), Ok(c)) => (r, c),
+        (Err(e), _) | (_, Err(e)) => return err(e),
+    };
+    let kind = match args.get(2) {
+        Some(arg) if !super::omitted(arg) => match nth_int(args, ctx, 2) {
+            Ok(k) => k,
+            Err(e) => return err(e),
+        },
+        _ => 1,
+    };
+    if !(1..=4).contains(&kind) {
+        return err(ErrorValue::Value);
+    }
+    let a1_style = match args.get(3) {
+        Some(arg) if !super::omitted(arg) => match crate::eval::to_bool(&evaluate(&args[3], ctx)) {
+            Ok(b) => b,
+            Err(e) => return err(e),
+        },
+        _ => true,
+    };
+    let sheet = match args.get(4) {
+        Some(arg) if !super::omitted(arg) => match crate::eval::to_text(&evaluate(&args[4], ctx)) {
+            Ok(s) => Some(s),
+            Err(e) => return err(e),
+        },
+        _ => None,
+    };
+    let absolute_row = kind == 1 || kind == 2;
+    let absolute_col = kind == 1 || kind == 3;
+    let body = if a1_style {
+        if row < 1
+            || col < 1
+            || row > i64::from(xlsx_model::MAX_ROWS)
+            || col > i64::from(xlsx_model::MAX_COLS)
+        {
+            return err(ErrorValue::Value);
+        }
+        format!(
+            "{}{}{}{}",
+            if absolute_col { "$" } else { "" },
+            xlsx_model::addr::col_to_letters(col as u32 - 1),
+            if absolute_row { "$" } else { "" },
+            row
+        )
+    } else {
+        format!(
+            "{}{}",
+            r1c1_part('R', row, absolute_row),
+            r1c1_part('C', col, absolute_col)
+        )
+    };
+    match sheet {
+        Some(name) => crate::eval::text(format!("{}!{}", quoted_sheet(&name), body)),
+        None => crate::eval::text(body),
+    }
+}
+
+fn r1c1_part(letter: char, index: i64, absolute: bool) -> String {
+    if absolute {
+        format!("{letter}{index}")
+    } else if index == 0 {
+        letter.to_string()
+    } else {
+        format!("{letter}[{index}]")
+    }
+}
+
+/// a sheet name as it appears in a reference: quoted when anything but
+/// letters, digits and underscores appears, or when it starts with a digit.
+fn quoted_sheet(name: &str) -> String {
+    let plain = !name.is_empty()
+        && !name.starts_with(|ch: char| ch.is_ascii_digit())
+        && name
+            .chars()
+            .all(|ch| ch.is_alphanumeric() || ch == '_' || ch == '.');
+    if plain {
+        name.to_string()
+    } else {
+        format!("'{}'", name.replace('\'', "''"))
+    }
+}
+
+/// HYPERLINK(location, [friendly]): the cell shows the friendly name when one
+/// is given, otherwise the location itself. a location that is an error still
+/// wins, so a broken jump target shows the error rather than the caption.
+pub(crate) fn hyperlink(args: &[Expr], ctx: &EvalContext<'_>) -> CellValue {
+    if args.is_empty() || args.len() > 2 {
+        return err(ErrorValue::Value);
+    }
+    let location = evaluate(&args[0], ctx);
+    if let CellValue::Error { value } = location {
+        return err(value);
+    }
+    let shown = match args.get(1).filter(|arg| !super::omitted(arg)) {
+        Some(arg) => evaluate(arg, ctx),
+        None => location,
+    };
+    match shown {
+        CellValue::Error { value } => err(value),
+        CellValue::Empty => crate::eval::text(""),
+        value => value,
+    }
+}
+
+/// FORMULATEXT(reference): the formula the top-left cell of `reference` holds,
+/// as excel shows it — braced when the cell is an array formula. A cell with
+/// no formula is `#N/A`.
+pub(crate) fn formulatext(args: &[Expr], ctx: &EvalContext<'_>) -> CellValue {
+    if args.len() != 1 {
+        return err(ErrorValue::Value);
+    }
+    let Some(area) = as_area(&args[0], ctx) else {
+        return err(ErrorValue::NA);
+    };
+    let at = area.start;
+    let Some(formula) = ctx.provider.formula(area.sheet, at) else {
+        return err(ErrorValue::NA);
+    };
+    let text = match ctx.provider.spill_range(area.sheet, at) {
+        Some(_) => format!("{{={formula}}}"),
+        None => format!("={formula}"),
+    };
+    CellValue::Text { value: text }
 }

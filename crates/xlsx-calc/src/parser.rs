@@ -4,7 +4,7 @@
 use xlsx_model::{CellRange, CellRef, CellValue, ErrorValue};
 
 use crate::lexer::{ParseError, TokKind, Token, lex};
-use crate::{ColumnRange, TableSpec};
+use crate::{ColumnRange, RowRange, TableSpec};
 
 /// maximum expression nesting depth before we bail with a `ParseError`.
 pub const MAX_DEPTH: usize = 100;
@@ -41,6 +41,10 @@ pub enum Expr {
         sheet: Option<String>,
         range: ColumnRange,
     },
+    RowRange {
+        sheet: Option<String>,
+        range: RowRange,
+    },
     /// `Table[Col]`: a structured reference, resolved against the workbook's
     /// table parts at evaluation time.
     TableRef {
@@ -61,6 +65,13 @@ pub enum Expr {
         rhs: Box<Expr>,
     },
     Percent(Box<Expr>),
+    /// `A1:INDEX(..)`: excel's range operator between two references. the
+    /// rectangle is the bounding box of both ends, resolved at evaluation
+    /// time because an end may be a function.
+    RangeJoin {
+        start: Box<Expr>,
+        end: Box<Expr>,
+    },
     FuncCall {
         name: String,
         /// resolved builtin, bound once at parse time; `None` = unknown name.
@@ -220,8 +231,33 @@ impl Parser<'_> {
                     depth: ast_depth,
                 })
             }
-            _ => self.postfix(depth),
+            _ => self.range_join(depth),
         }
+    }
+
+    /// `:` joins two references and binds tighter than every other operator.
+    /// a bare name is not accepted as an end, which keeps malformed ranges
+    /// like `A:B1` the parse error they have always been.
+    fn range_join(&mut self, depth: usize) -> Result<ParsedExpr, ParseError> {
+        let mut lhs = self.postfix(depth)?;
+        while matches!(self.peek().map(|t| &t.kind), Some(TokKind::Colon)) {
+            let pos = self.here();
+            self.advance();
+            let rhs = self.postfix(depth + 1)?;
+            if !reference_operand(&lhs.expr) || !reference_operand(&rhs.expr) {
+                return Err(ParseError::new(pos, "':' joins two references"));
+            }
+            let ast_depth = lhs.depth.max(rhs.depth) + 1;
+            self.validate_ast_depth(ast_depth)?;
+            lhs = ParsedExpr {
+                expr: Expr::RangeJoin {
+                    start: Box::new(lhs.expr),
+                    end: Box::new(rhs.expr),
+                },
+                depth: ast_depth,
+            };
+        }
+        Ok(lhs)
     }
 
     /// an atom followed by any number of `%` postfixes.
@@ -253,6 +289,9 @@ impl Parser<'_> {
             TokKind::Range { sheet, range } => Ok(ParsedExpr::leaf(Expr::Range { sheet, range })),
             TokKind::ColumnRange { sheet, range } => {
                 Ok(ParsedExpr::leaf(Expr::ColumnRange { sheet, range }))
+            }
+            TokKind::RowRange { sheet, range } => {
+                Ok(ParsedExpr::leaf(Expr::RowRange { sheet, range }))
             }
             TokKind::TableRef { table, spec } => {
                 Ok(ParsedExpr::leaf(Expr::TableRef { table, spec }))
@@ -368,6 +407,36 @@ impl Parser<'_> {
             Ok(())
         }
     }
+}
+
+/// what `:` accepts as an end: something that already designates cells, a
+/// call that may resolve to one, or the `#REF!` excel leaves behind when a
+/// deletion takes an end away.
+fn reference_operand(expr: &Expr) -> bool {
+    if let Expr::Name { name, .. } = expr {
+        return !address_shaped(name);
+    }
+    matches!(
+        expr,
+        Expr::Ref { .. }
+            | Expr::Range { .. }
+            | Expr::ColumnRange { .. }
+            | Expr::TableRef { .. }
+            | Expr::FuncCall { .. }
+            | Expr::RangeJoin { .. }
+            | Expr::Error(_)
+    )
+}
+
+/// a name excel would read as part of an address instead — a bare column
+/// like `A`, or a row number — is not an end for `:`. that is what keeps
+/// `A:B1` and `XFE:XFF` the parse errors they have always been, while a
+/// name a formula really binds, like a `LAMBDA` parameter, is an end.
+fn address_shaped(name: &str) -> bool {
+    let bare = name.trim_matches('$');
+    bare.is_empty()
+        || bare.bytes().all(|byte| byte.is_ascii_alphabetic())
+        || bare.bytes().all(|byte| byte.is_ascii_digit())
 }
 
 /// left/right binding powers for infix operators; `None` for non-operators.
@@ -502,6 +571,49 @@ mod tests {
             other => panic!("expected func call, got {other:?}"),
         }
         assert!(matches!(parse("PI()"), Expr::FuncCall { args, .. } if args.is_empty()));
+    }
+
+    /// `:` joins two references, binds tighter than every other operator, and
+    /// still refuses the malformed ranges it always refused.
+    #[test]
+    fn range_operator_joins_references() {
+        let join = |a: Expr, b: Expr| Expr::RangeJoin {
+            start: Box::new(a),
+            end: Box::new(b),
+        };
+        let a1 = || Expr::Ref {
+            sheet: None,
+            cell: CellRef::parse_a1("A1").unwrap(),
+        };
+        let index = || Expr::func_call("INDEX", vec![a1(), Expr::Number(3.0)]);
+        assert_eq!(parse("A1:INDEX(A1,3)"), join(a1(), index()));
+        assert_eq!(
+            parse("-A1:INDEX(A1,3)"),
+            Expr::Unary {
+                op: UnaryOp::Neg,
+                expr: Box::new(join(a1(), index())),
+            }
+        );
+        assert_eq!(
+            parse("1+A1:INDEX(A1,3)"),
+            bin(BinaryOp::Add, Expr::Number(1.0), join(a1(), index()))
+        );
+        assert_eq!(parse("A1:INDEX(A1,3):A1"), join(join(a1(), index()), a1()));
+        assert_eq!(
+            parse("#REF!:INDEX(A1,3)"),
+            join(Expr::Error(ErrorValue::Ref), index())
+        );
+        assert!(matches!(
+            parse("INDEX(A1,1):INDEX(A1,2)"),
+            Expr::RangeJoin { .. }
+        ));
+        // a name a formula really binds is an end; one excel would read as
+        // part of an address is not
+        assert!(matches!(parse("A1:_xlpm.c"), Expr::RangeJoin { .. }));
+        assert!(matches!(parse("_xlpm.c:_xlpm.d"), Expr::RangeJoin { .. }));
+        for src in ["A1:", ":A1", "A1:1", "A1:\"x\"", "A1:Name", "Name:A1"] {
+            assert!(parse_formula(src).is_err(), "should reject {src:?}");
+        }
     }
 
     #[test]
