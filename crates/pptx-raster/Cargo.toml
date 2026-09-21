@@ -27,6 +27,7 @@ ooxml-drawingml.workspace = true
 ooxml-text.workspace = true
 png = "0.18"
 pptx-render.workspace = true
+resvg = { version = "0.48", default-features = false }
 tiny-skia = "0.12"
 
 [dev-dependencies]

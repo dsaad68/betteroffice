@@ -2,7 +2,7 @@ import { describe, expect, test } from 'bun:test';
 import { readFile } from 'node:fs/promises';
 import { resolve } from 'node:path';
 import { initWasm, openPresentation } from '../wasm/loader';
-import { presentationImageBlob } from './image';
+import { decodePresentationImage, needsElementDecode, presentationImageBlob } from './image';
 
 function record(command: number, payload: Uint8Array): Uint8Array<ArrayBuffer> {
   const bytes = new Uint8Array(6 + payload.length);
@@ -147,6 +147,80 @@ describe('presentation image blobs', () => {
   test('preserves ordinary media bytes', async () => {
     const bytes = new Uint8Array([137, 80, 78, 71, 13, 10, 26, 10]);
     expect(new Uint8Array(await presentationImageBlob(bytes).arrayBuffer())).toEqual(bytes);
+  });
+
+  test('types SVG media so a browser will decode it at all', async () => {
+    const svg = '<svg xmlns="http://www.w3.org/2000/svg" width="96" height="96"><rect width="96" height="96"/></svg>';
+    const blob = presentationImageBlob(new TextEncoder().encode(svg));
+    expect(blob.type).toBe('image/svg+xml');
+    expect(needsElementDecode(blob)).toBe(true);
+    expect(await blob.text()).toBe(svg);
+  });
+
+  test('gives a viewBox-only root the intrinsic size Chrome needs', async () => {
+    const blob = presentationImageBlob(
+      new TextEncoder().encode('<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 16.5"><path d="M 0 0"/></svg>')
+    );
+    expect(await blob.text()).toBe(
+      '<svg width="24" height="16.5" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 16.5"><path d="M 0 0"/></svg>'
+    );
+  });
+
+  test('leaves a declared size, a degenerate viewBox and a leading declaration alone', async () => {
+    for (const svg of [
+      '<?xml version="1.0"?>\n<svg xmlns="http://www.w3.org/2000/svg" width="8" viewBox="0 0 24 16"/>',
+      '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 0 16"/>',
+      '<svg xmlns="http://www.w3.org/2000/svg"/>',
+    ]) {
+      const blob = presentationImageBlob(new TextEncoder().encode(svg));
+      expect(blob.type).toBe('image/svg+xml');
+      expect(await blob.text()).toBe(svg);
+    }
+  });
+
+  test('does not claim raster media, prose or an oversized document as SVG', async () => {
+    const oversized = new TextEncoder().encode(
+      `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 4 4"><desc>${' '.repeat(4 * 1024 * 1024)}</desc></svg>`
+    );
+    for (const bytes of [
+      new Uint8Array([137, 80, 78, 71, 13, 10, 26, 10]),
+      new TextEncoder().encode('a note that mentions <svg> without being one'),
+      oversized,
+    ]) {
+      expect(presentationImageBlob(bytes).type).toBe('');
+    }
+  });
+
+  test('decodes SVG through the element path and falls through when that fails', async () => {
+    const original = { bitmap: globalThis.createImageBitmap, image: globalThis.Image };
+    const bitmaps: Blob[] = [];
+    let fail = false;
+    globalThis.createImageBitmap = ((blob: Blob) => {
+      bitmaps.push(blob);
+      return Promise.resolve({} as ImageBitmap);
+    }) as typeof createImageBitmap;
+    globalThis.Image = class {
+      onload: (() => void) | null = null;
+      onerror: (() => void) | null = null;
+      set src(_value: string) {
+        queueMicrotask(() => (fail ? this.onerror?.() : this.onload?.()));
+      }
+    } as unknown as typeof Image;
+    try {
+      const svg = new TextEncoder().encode('<svg xmlns="http://www.w3.org/2000/svg" width="4" height="4"/>');
+      expect(await decodePresentationImage(svg, 'undecodable')).toBeInstanceOf(globalThis.Image);
+      expect(bitmaps).toHaveLength(0);
+
+      const png = new Uint8Array([137, 80, 78, 71, 13, 10, 26, 10]);
+      await decodePresentationImage(png, 'undecodable');
+      expect(bitmaps).toHaveLength(1);
+
+      fail = true;
+      await expect(decodePresentationImage(svg, 'undecodable')).rejects.toThrow('undecodable');
+    } finally {
+      globalThis.createImageBitmap = original.bitmap;
+      globalThis.Image = original.image;
+    }
   });
 
   test.each([false, true])('unwraps a complete raster WMF (placeable=%s)', async (placeable) => {
