@@ -668,15 +668,15 @@ impl<'a> LayoutBuilder<'a> {
                     self.theme,
                     space,
                     rect,
-                    shape.rotation_deg as f32,
-                    shape.flip_h,
-                    shape.flip_v,
+                    resolved.rotation_deg as f32,
+                    resolved.flip_h,
+                    resolved.flip_v,
                 )
             });
         let transform = Transform {
-            rotation_deg: shape.rotation_deg as f32,
-            flip_h: shape.flip_h,
-            flip_v: shape.flip_v,
+            rotation_deg: resolved.rotation_deg as f32,
+            flip_h: resolved.flip_h,
+            flip_v: resolved.flip_v,
         };
         match shape.kind {
             ShapeKind::Shape => {
@@ -4810,6 +4810,8 @@ mod tests {
     const NUMBERED_FIXTURE: &[u8] =
         include_bytes!("../../pptx-parse/tests/fixtures/slide-number-fields.pptx");
     const STYLE_FIXTURE: &[u8] = include_bytes!("../../pptx-parse/tests/fixtures/shape-style.pptx");
+    const STYLE_MATRIX_FIXTURE: &[u8] =
+        include_bytes!("../../pptx-parse/tests/fixtures/style-matrix-deck.pptx");
     const HIDDEN_FIXTURE: &[u8] =
         include_bytes!("../../pptx-edit/tests/fixtures/hidden-shapes.pptx");
     const V2_UPDATE: &[u8] =
@@ -6397,6 +6399,50 @@ mod tests {
                         .flat_map(|line| line.runs.iter().map(|run| run.text.as_str()))
                         .collect(),
                 )),
+                _ => None,
+            })
+            .unwrap_or_else(|| panic!("{shape_id} was not drawn"))
+    }
+
+    #[test]
+    fn a_placeholder_without_a_transform_draws_with_the_orientation_it_inherits() {
+        let mut package = pptx_parse::parse_pptx(STYLE_MATRIX_FIXTURE).unwrap();
+        let session = DeckSession::open(STYLE_MATRIX_FIXTURE, 8_320).unwrap();
+        let snapshot = session.snapshot().unwrap();
+        let title = snapshot.slides[1].shapes[0].id.clone();
+        let layout = package
+            .layouts
+            .iter_mut()
+            .find(|layout| layout.part_path == "ppt/slideLayouts/slideLayout2.xml")
+            .unwrap();
+        let ShapeNode::Shape(placeholder) = &mut layout.shapes[0] else {
+            panic!("the layout title is a shape")
+        };
+        placeholder.base.transform.rotation_deg = 30.0;
+        placeholder.base.transform.flip_v = true;
+
+        let rendered = renderer().layout_slide(&package, &snapshot, 1).unwrap();
+        assert_eq!(
+            drawn_transform(&rendered, &title),
+            Transform {
+                rotation_deg: 30.0,
+                flip_h: false,
+                flip_v: true,
+            }
+        );
+    }
+
+    fn drawn_transform(rendered: &RenderedSlide, shape_id: &str) -> Transform {
+        rendered
+            .display_list
+            .primitives
+            .iter()
+            .find_map(|primitive| match primitive {
+                Primitive::Shape {
+                    shape_id: Some(id),
+                    transform,
+                    ..
+                } if id == shape_id => Some(*transform),
                 _ => None,
             })
             .unwrap_or_else(|| panic!("{shape_id} was not drawn"))
