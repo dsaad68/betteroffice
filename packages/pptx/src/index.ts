@@ -53,6 +53,7 @@ export type {
   ImageEffect,
   ImageCrop,
   ImagePrimitive,
+  InheritedGeometry,
   Paint,
   ParagraphAlignment,
   ParagraphSnapshot,

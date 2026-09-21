@@ -7,69 +7,18 @@ use base64::Engine as _;
 use ooxml_drawingml::{ColorValue, ShapeFill};
 use pptx_parse::{
     Bullet, CommentAuthorWrite, CommentFlavor, CommentSlide, CommentWrite, CommentsWrite,
-    DeckWrite, InheritedTransform, NotesWrite, ParagraphWrite, PictureAdd, Placeholder,
-    PptxPackage, RunProperties, RunWrite, ShapeAdd, ShapeNode, ShapePatch, ShapeTransform,
-    ShapeWrite, SlideLayout, SlideMaster, SlideWrite, TextTarget, TextWrite,
+    DeckWrite, InheritedTransform, NotesWrite, ParagraphWrite, PictureAdd, PptxPackage,
+    RunProperties, RunWrite, ShapeAdd, ShapeNode, ShapePatch, ShapeWrite, SlideWrite, TextTarget,
+    TextWrite,
 };
 
 use crate::comments::{derived_guid, seeded_comment_id};
 use crate::deck::baseline_snapshot;
+use crate::inherit::SlideContext;
 use crate::{
     CommentSnapshot, DeckSession, DeckSnapshot, EditError, EditResult, ParagraphSnapshot,
     ShapeKind, ShapeSnapshot, SlideSnapshot, StorySnapshot, TextRunSnapshot,
 };
-
-/// Source shapes and inherited geometry.
-struct SlideContext<'a> {
-    layout: Option<&'a SlideLayout>,
-    master: Option<&'a SlideMaster>,
-    source_shapes: &'a [ShapeNode],
-}
-
-impl<'a> SlideContext<'a> {
-    fn new(package: &'a PptxPackage, snapshot: &SlideSnapshot) -> Self {
-        let source_shapes = snapshot
-            .source_part_path
-            .as_deref()
-            .and_then(|path| package.slides.iter().find(|slide| slide.part_path == path))
-            .map(|slide| slide.shapes.as_slice())
-            .unwrap_or_default();
-        let layout = snapshot
-            .layout_part_path
-            .as_deref()
-            .and_then(|path| {
-                package
-                    .layouts
-                    .iter()
-                    .find(|layout| layout.part_path == path)
-            })
-            .or_else(|| package.layouts.first());
-        let master = layout
-            .and_then(|layout| layout.master_part_path.as_deref())
-            .and_then(|path| {
-                package
-                    .masters
-                    .iter()
-                    .find(|master| master.part_path == path)
-            })
-            .or_else(|| {
-                layout.and_then(|layout| {
-                    package.masters.iter().find(|master| {
-                        master
-                            .layout_part_paths
-                            .iter()
-                            .any(|path| path == &layout.part_path)
-                    })
-                })
-            })
-            .or_else(|| package.masters.first());
-        Self {
-            layout,
-            master,
-            source_shapes,
-        }
-    }
-}
 
 impl DeckSession {
     /// Serializes the deck with all edits applied. Untouched slides keep their
@@ -113,7 +62,11 @@ fn deck_write(
             Some(base) => SlideWrite::Patch {
                 part_path: source_part_path(slide)?,
                 shapes: {
-                    let context = SlideContext::new(package, slide);
+                    let context = SlideContext::new(
+                        package,
+                        slide.source_part_path.as_deref(),
+                        slide.layout_part_path.as_deref(),
+                    );
                     shape_writes(&slide.shapes, &base.shapes, &context, context.source_shapes)?
                 },
             },
@@ -449,7 +402,7 @@ fn shape_patch(
         patch.extent = resized.then_some((shape.width, shape.height));
         let source_inherited = base.width <= 0 || base.height <= 0;
         patch.inherited = source_inherited.then(|| {
-            inherited_transform(shape, context)
+            base.inherited
                 .map(|transform| InheritedTransform {
                     x: transform.x,
                     y: transform.y,
@@ -503,79 +456,6 @@ fn shape_patch(
         patch.children = shape_writes(&shape.children, &base.children, context, source_children)?;
     }
     Ok(patch)
-}
-
-/// The transform a placeholder inherits: the layout's matching placeholder,
-/// then the master's. The shape's own parsed node cannot contribute — a
-/// positive extent there would already be in the snapshot.
-fn inherited_transform<'a>(
-    shape: &ShapeSnapshot,
-    context: &SlideContext<'a>,
-) -> Option<&'a ShapeTransform> {
-    let layout = shape.placeholder.as_ref().and_then(|placeholder| {
-        context
-            .layout
-            .and_then(|layout| find_placeholder(&layout.shapes, placeholder))
-    });
-    let master = shape.placeholder.as_ref().and_then(|placeholder| {
-        context
-            .master
-            .and_then(|master| find_placeholder(&master.shapes, placeholder))
-    });
-    [layout, master]
-        .into_iter()
-        .flatten()
-        .map(node_transform)
-        .find(|transform| transform.width > 0 && transform.height > 0)
-}
-
-fn find_placeholder<'a>(nodes: &'a [ShapeNode], target: &Placeholder) -> Option<&'a ShapeNode> {
-    for node in nodes {
-        if node_placeholder(node).is_some_and(|value| placeholders_match(value, target)) {
-            return Some(node);
-        }
-        if let ShapeNode::Group(group) = node
-            && let Some(found) = find_placeholder(&group.children, target)
-        {
-            return Some(found);
-        }
-    }
-    None
-}
-
-fn placeholders_match(left: &Placeholder, right: &Placeholder) -> bool {
-    match (left.index, right.index) {
-        (Some(left), Some(right)) => left == right,
-        _ => {
-            normalize_placeholder_type(left.placeholder_type.as_deref())
-                == normalize_placeholder_type(right.placeholder_type.as_deref())
-        }
-    }
-}
-
-fn normalize_placeholder_type(value: Option<&str>) -> &str {
-    match value.unwrap_or("body") {
-        "ctrTitle" => "title",
-        "obj" => "body",
-        value => value,
-    }
-}
-
-fn node_placeholder(node: &ShapeNode) -> Option<&Placeholder> {
-    node_base(node).placeholder.as_ref()
-}
-
-fn node_transform(node: &ShapeNode) -> &ShapeTransform {
-    &node_base(node).transform
-}
-
-fn node_base(node: &ShapeNode) -> &pptx_parse::ShapeBase {
-    match node {
-        ShapeNode::Shape(shape) => &shape.base,
-        ShapeNode::Picture(shape) => &shape.base,
-        ShapeNode::GraphicFrame(shape) => &shape.base,
-        ShapeNode::Group(shape) => &shape.base,
-    }
 }
 
 fn text_target(story_id: &str, shape_id: &str) -> EditResult<TextTarget> {

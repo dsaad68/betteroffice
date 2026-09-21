@@ -18,6 +18,7 @@ use yrs::{
 use crate::comments::{
     baseline_comments, flavor_key, seed_comments, snapshot_comments, snapshot_flavor,
 };
+use crate::inherit::{SlideContext, record_inherited};
 use crate::story::{baseline_story, seed_plain_story, seed_story, snapshot_story, validate_story};
 use crate::{
     DeckSession, DeckSnapshot, EditCtx, EditError, EditResult, META, MIGRATE_ORIGIN, PendingMedia,
@@ -1654,6 +1655,14 @@ fn snapshot_slide<T: ReadTxn>(
             Some(&theme),
         )?);
     }
+    record_inherited(
+        &mut shape_snapshots,
+        &SlideContext::new(
+            package,
+            source_part_path.as_deref(),
+            layout_part_path.as_deref(),
+        ),
+    );
     let notes = slide_notes(&slide, txn, package);
     Ok(SlideSnapshot {
         id: slide_id.to_owned(),
@@ -1798,6 +1807,7 @@ pub(crate) fn snapshot_shape<T: ReadTxn>(
         rotation_deg: map_number(&shape, txn, "rotationDeg").unwrap_or_default(),
         flip_h: map_bool(&shape, txn, "flipH").unwrap_or_default(),
         flip_v: map_bool(&shape, txn, "flipV").unwrap_or_default(),
+        inherited: None,
         hidden: map_bool(&shape, txn, "hidden").unwrap_or_default(),
         geometry: required_string(&shape, txn, "geometry")?,
         adjust_values: optional_json(&shape, txn, "adjustValuesJson")?.unwrap_or_default(),
@@ -1874,6 +1884,14 @@ fn baseline_slide(
             Some(&theme),
         )?);
     }
+    record_inherited(
+        &mut shapes,
+        &SlideContext::new(
+            package,
+            Some(&slide.part_path),
+            slide.layout_part_path.as_deref(),
+        ),
+    );
     Ok(SlideSnapshot {
         id: slide_id,
         source_part_path: Some(slide.part_path.clone()),
@@ -1980,6 +1998,7 @@ fn baseline_shape(
         },
         flip_h: transform.flip_h,
         flip_v: transform.flip_v,
+        inherited: None,
         hidden: base.hidden,
         geometry,
         adjust_values,

@@ -8532,6 +8532,7 @@ mod tests {
             rotation_deg: 0.0,
             flip_h: false,
             flip_v: false,
+            inherited: None,
             hidden: false,
             geometry: "rect".to_owned(),
             adjust_values: BTreeMap::new(),
