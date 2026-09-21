@@ -41,6 +41,15 @@ Decoding pictures needs the `image` crate, so `src/lib.rs` refuses to compile fo
 `wasm32`. The browser gets its PNG from `slideToPng` in `@betteroffice/pptx`,
 which drives the canvas replayer and `canvas.toBlob()` instead.
 
+## SVG pictures
+
+A picture whose bytes are SVG is rasterized with resvg/usvg instead of the
+`image` crate, under a sandbox with no DTD, no external reference and bounded
+document bytes, nesting, node count and output raster. Text is not drawn —
+`usvg`'s text feature is off, and nothing here shapes it — and images embedded
+inside the document are not resolved. A refused document is a skipped image
+like any other.
+
 ## What the display list does not carry
 
 These are gaps upstream of this crate, in the contract `pptx-render` emits, so
