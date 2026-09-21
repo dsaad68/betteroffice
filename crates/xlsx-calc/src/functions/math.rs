@@ -3,7 +3,7 @@
 
 use xlsx_model::{CellValue, ErrorValue};
 
-use crate::eval::{Area, EvalContext, as_area, err, evaluate, num, to_number};
+use crate::eval::{Area, EvalContext, as_area, bound_area, err, evaluate, num, to_number, to_text};
 use crate::parser::Expr;
 
 use super::criteria::{self, Criterion};
@@ -31,21 +31,18 @@ pub(crate) fn sumif(args: &[Expr], ctx: &EvalContext<'_>) -> CellValue {
     if args.len() != 2 && args.len() != 3 {
         return err(ErrorValue::Value);
     }
-    let crit_area = match as_area(&args[0], ctx) {
-        Some(a) => a,
-        None => return err(ErrorValue::Value),
+    let crit_area = match crate::eval::required_area(&args[0], ctx) {
+        Ok(a) => bound_area(a, ctx),
+        Err(error) => return err(error),
     };
     let criterion = criteria::criterion_from_arg(&args[1], ctx);
-    let sum_area = if args.len() == 3 {
-        match as_area(&args[2], ctx) {
+    let values = if args.len() == 3 { &args[2] } else { &args[0] };
+    let sum_area = match criteria::aligned_area(values, ctx, crit_area.rows, crit_area.cols) {
+        Some(a) => a,
+        None => match as_area(values, ctx) {
             Some(a) => a,
             None => return err(ErrorValue::Value),
-        }
-    } else {
-        match as_area(&args[0], ctx) {
-            Some(a) => a,
-            None => return err(ErrorValue::Value),
-        }
+        },
     };
     let pairs = [(crit_area, criterion)];
     sum_matching(&pairs, &sum_area, ctx)
@@ -56,15 +53,15 @@ pub(crate) fn sumifs(args: &[Expr], ctx: &EvalContext<'_>) -> CellValue {
     if args.len() < 3 {
         return err(ErrorValue::Value);
     }
-    let sum_area = match as_area(&args[0], ctx) {
-        Some(a) => a,
-        None => return err(ErrorValue::Value),
-    };
     match criteria::collect_pairs(&args[1..], ctx) {
-        Some(pairs) if pairs[0].0.rows == sum_area.rows && pairs[0].0.cols == sum_area.cols => {
-            sum_matching(&pairs, &sum_area, ctx)
+        Some(pairs) => {
+            let (rows, cols) = (pairs[0].0.rows, pairs[0].0.cols);
+            match criteria::aligned_area(&args[0], ctx, rows, cols) {
+                Some(sum_area) => sum_matching(&pairs, &sum_area, ctx),
+                None => err(ErrorValue::Value),
+            }
         }
-        _ => err(ErrorValue::Value),
+        None => err(ErrorValue::Value),
     }
 }
 
@@ -99,7 +96,7 @@ pub(crate) fn sumproduct(args: &[Expr], ctx: &EvalContext<'_>) -> CellValue {
     if args.is_empty() {
         return err(ErrorValue::Value);
     }
-    let mut arrays: Vec<Vec<f64>> = Vec::with_capacity(args.len());
+    let mut arrays: Vec<((usize, usize), Vec<f64>)> = Vec::with_capacity(args.len());
     for arg in args {
         match as_area(arg, ctx) {
             Some(area) => {
@@ -115,22 +112,41 @@ pub(crate) fn sumproduct(args: &[Expr], ctx: &EvalContext<'_>) -> CellValue {
                         _ => col.push(0.0),
                     }
                 }
-                arrays.push(col);
+                arrays.push(((area.rows, area.cols), col));
             }
-            None => match to_number(&evaluate(arg, ctx)) {
-                Ok(n) => arrays.push(vec![n]),
-                Err(e) => return err(e),
+            // `--(range=key)` and the other computed operands are arrays, not
+            // references, so they are read as blocks rather than coerced
+            None => match crate::array::evaluate_array(arg, ctx) {
+                crate::array::Value::Array(array) => {
+                    let mut col = Vec::with_capacity(array.rows() * array.cols());
+                    for row in 0..array.rows() {
+                        for c in 0..array.cols() {
+                            match array.at(row, c) {
+                                CellValue::Number { value } => col.push(value),
+                                CellValue::Error { value } => return err(value),
+                                _ => col.push(0.0),
+                            }
+                        }
+                    }
+                    arrays.push(((array.rows(), array.cols()), col));
+                }
+                value => match to_number(&value.into_scalar()) {
+                    Ok(n) => arrays.push(((1, 1), vec![n])),
+                    Err(e) => return err(e),
+                },
             },
         }
     }
-    let len = arrays[0].len();
-    if arrays.iter().any(|a| a.len() != len) {
+    // excel pairs the operands by position, so they must share a shape: a
+    // column and a row of the same length are not the same operand
+    let shape = arrays[0].0;
+    if arrays.iter().any(|(dims, _)| *dims != shape) {
         return err(ErrorValue::Value);
     }
     let mut total = 0.0;
-    for i in 0..len {
+    for i in 0..arrays[0].1.len() {
         let mut prod = 1.0;
-        for a in &arrays {
+        for (_, a) in &arrays {
             prod *= a[i];
         }
         total += prod;
@@ -561,4 +577,148 @@ pub(crate) fn randbetween(args: &[Expr], ctx: &EvalContext<'_>) -> CellValue {
     }
     let span = hi - lo + 1.0;
     finite(lo + (ctx.next_random_unit() * span).floor().min(hi - lo))
+}
+
+/// SUMSQ(number, ...): the sum of the squares of every numeric argument.
+pub(crate) fn sumsq(args: &[Expr], ctx: &EvalContext<'_>) -> CellValue {
+    match super::collect_numbers_deep(args, ctx) {
+        Ok(nums) => finite(nums.iter().map(|x| x * x).sum()),
+        Err(e) => err(e),
+    }
+}
+
+/// CONVERT(number, from, to): excel's unit conversion, over the unit families
+/// it defines. A metric unit may carry an SI prefix; the two units must share
+/// a family.
+pub(crate) fn convert(args: &[Expr], ctx: &EvalContext<'_>) -> CellValue {
+    if args.len() != 3 {
+        return err(ErrorValue::Value);
+    }
+    let value = match nth_number(args, ctx, 0) {
+        Ok(value) => value,
+        Err(e) => return err(e),
+    };
+    let (from, to) = match (
+        to_text(&evaluate(&args[1], ctx)),
+        to_text(&evaluate(&args[2], ctx)),
+    ) {
+        (Ok(a), Ok(b)) => (a, b),
+        (Err(e), _) | (_, Err(e)) => return err(e),
+    };
+    let (Some((from_family, from_scale)), Some((to_family, to_scale))) = (unit(&from), unit(&to))
+    else {
+        return err(ErrorValue::NA);
+    };
+    if from_family != to_family {
+        return err(ErrorValue::NA);
+    }
+    if from_family == TEMPERATURE {
+        return match to_celsius(&from, value).and_then(|c| from_celsius(&to, c)) {
+            Some(out) => finite(out),
+            None => err(ErrorValue::NA),
+        };
+    }
+    finite(value * from_scale / to_scale)
+}
+
+const TEMPERATURE: u8 = 4;
+
+/// a unit's family and its size in the family's base unit, after any SI
+/// prefix. The base units are the metre, the gram, the second and the litre.
+fn unit(name: &str) -> Option<(u8, f64)> {
+    if let Some(found) = base_unit(name) {
+        return Some(found);
+    }
+    let mut chars = name.chars();
+    let head = chars.next()?;
+    let rest = chars.as_str();
+    let (family, scale) = base_unit(rest)?;
+    if !matches!(family, 0..=3) {
+        return None;
+    }
+    Some((family, scale * si_prefix(head)?))
+}
+
+fn base_unit(name: &str) -> Option<(u8, f64)> {
+    Some(match name {
+        // 0: length, in metres
+        "m" => (0, 1.0),
+        "mi" => (0, 1609.344),
+        "Nmi" => (0, 1852.0),
+        "in" => (0, 0.0254),
+        "ft" => (0, 0.3048),
+        "yd" => (0, 0.9144),
+        "ang" => (0, 1e-10),
+        "Pica" | "pica" => (0, 0.0254 / 72.0),
+        // 1: mass, in grams
+        "g" => (1, 1.0),
+        "sg" => (1, 14593.903),
+        "lbm" => (1, 453.59237),
+        "u" => (1, 1.660_538_782e-24),
+        "ozm" => (1, 28.349523125),
+        // 2: time, in seconds
+        "sec" | "s" => (2, 1.0),
+        "mn" | "min" => (2, 60.0),
+        "hr" => (2, 3600.0),
+        "day" | "d" => (2, 86400.0),
+        "yr" => (2, 31_557_600.0),
+        // 3: liquid measure, in litres
+        "l" | "L" | "lt" => (3, 1.0),
+        "tsp" => (3, 0.004_928_921_593_75),
+        "tbs" => (3, 0.014_786_764_781_25),
+        "oz" => (3, 0.0295735295625),
+        "cup" => (3, 0.2365882365),
+        "pt" | "us_pt" => (3, 0.473176473),
+        "qt" => (3, 0.946352946),
+        "gal" => (3, 3.785411784),
+        // 4: temperature, converted rather than scaled
+        "C" | "cel" => (TEMPERATURE, 1.0),
+        "F" | "fah" => (TEMPERATURE, 1.0),
+        "K" | "kel" => (TEMPERATURE, 1.0),
+        _ => return None,
+    })
+}
+
+fn si_prefix(symbol: char) -> Option<f64> {
+    Some(match symbol {
+        'Y' => 1e24,
+        'Z' => 1e21,
+        'E' => 1e18,
+        'P' => 1e15,
+        'T' => 1e12,
+        'G' => 1e9,
+        'M' => 1e6,
+        'k' => 1e3,
+        'h' => 1e2,
+        'e' => 1e1,
+        'd' => 1e-1,
+        'c' => 1e-2,
+        'm' => 1e-3,
+        'u' => 1e-6,
+        'n' => 1e-9,
+        'p' => 1e-12,
+        'f' => 1e-15,
+        'a' => 1e-18,
+        'z' => 1e-21,
+        'y' => 1e-24,
+        _ => return None,
+    })
+}
+
+fn to_celsius(name: &str, value: f64) -> Option<f64> {
+    Some(match name {
+        "C" | "cel" => value,
+        "F" | "fah" => (value - 32.0) * 5.0 / 9.0,
+        "K" | "kel" => value - 273.15,
+        _ => return None,
+    })
+}
+
+fn from_celsius(name: &str, value: f64) -> Option<f64> {
+    Some(match name {
+        "C" | "cel" => value,
+        "F" | "fah" => value * 9.0 / 5.0 + 32.0,
+        "K" | "kel" => value + 273.15,
+        _ => return None,
+    })
 }

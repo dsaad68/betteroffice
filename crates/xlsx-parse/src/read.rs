@@ -799,8 +799,10 @@ fn finalize_cell(
                 None => CellValue::Empty,
             }
         }
-        Some("inlineStr") => CellValue::Text {
-            value: c.inline_text.unwrap_or_default(),
+        // a cell that declares inline text but carries no `<is>` holds no value
+        Some("inlineStr") => match c.inline_text {
+            Some(value) => CellValue::Text { value },
+            None => CellValue::Empty,
         },
         Some("str") => CellValue::Text {
             value: c.value_text.unwrap_or_default(),
@@ -847,6 +849,7 @@ fn error_from_str(s: &str) -> Option<ErrorValue> {
         "#REF!" => ErrorValue::Ref,
         "#VALUE!" => ErrorValue::Value,
         "#SPILL!" => ErrorValue::Spill,
+        "#CALC!" => ErrorValue::Calc,
         _ => return None,
     })
 }

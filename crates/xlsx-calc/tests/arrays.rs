@@ -72,6 +72,23 @@ fn values(formula: &str, workbook: &Workbook) -> Vec<CellValue> {
     arrayed(formula, workbook).2
 }
 
+/// Excel has no blank inside a block, so a blank cell `IF` selects arrives as
+/// zero — which `COUNT` then counts — while a cell holding "" stays text.
+#[test]
+fn a_blank_cell_if_selects_lands_in_the_block_as_zero() {
+    let mut workbook = fixture();
+    let sheet = &mut workbook.sheets[0];
+    put(sheet, "C1", n(1.0));
+    put(sheet, "C3", t(""));
+    put(sheet, "C4", n(4.0));
+    assert_eq!(
+        values("IF(B1:B4>0,C1:C4)", &workbook),
+        vec![n(1.0), n(0.0), t(""), n(4.0)]
+    );
+    assert_eq!(values("COUNT(IF(B1:B4>0,C1:C4))", &workbook), vec![n(3.0)]);
+    assert_eq!(values("SUM(IF(B1:B4>9,C1:C4))", &workbook), vec![n(0.0)]);
+}
+
 #[test]
 fn filter_keeps_the_rows_its_condition_selects() {
     let workbook = fixture();
@@ -776,6 +793,296 @@ fn index_returns_a_whole_axis() {
     );
 }
 
+/// `INDEX(block, {3;1})` answers once per index, over the rectangle the row
+/// `IFERROR` is elementwise over both sides, so a block shorter than its
+/// fallback pads with `#N/A` and that padding is caught in turn.
+#[test]
+fn iferror_broadcasts_against_its_fallback() {
+    let workbook = fixture();
+    assert_eq!(
+        arrayed("IFERROR({1,2},{0,0,0,0})", &workbook),
+        (1, 4, vec![n(1.0), n(2.0), n(0.0), n(0.0)])
+    );
+    assert_eq!(
+        arrayed("_xlfn.IFNA({1;2},{9,9})", &workbook),
+        (2, 2, vec![n(1.0), n(1.0), n(2.0), n(2.0)])
+    );
+    assert_eq!(values("IFERROR(1/0,7)", &workbook), vec![n(7.0)]);
+}
+
+/// `TEXTJOIN` reads an omitted `ignore_empty` as TRUE; spelled FALSE it keeps
+/// the blanks, and a separator still goes between every pair.
+#[test]
+fn textjoin_drops_blanks_unless_told_otherwise() {
+    let workbook = fixture();
+    assert_eq!(
+        values(r#"_xlfn.TEXTJOIN("/",,{"a";"";"b"})"#, &workbook),
+        vec![t("a/b")]
+    );
+    assert_eq!(
+        values(r#"_xlfn.TEXTJOIN("/",FALSE,{"a";"";"b"})"#, &workbook),
+        vec![t("a//b")]
+    );
+    assert_eq!(
+        values(r#"_xlfn.TEXTJOIN("/",FALSE,{"";"";""})"#, &workbook),
+        vec![t("//")]
+    );
+}
+
+/// excel has no empty array, so splitting an empty string is an error rather
+/// than one blank cell.
+#[test]
+fn textsplit_of_nothing_is_not_found() {
+    let workbook = fixture();
+    assert_eq!(
+        values(r#"_xlfn.TEXTSPLIT("","/")"#, &workbook),
+        vec![CellValue::Error {
+            value: ErrorValue::NA
+        }]
+    );
+    assert_eq!(
+        values(r#"IFERROR(_xlfn.TEXTSPLIT("","/"),0)"#, &workbook),
+        vec![n(0.0)]
+    );
+}
+
+/// an empty array is `#CALC!`: no cell can hold one, so a filter that keeps
+/// nothing answers with it unless the call names a replacement.
+#[test]
+fn an_empty_filter_is_a_calculation_error() {
+    let workbook = fixture();
+    assert_eq!(
+        values("_xlfn._xlws.FILTER(A1:A4,B1:B4>9)", &workbook),
+        vec![CellValue::Error {
+            value: ErrorValue::Calc
+        }]
+    );
+    assert_eq!(
+        values(r#"_xlfn._xlws.FILTER(A1:A4,B1:B4>9,"none")"#, &workbook),
+        vec![t("none")]
+    );
+    assert_eq!(
+        values("IFERROR(_xlfn._xlws.FILTER(A1:A4,B1:B4>9),0)", &workbook),
+        vec![n(0.0)]
+    );
+}
+
+/// `FREQUENCY` answers against the bins as given, not against a sorted copy:
+/// a repeated bin takes its whole count at its first appearance. That is what
+/// makes `FREQUENCY(a,a)` mark the distinct values of `a` in place.
+#[test]
+fn frequency_keeps_the_order_of_the_bins_it_was_given() {
+    let workbook = fixture();
+    assert_eq!(
+        values("FREQUENCY({1;5;3;5},{5;1;5})", &workbook),
+        vec![n(3.0), n(1.0), n(0.0), n(0.0)]
+    );
+    // the distinct-value idiom: nonzero exactly at each first occurrence
+    assert_eq!(
+        values("FREQUENCY({7;7;4;8;4},{7;7;4;8;4})", &workbook),
+        vec![n(2.0), n(0.0), n(2.0), n(1.0), n(0.0), n(0.0)]
+    );
+    // sorted bins are unaffected
+    assert_eq!(
+        values("FREQUENCY({1;3;5;7},{2;4;6})", &workbook),
+        vec![n(1.0), n(1.0), n(1.0), n(1.0)]
+    );
+}
+
+/// an ordered `MATCH` reads its data as sorted and stops where it crosses
+/// the key, so a computed block answers the same as the reference the scalar
+/// path takes.
+#[test]
+fn an_ordered_match_stops_where_the_data_crosses_the_key() {
+    let workbook = fixture();
+    assert_eq!(values("MATCH(25,{10;30;20},1)", &workbook), vec![n(1.0)]);
+    assert_eq!(values("MATCH(25,{10;20;30},1)", &workbook), vec![n(2.0)]);
+    assert_eq!(values("MATCH(25,{30;20;10},-1)", &workbook), vec![n(1.0)]);
+    // an exact match still scans past a miss
+    assert_eq!(values("MATCH(20,{10;30;20},0)", &workbook), vec![n(3.0)]);
+}
+
+/// `MATCH` answers once per key, so `ISERROR(MATCH(range, seen, 0))` is a
+/// mask over the range rather than one verdict for all of it.
+#[test]
+fn match_answers_once_per_key() {
+    let workbook = fixture();
+    assert_eq!(
+        values(r#"MATCH({"pear";"apple"},A1:A4,0)"#, &workbook),
+        vec![n(3.0), n(2.0)]
+    );
+    assert_eq!(
+        values("MATCH({4;1},_xlfn.VSTACK(B1:B4),0)", &workbook),
+        vec![n(3.0), n(2.0)]
+    );
+    assert_eq!(
+        values(r#"ISERROR(MATCH(A1:A4,{"apple"},0))"#, &workbook),
+        vec![
+            CellValue::Bool { value: true },
+            CellValue::Bool { value: false },
+            CellValue::Bool { value: true },
+            CellValue::Bool { value: false },
+        ]
+    );
+}
+
+/// `INDEX` over a reference is excel's reference form: it answers with one
+/// reference, so an array index collapses to its first element.
+#[test]
+fn index_over_a_reference_takes_the_first_index() {
+    let workbook = fixture();
+    assert_eq!(values("INDEX(A1:A4,{3;1})", &workbook), vec![t("pear")]);
+    assert_eq!(values("INDEX(A1:B4,1,{2,1})", &workbook), vec![n(3.0)]);
+    assert_eq!(
+        values(
+            "INDEX(A1:B4,MATCH(\"pear\",A1:A4,0),COLUMN(A1:B1))",
+            &workbook
+        ),
+        vec![t("pear")]
+    );
+}
+
+/// over a value it is the array form, which answers once per index. a `LET`
+/// name holds a value, so indexing one lifts even though it came from a range.
+#[test]
+fn index_over_a_block_answers_once_per_array_index() {
+    let workbook = fixture();
+    assert_eq!(
+        arrayed(
+            "INDEX(_xlfn.VSTACK(A1:A4),_xlfn.SEQUENCE(3,,4,-1))",
+            &workbook
+        ),
+        (3, 1, vec![t("apple"), t("pear"), t("apple")])
+    );
+    assert_eq!(
+        arrayed(
+            "_xlfn.LET(_xlpm.d,A1:B4,INDEX(_xlpm.d,{2;3},{1,2}))",
+            &workbook
+        ),
+        (2, 2, vec![t("apple"), n(1.0), t("pear"), n(4.0)])
+    );
+    assert_eq!(
+        arrayed("INDEX(_xlfn.VSTACK(A1:A4),{1;9})", &workbook),
+        (
+            2,
+            1,
+            vec![
+                t("  pear "),
+                CellValue::Error {
+                    value: ErrorValue::Ref
+                }
+            ]
+        )
+    );
+}
+
+/// `WRAPROWS`/`WRAPCOLS` cut a vector into a rectangle, padding the tail.
+#[test]
+fn wrapping_a_vector_pads_its_last_group() {
+    let workbook = fixture();
+    assert_eq!(
+        arrayed("_xlfn.WRAPROWS(_xlfn.SEQUENCE(5),2,0)", &workbook),
+        (3, 2, vec![n(1.0), n(2.0), n(3.0), n(4.0), n(5.0), n(0.0)])
+    );
+    assert_eq!(
+        arrayed("_xlfn.WRAPCOLS(_xlfn.SEQUENCE(5),2)", &workbook),
+        (
+            2,
+            3,
+            vec![
+                n(1.0),
+                n(3.0),
+                n(5.0),
+                n(2.0),
+                n(4.0),
+                CellValue::Error {
+                    value: ErrorValue::NA
+                }
+            ]
+        )
+    );
+}
+
+/// a whole-column criteria range costs the rows the sheet uses, so one
+/// `COUNTIFS` per key of a spilled block stays inside the evaluation budget.
+#[test]
+fn whole_column_criteria_cost_the_used_rows() {
+    let workbook = fixture();
+    assert_eq!(
+        values(r#"COUNTIFS(A:A,_xlfn.UNIQUE(A1:A4),B:B,">1")"#, &workbook),
+        vec![n(1.0), n(1.0), n(1.0)]
+    );
+    assert_eq!(
+        values(r#"SUMIFS(B:B,A:A,_xlfn.UNIQUE(A1:A4))"#, &workbook),
+        vec![n(3.0), n(3.0), n(4.0)]
+    );
+}
+
+/// `XLOOKUP` over a two-dimensional result answers with the whole row its
+/// lookup vector picks, and accepts a vector the formula computed.
+#[test]
+fn xlookup_picks_a_row_of_a_block() {
+    let workbook = fixture();
+    assert_eq!(
+        arrayed(r#"_xlfn.XLOOKUP("pear",A1:A4,A1:B4)"#, &workbook),
+        (1, 2, vec![t("pear"), n(4.0)])
+    );
+    assert_eq!(
+        values(r#"_xlfn.XLOOKUP(1,(A1:A4="apple")*1,B1:B4)"#, &workbook),
+        vec![n(1.0)]
+    );
+    assert_eq!(
+        values(r#"_xlfn.XLOOKUP("fig",A1:A4,B1:B4,"none")"#, &workbook),
+        vec![t("none")]
+    );
+}
+
+/// match mode picks the nearest value either side of the key; search mode -1
+/// reads the vector from the end.
+#[test]
+fn xlookup_honours_match_and_search_modes() {
+    let workbook = fixture();
+    assert_eq!(
+        values("_xlfn.XLOOKUP(3.5,B1:B4,A1:A4,,-1)", &workbook),
+        vec![t("  pear ")]
+    );
+    assert_eq!(
+        values("_xlfn.XLOOKUP(3.5,B1:B4,A1:A4,,1)", &workbook),
+        vec![t("pear")]
+    );
+    assert_eq!(
+        values(r#"_xlfn.XMATCH("apple",A1:A4)"#, &workbook),
+        vec![n(2.0)]
+    );
+    assert_eq!(
+        values(r#"_xlfn.XMATCH("apple",A1:A4,0,-1)"#, &workbook),
+        vec![n(4.0)]
+    );
+    assert_eq!(
+        values(r#"_xlfn.XMATCH({"pear";"apple"},A1:A4)"#, &workbook),
+        vec![n(3.0), n(2.0)]
+    );
+}
+
+/// a text builtin with no array-aware form still answers once per element.
+#[test]
+fn text_builtins_lift_over_a_range() {
+    let workbook = fixture();
+    assert_eq!(
+        values(r#"_xlfn.TEXTBEFORE(A1:A4,"p")"#, &workbook),
+        vec![t("  "), t("a"), t(""), t("a")]
+    );
+    assert_eq!(
+        values("ISODD(B1:B4)", &workbook),
+        vec![
+            CellValue::Bool { value: true },
+            CellValue::Bool { value: true },
+            CellValue::Bool { value: false },
+            CellValue::Bool { value: false },
+        ]
+    );
+}
+
 /// a callback body that reads a bound block pays for each read, so a large one
 /// cannot be copied for free once per output cell.
 #[test]
@@ -859,5 +1166,364 @@ fn rank_ranks_every_value_it_is_given() {
     assert_eq!(
         arrayed("RANK(B1:B4,B1:B4)", &workbook),
         (4, 1, vec![n(2.0), n(4.0), n(1.0), n(3.0)])
+    );
+}
+
+/// `TREND` evaluates the line `LINEST` fits: a perfect `y = 10x` fit predicts
+/// exactly, in the shape of `new_x`, and falls back to the known predictors.
+#[test]
+fn trend_predicts_along_the_fitted_line() {
+    let workbook = fixture();
+    let close = |formula: &str, want: &[f64]| {
+        let got = values(formula, &workbook);
+        assert_eq!(got.len(), want.len(), "{formula}: {got:?}");
+        for (value, want) in got.iter().zip(want) {
+            assert!(
+                matches!(value, CellValue::Number { value } if (value - want).abs() < 1e-9),
+                "{formula}: {value:?} != {want}"
+            );
+        }
+    };
+    close("TREND({10;20;30;40;50},{1;2;3;4;5},{6;7})", &[60.0, 70.0]);
+    close("TREND({10,20,30,40,50},{1,2,3,4,5},6)", &[60.0]);
+    close(
+        "TREND({10;20;30;40;50},{1;2;3;4;5})",
+        &[10.0, 20.0, 30.0, 40.0, 50.0],
+    );
+    close("TREND({10;20;30;40;50})", &[10.0, 20.0, 30.0, 40.0, 50.0]);
+    close(
+        "TREND({13;12;23;22;33;32;43},{1,2;2,1;3,4;4,3;5,6;6,5;7,8},{1,2;2,1})",
+        &[13.0, 12.0],
+    );
+    assert_eq!(
+        arrayed("TREND({10;20;30;40;50},{1;2;3;4;5},{6;7})", &workbook).0,
+        2
+    );
+    assert_eq!(
+        values("TREND({1;2},{1,2;3,4})", &workbook),
+        vec![CellValue::Error {
+            value: ErrorValue::Num
+        }]
+    );
+    assert_eq!(
+        values("TREND({10;20;30},{1;2})", &workbook),
+        vec![CellValue::Error {
+            value: ErrorValue::Ref
+        }]
+    );
+    assert_eq!(
+        values("TREND()", &workbook),
+        vec![CellValue::Error {
+            value: ErrorValue::Value
+        }]
+    );
+}
+
+/// `FREQUENCY` answers a column one taller than its bins, counts each value
+/// in the first interval that holds it, and ignores everything non-numeric.
+#[test]
+fn frequency_bins_values_into_one_column() {
+    let workbook = fixture();
+    assert_eq!(
+        arrayed("FREQUENCY({1;2;3;4;5},{2;4})", &workbook),
+        (3, 1, vec![n(2.0), n(2.0), n(1.0)])
+    );
+    assert_eq!(
+        arrayed("FREQUENCY({1;2;3;4;5},{4;2})", &workbook),
+        (3, 1, vec![n(2.0), n(2.0), n(1.0)])
+    );
+    assert_eq!(
+        arrayed("FREQUENCY({1,\"x\",TRUE,3},{2})", &workbook),
+        (2, 1, vec![n(1.0), n(1.0)])
+    );
+    assert_eq!(
+        arrayed("FREQUENCY({1;2;3},{3;3})", &workbook),
+        (3, 1, vec![n(3.0), n(0.0), n(0.0)])
+    );
+    assert_eq!(
+        values("FREQUENCY({1;2;3},{9})", &workbook),
+        vec![n(3.0), n(0.0)]
+    );
+    assert_eq!(
+        values("FREQUENCY({1;2;3},{1/0})", &workbook),
+        vec![CellValue::Error {
+            value: ErrorValue::Div0
+        }]
+    );
+    assert_eq!(
+        values("FREQUENCY({1;2;3})", &workbook),
+        vec![CellValue::Error {
+            value: ErrorValue::Value
+        }]
+    );
+}
+
+/// the longest-run idiom: `FREQUENCY` over the row numbers of the matching
+/// rows, binned by the row numbers of the rest, and the widest gap wins.
+#[test]
+fn frequency_measures_the_longest_run() {
+    let workbook = fixture();
+    assert_eq!(
+        values(
+            "MAX(FREQUENCY(IF(A1:A4=\"apple\",ROW(A1:A4)),IF(A1:A4<>\"apple\",ROW(A1:A4))))",
+            &workbook
+        ),
+        vec![n(1.0)]
+    );
+}
+
+/// the legacy CSE idiom: `IF(range=key, range)` hands an aggregate an array
+/// whose unmatched positions are `FALSE`. excel ignores non-numerics in an
+/// array argument the way it ignores them in a reference, so only the matched
+/// numbers count. A2 and A4 are "apple", carrying B2 = 1 and B4 = 2.
+#[test]
+fn aggregates_take_a_computed_array_the_way_they_take_a_range() {
+    let workbook = fixture();
+    let matched = "IF(A1:A4=\"apple\",B1:B4)";
+    assert_eq!(
+        values(&format!("MEDIAN({matched})"), &workbook),
+        vec![n(1.5)]
+    );
+    assert_eq!(
+        values(&format!("_xlfn.STDEV.P({matched})"), &workbook),
+        vec![n(0.5)]
+    );
+    assert_eq!(
+        values(&format!("_xlfn.VAR.P({matched})"), &workbook),
+        vec![n(0.25)]
+    );
+    assert_eq!(
+        values(&format!("SMALL({matched},1)"), &workbook),
+        vec![n(1.0)]
+    );
+    assert_eq!(
+        values(&format!("LARGE({matched},1)"), &workbook),
+        vec![n(2.0)]
+    );
+    assert_eq!(
+        values(&format!("PERCENTILE({matched},0.5)"), &workbook),
+        vec![n(1.5)]
+    );
+    assert_eq!(
+        values(&format!("SUBTOTAL(1,{matched})"), &workbook),
+        vec![n(1.5)]
+    );
+    assert_eq!(
+        values(&format!("CORREL({matched},B1:B4)"), &workbook),
+        vec![n(1.0)]
+    );
+}
+
+/// an argument written out rather than computed still coerces: a logical typed
+/// directly into an aggregate counts, where one arriving inside an array does
+/// not.
+#[test]
+fn a_directly_written_logical_still_counts_toward_an_aggregate() {
+    let workbook = fixture();
+    assert_eq!(values("MEDIAN(TRUE,2,3)", &workbook), vec![n(2.0)]);
+    assert_eq!(values("MEDIAN(B1:B4)", &workbook), vec![n(2.5)]);
+    assert_eq!(values("SMALL({3;1;2},1)", &workbook), vec![n(1.0)]);
+}
+
+/// `SUMPRODUCT(--(range=key))` counts matches from a computed block, so a cell
+/// that is not an array formula still reads its operands as arrays rather than
+/// coercing them to one value.
+#[test]
+fn sumproduct_reads_a_computed_operand_as_a_block() {
+    let workbook = fixture();
+    assert_eq!(
+        values("SUMPRODUCT(--(A1:A4=\"apple\"))", &workbook),
+        vec![n(2.0)]
+    );
+    assert_eq!(
+        values("SUMPRODUCT(--(A1:A4=\"apple\"),B1:B4)", &workbook),
+        vec![n(3.0)]
+    );
+    assert_eq!(
+        values("SUMPRODUCT((A1:A4=\"apple\")*1)", &workbook),
+        vec![n(2.0)]
+    );
+}
+
+/// a `:` join is a reference, so array mode reads it as the block it spans
+/// and a failing end surfaces as that end's error. B1:B4 = 3, 1, 4, 2.
+#[test]
+fn range_join_reads_as_a_block_in_array_mode() {
+    let workbook = fixture();
+    assert_eq!(
+        arrayed("B1:INDEX(B1:B4,3)", &workbook),
+        (3, 1, vec![n(3.0), n(1.0), n(4.0)])
+    );
+    assert_eq!(values("MAX(B1:INDEX(B1:B4,3))", &workbook), vec![n(4.0)]);
+    assert_eq!(
+        values("SUM(B1:INDEX(B1:B4,MATCH(9,B1:B4,0)))", &workbook),
+        vec![CellValue::Error {
+            value: ErrorValue::NA
+        }]
+    );
+}
+
+/// FORMULATEXT shows the formula a cell holds, braced when the cell is an
+/// array formula, and reports `#N/A` for a cell that holds none.
+#[test]
+fn formulatext_reads_the_formula_a_cell_holds() {
+    let mut workbook = Workbook::default();
+    let mut sheet = Sheet::new("Data");
+    sheet.set_cell(
+        a1("A1"),
+        Cell {
+            value: n(3.0),
+            formula: Some("1+2".into()),
+            ..Cell::default()
+        },
+    );
+    put(&mut sheet, "A2", n(7.0));
+    workbook.sheets.push(sheet);
+    assert_eq!(values("_xlfn.FORMULATEXT(A1)", &workbook), vec![t("=1+2")]);
+    assert_eq!(
+        values("_xlfn.FORMULATEXT(A2)", &workbook),
+        vec![CellValue::Error {
+            value: ErrorValue::NA
+        }]
+    );
+}
+
+/// `IFS` answers once per element when a condition or a result is a block,
+/// the way every other scalar-argument builtin does. B1:B4 = 3, 1, 4, 2.
+#[test]
+fn ifs_answers_once_per_element() {
+    let workbook = fixture();
+    assert_eq!(
+        arrayed("_xlfn.IFS(B1:B4>2,\"big\",TRUE,\"small\")", &workbook),
+        (4, 1, vec![t("big"), t("small"), t("big"), t("small")])
+    );
+    // a condition column against a result grid broadcasts to the grid
+    assert_eq!(
+        arrayed("_xlfn.IFS({1;0},{10,20;30,40},1,\"\")", &workbook).0,
+        2
+    );
+    assert_eq!(
+        values("_xlfn.IFS(FALSE,1,FALSE,2)", &workbook),
+        vec![CellValue::Error {
+            value: ErrorValue::NA
+        }]
+    );
+}
+
+/// `COUNT(1/(range=key))` counts the matches: the misses divide by zero, and
+/// an error is simply not a number. A2 and A4 are "apple".
+#[test]
+fn count_reads_a_computed_block_and_skips_its_errors() {
+    let workbook = fixture();
+    assert_eq!(values("COUNT({1;2})", &workbook), vec![n(2.0)]);
+    assert_eq!(values("COUNT({1;2},{3;4})", &workbook), vec![n(4.0)]);
+    assert_eq!(
+        values("COUNT(1/(A1:A4=\"apple\"))", &workbook),
+        vec![n(2.0)]
+    );
+    assert_eq!(values("SUM({1;2})", &workbook), vec![n(3.0)]);
+}
+
+/// a callback over a range gets each cell as a reference, not just as a
+/// value, so `OFFSET(c,,1)` and `A1:c` mean something inside one. the
+/// fixture is names in A1:A4 and numbers in B1:B4.
+#[test]
+fn a_callback_argument_keeps_the_cell_it_came_from() {
+    let workbook = fixture();
+    assert_eq!(
+        values(
+            "_xlfn.MAP(A1:A4,_xlfn.LAMBDA(_xlpm.c,OFFSET(_xlpm.c,,1)))",
+            &workbook
+        ),
+        vec![n(3.0), n(1.0), n(4.0), n(2.0)]
+    );
+    assert_eq!(
+        values(
+            "_xlfn.MAP(B1:B4,_xlfn.LAMBDA(_xlpm.c,ROW(_xlpm.c)))",
+            &workbook
+        ),
+        vec![n(1.0), n(2.0), n(3.0), n(4.0)]
+    );
+    assert_eq!(
+        values(
+            "_xlfn.REDUCE(0,B1:B4,_xlfn.LAMBDA(_xlpm.a,_xlpm.x,_xlpm.a+ROW(_xlpm.x)))",
+            &workbook
+        ),
+        vec![n(10.0)]
+    );
+    // the range operator reaches the bound cell as an end
+    assert_eq!(
+        values(
+            "_xlfn.MAP(B1:B4,_xlfn.LAMBDA(_xlpm.c,COLUMNS(A1:_xlpm.c)))",
+            &workbook
+        ),
+        vec![n(2.0), n(2.0), n(2.0), n(2.0)]
+    );
+    // a computed argument is a value and nothing more
+    assert_eq!(
+        values(
+            "_xlfn.MAP({1;2},_xlfn.LAMBDA(_xlpm.c,ROW(_xlpm.c)))",
+            &workbook
+        ),
+        vec![
+            CellValue::Error {
+                value: ErrorValue::Value
+            },
+            CellValue::Error {
+                value: ErrorValue::Value
+            }
+        ]
+    );
+}
+
+/// INDIRECT names a reference, so array mode reads the whole rectangle the
+/// way it already does for OFFSET.
+#[test]
+fn indirect_reads_as_a_block() {
+    let workbook = fixture();
+    assert_eq!(
+        arrayed("INDIRECT(\"B1:B4\")", &workbook),
+        (4, 1, vec![n(3.0), n(1.0), n(4.0), n(2.0)])
+    );
+    assert_eq!(
+        values("_xlfn.TOROW(INDIRECT(\"B1:B4\"))", &workbook),
+        vec![n(3.0), n(1.0), n(4.0), n(2.0)]
+    );
+    assert_eq!(values("INDIRECT(\"B2\")", &workbook), vec![n(1.0)]);
+    assert_eq!(
+        values("INDIRECT(\"nonsense\")", &workbook),
+        vec![CellValue::Error {
+            value: ErrorValue::Ref
+        }]
+    );
+}
+
+/// SORT follows the same collation, which is what puts `[Person_1]` above
+/// `[Person_10]` and both above a plain name.
+#[test]
+fn sort_follows_excels_collation() {
+    let workbook = fixture();
+    assert_eq!(
+        values(
+            "_xlfn._xlws.SORT({\"Callie\";\"[P_10]\";\"[P_1]\";\"[P_2]\"})",
+            &workbook
+        ),
+        vec![t("[P_1]"), t("[P_10]"), t("[P_2]"), t("Callie")]
+    );
+}
+
+/// an array primary needs the fallback's shape, because a longer fallback pads
+/// it and that padding is caught — but what the fallback spends getting there
+/// must not discard an answer that never used it.
+#[test]
+fn an_unused_fallback_does_not_discard_the_answer() {
+    let workbook = fixture();
+    assert_eq!(
+        values("IFERROR(B1:B2,1/0)", &workbook),
+        vec![n(3.0), n(1.0)]
+    );
+    assert_eq!(
+        values("IFERROR(B1:B2,_xlfn.SEQUENCE(4))", &workbook),
+        vec![n(3.0), n(1.0), n(3.0), n(4.0)]
     );
 }
