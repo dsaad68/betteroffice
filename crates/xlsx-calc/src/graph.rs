@@ -7,7 +7,7 @@ use std::sync::Arc;
 use xlsx_model::{CellRange, CellRef, ColId, DefinedName, RowId, SheetId, Table, Workbook};
 
 use crate::TableSpec;
-use crate::deps::{offset_target, positional_argument, references};
+use crate::deps::{offset_target, positional_argument, range_join_span, references};
 use crate::eval::{ParseCache, parse_cached};
 use crate::parser::Expr;
 use crate::reference::table_rect;
@@ -267,7 +267,7 @@ impl DepGraph {
         let mut out = Vec::new();
         let mut seen = HashSet::new();
         self.add_references(owner.sheet, expr, &mut out, &mut seen);
-        self.add_defined_name_references(owner.sheet, expr, &mut out, &mut seen);
+        self.add_defined_name_references(owner, expr, &mut out, &mut seen);
         self.add_table_references(owner, expr, &mut out, &mut seen);
         out
     }
@@ -333,13 +333,13 @@ impl DepGraph {
 
     fn add_defined_name_references(
         &self,
-        owner: SheetId,
+        node: NodeKey,
         expr: &Expr,
         out: &mut Vec<(SheetId, CellRange)>,
         seen: &mut HashSet<(SheetId, u32, u32, u32, u32)>,
     ) {
         let mut pending = Vec::new();
-        push_defined_name_uses(owner, expr, &mut pending);
+        push_defined_name_uses(node.sheet, expr, &mut pending);
         let mut expanded = HashSet::new();
         while let Some((owner, scope, name)) = pending.pop() {
             let Some((lookup_sheet, defined)) = self.resolve_defined_name(owner, &scope, &name)
@@ -361,6 +361,8 @@ impl DepGraph {
             };
             let definition_sheet = defined.local_sheet.unwrap_or(lookup_sheet);
             self.add_references(definition_sheet, &expression, out, seen);
+            // a name's body reads structured references of its own
+            self.add_table_references(node, &expression, out, seen);
             push_defined_name_uses(definition_sheet, &expression, &mut pending);
         }
     }
@@ -422,6 +424,10 @@ fn push_table_uses<'a>(expr: &'a Expr, uses: &mut Vec<(&'a str, &'a TableSpec)>)
         match expression {
             Expr::TableRef { table, spec } => uses.push((table.as_str(), spec)),
             Expr::ArrayLiteral { values, .. } => expressions.extend(values),
+            Expr::RangeJoin { start, end } => {
+                expressions.push(end);
+                expressions.push(start);
+            }
             Expr::Unary { expr, .. } | Expr::Percent(expr) => expressions.push(expr),
             Expr::Binary { lhs, rhs, .. } => {
                 expressions.push(rhs);
@@ -449,6 +455,10 @@ fn push_defined_name_uses(owner: SheetId, expr: &Expr, pending: &mut Vec<Defined
             Expr::Name { scope, name } => uses.push((owner, scope.clone(), name.clone())),
             Expr::Literal(_) => {}
             Expr::ArrayLiteral { values, .. } => expressions.extend(values),
+            Expr::RangeJoin { start, end } => {
+                expressions.push(end);
+                expressions.push(start);
+            }
             Expr::Unary { expr, .. } | Expr::Percent(expr) => expressions.push(expr),
             Expr::Binary { lhs, rhs, .. } => {
                 expressions.push(rhs);
@@ -468,7 +478,8 @@ fn push_defined_name_uses(owner: SheetId, expr: &Expr, pending: &mut Vec<Defined
             | Expr::Ref { .. }
             | Expr::Range { .. }
             | Expr::TableRef { .. }
-            | Expr::ColumnRange { .. } => {}
+            | Expr::ColumnRange { .. }
+            | Expr::RowRange { .. } => {}
         }
     }
     pending.extend(uses.into_iter().rev());
@@ -491,6 +502,15 @@ fn push_volatile_name_uses(owner: SheetId, expr: &Expr, pending: &mut Vec<Define
             Expr::Name { scope, name } => uses.push((owner, scope.clone(), name.clone())),
             Expr::Literal(_) => {}
             Expr::ArrayLiteral { values, .. } => expressions.extend(values),
+            Expr::RangeJoin { start, end } => {
+                // a span the source cannot bound would under-report, so the
+                // formula recomputes every pass instead
+                if range_join_span(start, end).is_none() {
+                    return true;
+                }
+                expressions.push(end);
+                expressions.push(start);
+            }
             Expr::Unary { expr, .. } | Expr::Percent(expr) => expressions.push(expr),
             Expr::Binary { lhs, rhs, .. } => {
                 expressions.push(rhs);
@@ -503,7 +523,8 @@ fn push_volatile_name_uses(owner: SheetId, expr: &Expr, pending: &mut Vec<Define
             | Expr::Ref { .. }
             | Expr::Range { .. }
             | Expr::TableRef { .. }
-            | Expr::ColumnRange { .. } => {}
+            | Expr::ColumnRange { .. }
+            | Expr::RowRange { .. } => {}
         }
     }
     pending.extend(uses.into_iter().rev());
@@ -637,6 +658,20 @@ mod tests {
         let mut vol: Vec<String> = g.volatile_cells().map(|(_, c)| c.to_a1()).collect();
         vol.sort();
         assert_eq!(vol, vec!["A1", "A2"]);
+    }
+
+    /// a join whose span the source can bound is an ordinary edge; one whose
+    /// end moves with a value has to recompute every pass instead.
+    #[test]
+    fn range_join_is_an_edge_when_its_span_is_static() {
+        let mut wb = wb2();
+        let s = wb.sheet_mut(SheetId(0)).unwrap();
+        s.set_cell(a1("E1"), formula_cell("SUM(A1:INDEX(A1:A9,3))"));
+        s.set_cell(a1("E2"), formula_cell("SUM(B4:OFFSET(B4,0,C1))"));
+        let g = DepGraph::build(&wb);
+        assert_eq!(deps_a1(&g, "Sheet1", "A5", &wb), vec!["Sheet1!E1"]);
+        let vol: Vec<String> = g.volatile_cells().map(|(_, c)| c.to_a1()).collect();
+        assert_eq!(vol, vec!["E2"]);
     }
 
     #[test]

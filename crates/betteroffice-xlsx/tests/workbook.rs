@@ -2309,7 +2309,16 @@ fn rename_invalidates_pending_proposals() {
 #[test]
 fn reports_recalculation_limits_without_overwriting_cached_values() {
     let mut model = WorkbookModel::default();
-    model.sheets.push(Sheet::new("Data"));
+    let mut data = Sheet::new("Data");
+    // a cell in the far corner gives Data the extent the limit is there for
+    data.set_cell(
+        cell("XFD1048576"),
+        Cell {
+            value: CellValue::Number { value: 1.0 },
+            ..Cell::default()
+        },
+    );
+    model.sheets.push(data);
     let mut formulas = Sheet::new("Formulas");
     formulas.set_cell(
         cell("A1"),
@@ -7053,6 +7062,54 @@ fn an_imported_chart_keeps_a_cache_it_cannot_resolve_safely() {
         let before = plotted(&workbook);
         bump_b2(&mut workbook);
         assert_eq!(before, plotted(&workbook), "{reason} must keep its cache");
+    }
+}
+
+#[test]
+fn column_style_restoration_is_internal() {
+    let mut workbook = Workbook::open(include_bytes!("fixtures/column-style-undo.xlsx")).unwrap();
+    let before = workbook.model().clone();
+    let error = workbook
+        .apply_ops(
+            vec![Op::RestoreColStyles {
+                sheet: SheetId(0),
+                styles: Vec::new(),
+            }],
+            CalculationOptions::default(),
+        )
+        .unwrap_err();
+    assert!(matches!(error, Error::InvalidOperation(message) if message.contains("internal")));
+    assert_eq!(workbook.model(), &before);
+}
+
+#[test]
+fn deleting_a_styled_column_then_undoing_restores_its_rendering() {
+    let source = include_bytes!("fixtures/column-style-undo.xlsx");
+    let mut workbook = Workbook::open(source).unwrap();
+    let columns = workbook.model().sheets[0].col_styles.clone();
+    assert!(!columns.is_empty());
+    let before = plotted(&workbook);
+    let options = CalculationOptions::default();
+    workbook
+        .apply_ops(
+            vec![Op::DeleteCols {
+                sheet: SheetId(0),
+                at: 1,
+                count: 1,
+            }],
+            options,
+        )
+        .unwrap();
+    assert!(workbook.model().sheets[0].col_styles.is_empty());
+    assert_ne!(plotted(&workbook), before);
+    for _ in 0..2 {
+        workbook.undo(options).unwrap();
+        assert_eq!(workbook.model().sheets[0].col_styles, columns);
+        assert_eq!(plotted(&workbook), before);
+        let reopened = Workbook::open(&workbook.save().unwrap()).unwrap();
+        assert_eq!(reopened.model().sheets[0].col_styles, columns);
+        workbook.redo(options).unwrap();
+        assert!(workbook.model().sheets[0].col_styles.is_empty());
     }
 }
 

@@ -605,11 +605,13 @@ impl WorkbookAuthority {
 
     /// True while the replica still holds nothing but its own bootstrap.
     fn is_pristine(&self) -> bool {
-        let state_vector = self.doc.transact().state_vector();
+        let txn = self.doc.transact();
+        let state_vector = txn.state_vector();
         state_vector.len() == 1
             && state_vector
                 .iter()
                 .all(|(client, _)| client.get() == self.base.bootstrap_client_id)
+            && txn.snapshot().delete_set.is_empty()
     }
 
     /// True when the document stands on its own rather than being the tail of
@@ -1516,6 +1518,7 @@ pub(crate) fn is_structural_op(op: &Op) -> bool {
             | Op::DeleteCols { .. }
             | Op::SetFreezePane { .. }
             | Op::SetHyperlinks { .. }
+            | Op::RestoreColStyles { .. }
             | Op::MergeCells { .. }
             | Op::UnmergeCells { .. }
             | Op::AddSheet { .. }
@@ -2308,6 +2311,7 @@ fn requires_full_semantic_sync(op: &Op) -> bool {
             | Op::DeleteCols { .. }
             | Op::SetFreezePane { .. }
             | Op::SetHyperlinks { .. }
+            | Op::RestoreColStyles { .. }
             | Op::SetCharts { .. }
             | Op::SetChartAnchor { .. }
             | Op::RemoveSheet { .. }
@@ -2401,6 +2405,7 @@ fn op_sheet(op: &Op) -> Option<SheetId> {
         | Op::SetRowHeight { sheet, .. }
         | Op::SetFreezePane { sheet, .. }
         | Op::SetHyperlinks { sheet, .. }
+        | Op::RestoreColStyles { sheet, .. }
         | Op::SetCharts { sheet, .. }
         | Op::SetChartAnchor { sheet, .. }
         | Op::MergeCells { sheet, .. }
@@ -3187,6 +3192,7 @@ fn error_from_str(value: &str) -> Result<ErrorValue, String> {
         "#REF!" => Ok(ErrorValue::Ref),
         "#VALUE!" => Ok(ErrorValue::Value),
         "#SPILL!" => Ok(ErrorValue::Spill),
+        "#CALC!" => Ok(ErrorValue::Calc),
         _ => Err(format!("unsupported cell error {value}")),
     }
 }

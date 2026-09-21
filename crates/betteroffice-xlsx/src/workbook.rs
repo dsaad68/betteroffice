@@ -563,9 +563,6 @@ impl Workbook {
     /// that later builds on them would stay pending forever on a peer that
     /// never received them.
     fn restore_snapshot(&mut self, update: &[u8], options: CalculationOptions) -> Result<bool> {
-        if self.edited_since_open {
-            return Ok(false);
-        }
         let WorkbookMode::Collaborative { structure: frozen } = &self.mode else {
             return Ok(false);
         };
@@ -2280,6 +2277,7 @@ impl Workbook {
                 | Op::SetRowHeight { sheet, .. }
                 | Op::SetFreezePane { sheet, .. }
                 | Op::SetHyperlinks { sheet, .. }
+                | Op::RestoreColStyles { sheet, .. }
                 | Op::MergeCells { sheet, .. }
                 | Op::UnmergeCells { sheet, .. }
                 | Op::PatchRangeStyle { sheet, .. }
@@ -2901,6 +2899,7 @@ fn worksheet_edit_target(op: &Op) -> Option<SheetId> {
         | Op::SetRowHeight { sheet, .. }
         | Op::SetFreezePane { sheet, .. }
         | Op::SetHyperlinks { sheet, .. }
+        | Op::RestoreColStyles { sheet, .. }
         | Op::SetCharts { sheet, .. }
         | Op::SetChartAnchor { sheet, .. }
         | Op::MergeCells { sheet, .. }
@@ -3043,7 +3042,10 @@ fn validate_op(model: &WorkbookModel, op: &Op) -> Result<()> {
         Op::RenameSheet { sheet, .. } => {
             require_sheet(model, *sheet)?;
         }
-        Op::RestoreSheet { .. } | Op::SetDefinedNames { .. } | Op::SetCharts { .. } => {
+        Op::RestoreSheet { .. }
+        | Op::SetDefinedNames { .. }
+        | Op::SetCharts { .. }
+        | Op::RestoreColStyles { .. } => {
             return Err(Error::InvalidOperation(
                 "restore sheet operations are internal".to_string(),
             ));
@@ -3854,6 +3856,7 @@ fn invalidates_proposals(op: &Op) -> bool {
             | Op::InsertCols { .. }
             | Op::DeleteCols { .. }
             | Op::SetHyperlinks { .. }
+            | Op::RestoreColStyles { .. }
             | Op::SetCharts { .. }
             | Op::AddSheet { .. }
             | Op::RemoveSheet { .. }
