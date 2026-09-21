@@ -74,18 +74,43 @@ function withIntrinsicSize(text: string): string {
   return `${text.slice(0, at)} width="${width}" height="${height}"${text.slice(at)}`;
 }
 
-/** The root start tag's bounds, skipping `>` inside a quoted attribute value. */
+/** The `<svg>` start tag's bounds, or nothing unless it is the first element. */
 function rootTag(text: string): { start: number; end: number } | undefined {
-  const start = text.search(/<svg[\s/>]/);
-  if (start < 0) return;
+  let start = 0;
+  while (start < text.length) {
+    if (/\s/.test(text[start])) start += 1;
+    else if (text.startsWith('<!--', start)) start = past(text.indexOf('-->', start + 4), 3);
+    else if (text.startsWith('<?', start)) start = past(text.indexOf('?>', start + 2), 2);
+    else if (text.startsWith('<!', start)) start = past(declarationEnd(text, start + 2), 1);
+    else break;
+    if (start < 0) return;
+  }
+  if (!/^<svg[\s/>]/.test(text.slice(start, start + 5))) return;
+  const end = declarationEnd(text, start + 4);
+  return end < 0 ? undefined : { start, end };
+}
+
+function past(at: number, length: number): number {
+  return at < 0 ? -1 : at + length;
+}
+
+/**
+ * The `>` closing a markup declaration or start tag, past `>` inside a quoted
+ * value or a DOCTYPE's internal subset.
+ */
+function declarationEnd(text: string, from: number): number {
   let quote = '';
-  for (let index = start; index < text.length; index += 1) {
+  let subset = false;
+  for (let index = from; index < text.length; index += 1) {
     const character = text[index];
     if (quote) {
       if (character === quote) quote = '';
     } else if (character === '"' || character === "'") quote = character;
-    else if (character === '>') return { start, end: index };
+    else if (character === '[') subset = true;
+    else if (character === ']') subset = false;
+    else if (character === '>' && !subset) return index;
   }
+  return -1;
 }
 
 /** An EMF whose only ink is one unscaled `EMR_STRETCHDIBITS` filling its bounds. */

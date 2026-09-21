@@ -316,6 +316,20 @@ mod tests {
     }
 
     #[test]
+    fn a_prologue_that_mentions_a_tag_is_not_the_root_element() {
+        let prologue = concat!(
+            r##"<!-- exported by <svg width="1"><g><g><g> -->"##,
+            r##"<?xml-stylesheet href="a.css" type="text/css"?>"##
+        );
+        let body = r##"<rect width="96" height="96" fill="#00ff00"/>"##;
+        assert!(parse(format!("{prologue}{}", document(body)).as_bytes()).is_ok());
+        assert_eq!(
+            refusal(format!("{prologue}<html><svg/></html>").as_bytes()),
+            Some(SvgRefusal::NotSvg)
+        );
+    }
+
+    #[test]
     fn a_declared_entity_is_refused_before_it_can_expand() {
         let source = concat!(
             r##"<!DOCTYPE svg [<!ENTITY secret SYSTEM "file:///etc/passwd">]>"##,

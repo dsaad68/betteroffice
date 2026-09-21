@@ -178,6 +178,32 @@ describe('presentation image blobs', () => {
     }
   });
 
+  test('finds the root past a prologue that mentions a tag of its own', async () => {
+    const prologue = [
+      '<!-- authored by <svg viewBox="0 0 1 1" width="1"> exporter -->',
+      '<?xml version="1.0" encoding="utf-8"?>',
+      '<?xml-stylesheet href="a.css" type="text/css"?>',
+      '<!DOCTYPE svg PUBLIC "-//W3C//DTD SVG 1.1//EN" "svg11.dtd" [<!ENTITY a "<b>">]>',
+      '<!-- a second <svg width="2"/> note -->',
+    ].join('\n');
+    const svg = `${prologue}\n<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 16"/>`;
+    const blob = presentationImageBlob(new TextEncoder().encode(svg));
+    expect(await blob.text()).toBe(
+      `${prologue}\n<svg width="24" height="16" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 16"/>`
+    );
+  });
+
+  test('leaves a document alone when no root element settles what it is', async () => {
+    for (const svg of [
+      '<!-- unterminated <svg viewBox="0 0 24 16"/>',
+      '<!-- only a comment mentioning <svg viewBox="0 0 24 16"/> -->',
+      '<html><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 16"/></html>',
+      '<svg:svg xmlns:svg="http://www.w3.org/2000/svg" viewBox="0 0 24 16"/>',
+    ]) {
+      expect(await presentationImageBlob(new TextEncoder().encode(svg)).text()).toBe(svg);
+    }
+  });
+
   test('does not claim raster media, prose or an oversized document as SVG', async () => {
     const oversized = new TextEncoder().encode(
       `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 4 4"><desc>${' '.repeat(4 * 1024 * 1024)}</desc></svg>`
