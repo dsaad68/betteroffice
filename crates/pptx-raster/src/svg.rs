@@ -187,7 +187,9 @@ pub enum SvgRefusal {
     /// Group layers past [`MAX_SVG_LAYER_DEPTH`], or a clip path that is
     /// itself clipped.
     TooManyLayers,
-    /// Paints past [`MAX_SVG_OVERDRAW`] or [`MAX_SVG_RENDER_WORK`].
+    /// Paints past [`MAX_SVG_OVERDRAW`] or [`MAX_SVG_RENDER_WORK`], or draws a
+    /// path whose edges, outline and dashes would outgrow the envelope's share
+    /// for one path, or a stroke too wide for the rasteriser's fixed point.
     RenderTooCostly,
     /// `usvg` or `resvg` panicked.
     Panicked,
