@@ -2334,6 +2334,8 @@ struct ChartLegendIn {
     #[serde(default)]
     visible: Option<bool>,
     #[serde(default)]
+    overlay: bool,
+    #[serde(default)]
     text: Option<ChartTextIn>,
 }
 
@@ -8191,6 +8193,7 @@ fn plot_chart_from(chart: &ChartIn) -> PlotChart<'_> {
         legend: chart.legend.as_ref().map(|legend| PlotLegend {
             position: legend.position.as_deref(),
             visible: legend.visible,
+            overlay: legend.overlay,
         }),
         value_axis: chart
             .axes
@@ -8251,6 +8254,7 @@ fn plot_chart_from(chart: &ChartIn) -> PlotChart<'_> {
             ),
         },
         fill: None,
+        plot_layout: None,
     }
 }
 
@@ -8354,6 +8358,7 @@ fn plot_series_from(series: &ChartSeriesIn) -> PlotSeries<'_> {
                 color: point.color.as_deref(),
                 marker: plot_marker_from(point.marker.as_ref()),
                 label: point.label.as_deref(),
+                label_runs: None,
                 explosion: point.explosion,
                 labels: None,
             })
@@ -8455,6 +8460,7 @@ impl PlotSink for PrimitiveSink<'_> {
                 font,
                 color,
                 align: _,
+                rotation_deg: _,
             } => prims.push(Primitive::Text(TextRunPrimitive {
                 text,
                 x: px(x),
