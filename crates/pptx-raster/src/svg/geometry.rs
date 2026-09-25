@@ -7,7 +7,7 @@
 use std::str::FromStr;
 
 use resvg::usvg::roxmltree::Node;
-use svgtypes::{Length, LengthUnit, PathParser, PathSegment};
+use svgtypes::{Length, LengthListParser, LengthUnit, PathParser, PathSegment};
 
 use super::SvgRefusal;
 use super::audit::SVG_NS;
@@ -270,6 +270,18 @@ fn absolute(node: Node<'_, '_>, name: &str) -> Result<Option<f64>, SvgRefusal> {
         largest = Some(largest.map_or(value, |largest| largest.max(value)));
     }
     Ok(largest)
+}
+
+/// Bytes of a dash list, which `usvg` parses anew for every shape that
+/// strokes with it. `em` and `ex` are refused: each entry in them walks up
+/// the tree for a font size.
+pub(super) fn dash_list(value: &str) -> Result<u64, SvgRefusal> {
+    for length in LengthListParser::from(value).flatten() {
+        if matches!(length.unit, LengthUnit::Em | LengthUnit::Ex) {
+            return Err(SvgRefusal::ExpansionTooLarge);
+        }
+    }
+    Ok(value.len() as u64)
 }
 
 /// Every value of `name` in no namespace or the SVG one, the two `usvg` reads.

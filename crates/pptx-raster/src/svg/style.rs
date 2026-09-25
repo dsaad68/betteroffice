@@ -24,6 +24,8 @@ pub(super) struct StyleSheet<'a> {
     /// Selectors times the bytes of their block: `simplecss` copies a block's
     /// declarations once per selector of its list.
     copies: u64,
+    /// Bytes of the longest dash list a block declares.
+    dash: u64,
 }
 
 struct Rule<'a> {
@@ -73,6 +75,11 @@ impl<'a> StyleSheet<'a> {
     /// Style work parsing the sheets costs, once per document.
     pub(super) fn work(&self) -> u64 {
         self.work
+    }
+
+    /// Bytes of the longest dash list any rule declares.
+    pub(super) fn dash(&self) -> u64 {
+        self.dash
     }
 
     /// Style work testing every rule against one instance of `node`, for
@@ -138,6 +145,7 @@ impl<'a> StyleSheet<'a> {
                 return Err(SvgRefusal::UnsupportedStyle);
             }
             screen(declarations)?;
+            self.dash = self.dash.max(dash(declarations)?);
             let mut references = Vec::new();
             super::reference::css(declarations, &mut references)?;
             let block = self.blocks.len();
@@ -174,6 +182,24 @@ impl<'a> StyleSheet<'a> {
 /// it, measured at about 0.17 ns per byte squared.
 pub(super) fn rescans(len: usize) -> u64 {
     (len as u64).saturating_mul(len as u64) / 4
+}
+
+/// Bytes of the longest `stroke-dasharray` CSS text declares.
+pub(super) fn dash(text: &str) -> Result<u64, SvgRefusal> {
+    values(text, "stroke-dasharray").try_fold(0, |longest, value| {
+        super::geometry::dash_list(value).map(|bytes| bytes.max(longest))
+    })
+}
+
+/// Every value `text` declares for `property`, split as `simplecss` splits
+/// declarations.
+pub(super) fn values<'a>(text: &'a str, property: &'a str) -> impl Iterator<Item = &'a str> {
+    text.split(';').filter_map(move |declaration| {
+        let (name, value) = declaration.split_once(':')?;
+        name.trim()
+            .eq_ignore_ascii_case(property)
+            .then_some(value.trim())
+    })
 }
 
 /// Refuses CSS text that could apply a filter or inherit a value: a copy's

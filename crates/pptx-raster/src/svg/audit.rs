@@ -115,6 +115,8 @@ struct Element<'a> {
     /// Paints with the context element's paint, as `context-fill` does.
     context: bool,
     outline: Outline,
+    /// Bytes of the longest dash list the element declares.
+    dash: u64,
 }
 
 /// An element's instance as `usvg` expands it. Consumers are shapes that will
@@ -199,6 +201,7 @@ pub(super) fn audit(document: &Document<'_>) -> Result<(), SvgRefusal> {
             paint: [Paint::default(); 2],
             context: false,
             outline: Outline::default(),
+            dash: 0,
         };
         audit_attributes(&mut element)?;
         element.bytes += node.children().count() as u64;
@@ -235,6 +238,16 @@ pub(super) fn audit(document: &Document<'_>) -> Result<(), SvgRefusal> {
         return Err(SvgRefusal::ExpansionTooLarge);
     }
     elements[0].style = elements[0].style.saturating_add(sheet.work());
+    let dash = elements
+        .iter()
+        .map(|element| element.dash)
+        .fold(sheet.dash(), u64::max);
+    for element in elements
+        .iter_mut()
+        .filter(|element| element.role == Role::Shape)
+    {
+        element.bytes = element.bytes.saturating_add(dash);
+    }
     let room = MAX_SVG_EXPANDED_NODES as usize;
     let mut links = 0usize;
     for element in &mut elements {
@@ -441,6 +454,7 @@ fn audit_attributes(element: &mut Element<'_>) -> Result<(), SvgRefusal> {
                 .saturating_add(super::style::rescans(value.len()))
                 .saturating_add(applied);
             super::style::screen(value)?;
+            element.dash = element.dash.max(super::style::dash(value)?);
             element.context |= value.contains("context-");
             let mut targets = Vec::new();
             reference::css(value, &mut targets)?;
@@ -472,6 +486,9 @@ fn audit_attributes(element: &mut Element<'_>) -> Result<(), SvgRefusal> {
                 if let Some(target) = reference::paint(value)? {
                     element.links.push((link, target));
                 }
+            }
+            "stroke-dasharray" => {
+                element.dash = element.dash.max(geometry::dash_list(value)?);
             }
             "mask" | "marker-start" | "marker-mid" | "marker-end" => {
                 reference::func_iri(value)?;

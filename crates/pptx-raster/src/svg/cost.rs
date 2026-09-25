@@ -455,8 +455,10 @@ fn period(stroke: &usvg::Stroke) -> Option<f64> {
         .then(|| period / (array.len() / 2) as f64)
 }
 
-/// Dashes `tiny-skia` cuts from a stroke: path length over the dash period, in
-/// the path's own units, as its dasher counts them.
+/// Dashes `tiny-skia` cuts from a stroke, at most, in the path's own units: a
+/// pattern's dashes per period of length, and since it restarts the pattern at
+/// every contour and walks each interval, a pattern and a part more per
+/// contour, however short the contour and however long the pattern's gaps.
 fn dashes(data: &tiny_skia::Path, stroke: &usvg::Stroke) -> f64 {
     let Some(array) = stroke.dasharray() else {
         return 0.0;
@@ -465,5 +467,9 @@ fn dashes(data: &tiny_skia::Path, stroke: &usvg::Stroke) -> f64 {
     if period.is_nan() || period <= 0.0 {
         return 0.0;
     }
-    length(data, Transform::identity()) * (array.len() / 2) as f64 / period
+    let contours = data
+        .segments()
+        .filter(|segment| matches!(segment, PathSegment::MoveTo(_)))
+        .count() as f64;
+    (array.len() / 2) as f64 * (length(data, Transform::identity()) / period + 2.0 * contours)
 }

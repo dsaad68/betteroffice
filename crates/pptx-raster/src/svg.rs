@@ -1179,6 +1179,51 @@ pub(crate) mod tests {
         assert!(parse(document(few).as_bytes()).is_ok());
     }
 
+    #[test]
+    fn a_dash_list_is_charged_to_every_shape_that_may_stroke_with_it() {
+        let group = |pattern: &str, shapes: usize| {
+            document(&format!(
+                r##"<g stroke="#000" stroke-dasharray="{pattern}">{}</g>"##,
+                r##"<rect width="1" height="1"/>"##.repeat(shapes)
+            ))
+        };
+        let long = "1 1 ".repeat(5_000);
+        let started = std::time::Instant::now();
+        assert_eq!(
+            refusal(group(&long, 5_000).as_bytes()),
+            Some(SvgRefusal::ExpansionTooLarge)
+        );
+        assert!(started.elapsed() < std::time::Duration::from_secs(1));
+        assert!(parse(group("4 2", 5_000).as_bytes()).is_ok());
+        let css = format!(
+            "<style>g {{ stroke-dasharray: {long} }}</style>{}",
+            group("1", 5_000)
+        );
+        assert_eq!(
+            refusal(document(&css).as_bytes()),
+            Some(SvgRefusal::ExpansionTooLarge)
+        );
+        assert_eq!(
+            refusal(group("1em 1em", 1).as_bytes()),
+            Some(SvgRefusal::ExpansionTooLarge)
+        );
+    }
+
+    #[test]
+    fn a_dense_pattern_head_is_charged_on_every_contour_it_restarts() {
+        let pattern = format!("{}1e9", "0.001 0.001 ".repeat(500));
+        let body = format!(
+            r##"<path d="{}" stroke="#000" stroke-width="2" stroke-dasharray="{pattern}"/>"##,
+            "M1 1h1".repeat(2_000)
+        );
+        let started = std::time::Instant::now();
+        assert_eq!(
+            refusal(document(&body).as_bytes()),
+            Some(SvgRefusal::RenderTooCostly)
+        );
+        assert!(started.elapsed() < std::time::Duration::from_secs(1));
+    }
+
     pub(crate) fn opacity_nest(depth: usize) -> String {
         document(&format!(
             r##"{}<rect width="96" height="96" fill="#0000ff"/>{}"##,
