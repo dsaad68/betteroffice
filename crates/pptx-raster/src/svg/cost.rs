@@ -237,10 +237,8 @@ pub(super) fn measure(
                         let area = Area::of(path.abs_stroke_bounding_box(), scale)
                             .map_or(frame.surface, |area| area.meet(frame.surface));
                         tally.paint(area.pixels(), stroke.paint())?;
-                        if area.pixels() > 0.0 {
-                            let budget = strokes.as_deref_mut();
-                            measure_stroke(path, stroke, place, frame.surface, &mut tally, budget)?;
-                        }
+                        let budget = strokes.as_deref_mut();
+                        measure_stroke(path, stroke, place, frame.surface, &mut tally, budget)?;
                     }
                 }
                 Node::Image(_) | Node::Text(_) => return Err(SvgRefusal::UnsupportedElement),
@@ -269,12 +267,15 @@ pub(super) fn measure(
     })
 }
 
-/// Prices a stroke. A hairline is drawn a line at a time; anything wider is
+/// Prices a stroke, on the surface or off it: `resvg` dashes and outlines a
+/// stroke before anything culls it. A hairline is drawn a line at a time; anything wider is
 /// dashed, outlined by the stroker and filled, so it is charged the pieces
 /// [`geometry::stroke_verbs`] allows it, and with `strokes` left it is
 /// stroked here once, as `resvg` will stroke it, for the outline to be priced.
 /// Its curves must sit where the stroker's `f32` arithmetic stays well inside
-/// its tolerance: within [`MAX_SVG_STROKE_SPAN`] tolerances of the origin.
+/// its tolerance: within [`MAX_SVG_STROKE_SPAN`] tolerances of the origin. So
+/// must a dashed hairline's, which the dasher measures by splitting each curve
+/// until it meets a tolerance too.
 fn measure_stroke(
     path: &usvg::Path,
     stroke: &usvg::Stroke,
@@ -286,29 +287,33 @@ fn measure_stroke(
     let dashes = dashes(path.data(), stroke);
     tally.work += DASH_WORK * dashes;
     let dashed = dashes * DASH_PATH_BYTES;
+    let resolution = PathStroker::compute_resolution_scale(&place);
+    let tolerance = 0.25 / f64::from(resolution);
+    let radius = f64::from(stroke.width().get()) / 2.0;
+    let mut outline = outline(path.data());
+    let span = (outline.reach + radius) / tolerance;
+    let far = span.is_nan() || span > MAX_SVG_STROKE_SPAN;
     if hairline(path, stroke, place) {
         tally.work += HAIRLINE_WORK * length(path.data(), place);
         tally.transient = tally.transient.max(dashed);
+        if far && dashes > 0.0 {
+            tally.exceed();
+        }
         return Ok(());
     }
     let reach = reach(stroke, place);
     if reach.is_nan() || reach > MAX_REACH {
         return Err(SvgRefusal::RenderTooCostly);
     }
-    let resolution = PathStroker::compute_resolution_scale(&place);
-    let tolerance = 0.25 / f64::from(resolution);
-    let radius = f64::from(stroke.width().get()) / 2.0;
-    let mut outline = outline(path.data());
     outline.segments += dashes;
     outline.contours += dashes;
     if outline.curves > 0.0 {
         outline.curves += dashes;
     }
-    let span = (outline.reach + radius) / tolerance;
     let verbs = geometry::stroke_verbs(&outline, radius, tolerance);
     tally.work += VERB_WORK * verbs;
     let pieces = dashed + verbs * OUTLINE_VERB_BYTES;
-    if span.is_nan() || span > MAX_SVG_STROKE_SPAN || pieces > SVG_TRANSIENT_BYTES as f64 {
+    if far || pieces > SVG_TRANSIENT_BYTES as f64 {
         tally.exceed();
         return Ok(());
     }

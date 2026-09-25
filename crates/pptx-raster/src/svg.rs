@@ -1306,6 +1306,32 @@ pub(crate) mod tests {
         assert!(parse(document(&markers).as_bytes()).is_ok());
     }
 
+    #[test]
+    fn a_stroke_is_priced_where_resvg_strokes_it_on_the_surface_or_off() {
+        let curves = "M0 0C20 60 40 -60 50 0".repeat(200);
+        for place in ["translate(-50000 0) scale(100)", "scale(100)"] {
+            let body = format!(
+                r##"<g transform="{place}"><path d="{curves}" fill="none" stroke="#000"/></g>"##
+            );
+            let started = std::time::Instant::now();
+            assert_eq!(
+                refusal(document(&body).as_bytes()),
+                Some(SvgRefusal::RenderTooCostly),
+                "{place}"
+            );
+            assert!(started.elapsed() < std::time::Duration::from_secs(1));
+        }
+        let dashed = concat!(
+            r##"<g transform="translate(-3e7 0) scale(1000)"><path d="M30000 0C30010 20 30030 -10 30030 30" "##,
+            r##"stroke="#000" stroke-width="0.0005" stroke-dasharray="0.001 0.001"/></g>"##
+        );
+        assert_eq!(
+            refusal(document(dashed).as_bytes()),
+            Some(SvgRefusal::RenderTooCostly),
+            "a dashed hairline far out is measured past the float precision of its tolerance"
+        );
+    }
+
     pub(crate) fn opacity_nest(depth: usize) -> String {
         document(&format!(
             r##"{}<rect width="96" height="96" fill="#0000ff"/>{}"##,
