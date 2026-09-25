@@ -367,6 +367,10 @@ pub struct PlotAxis<'a> {
     pub minor_tick_mark: Option<&'a str>,
     pub major_gridlines: bool,
     pub minor_gridlines: bool,
+    /// `c:majorGridlines/c:spPr/a:ln`.
+    pub major_gridline: Option<PlotLine<'a>>,
+    /// `c:minorGridlines/c:spPr/a:ln`.
+    pub minor_gridline: Option<PlotLine<'a>>,
     /// `c:crossBetween`: `midCat` puts the points on the category ticks.
     pub cross_between: Option<&'a str>,
     pub number_format: Option<&'a str>,
@@ -667,17 +671,23 @@ fn plot_axis_from_model(axis: &super::model::ChartAxis) -> PlotAxis<'_> {
         minor_tick_mark: axis.minor_tick_mark.as_deref(),
         major_gridlines: axis.major_gridlines,
         minor_gridlines: axis.minor_gridlines,
+        major_gridline: axis.major_gridline_line.as_ref().map(plot_line_from_model),
+        minor_gridline: axis.minor_gridline_line.as_ref().map(plot_line_from_model),
         cross_between: axis.cross_between.as_deref(),
         number_format: axis.number_format.as_deref(),
         position: axis.position.as_deref(),
         title: axis.title.as_deref(),
         hidden: axis.hidden,
         text: plot_text_from_model(axis.text.as_ref()),
-        line: axis.line.as_ref().map(|line| PlotLine {
-            none: line.none,
-            color: line.color.as_deref(),
-            width_emu: line.width_emu,
-        }),
+        line: axis.line.as_ref().map(plot_line_from_model),
+    }
+}
+
+fn plot_line_from_model(line: &super::model::ChartLine) -> PlotLine<'_> {
+    PlotLine {
+        none: line.none,
+        color: line.color.as_deref(),
+        width_emu: line.width_emu,
     }
 }
 
@@ -2245,6 +2255,11 @@ fn axis_ticks(scale: ValueScale, unit: Option<f64>) -> Vec<f64> {
         .collect()
 }
 
+/// A gridline whose `c:spPr` draws no line is declared only to be hidden.
+fn draws_no_line(line: Option<PlotLine<'_>>) -> bool {
+    line.is_some_and(|line| line.none)
+}
+
 /// Half-length of a tick mark drawn for `mark`, and whether it crosses.
 fn tick_extents(mark: Option<&str>) -> Option<(f64, f64)> {
     match mark? {
@@ -2302,8 +2317,10 @@ fn emit_axes<S: PlotSink + ?Sized>(
     let scale = value_scale(family);
     let axis = family.axis;
     let hidden = axis.is_some_and(|axis| axis.hidden);
-    let major_grid = axis.is_none_or(|axis| axis.major_gridlines);
-    let minor_grid = axis.is_some_and(|axis| axis.minor_gridlines);
+    let major_grid =
+        axis.is_none_or(|axis| axis.major_gridlines && !draws_no_line(axis.major_gridline));
+    let minor_grid =
+        axis.is_some_and(|axis| axis.minor_gridlines && !draws_no_line(axis.minor_gridline));
     let number_format = axis.and_then(|axis| axis.number_format);
     let tick_style = &family.scoped(axis.map(|axis| axis.text).unwrap_or_default());
     let (edge, outward) = match (transposed, family.secondary) {
@@ -3333,8 +3350,11 @@ fn emit_radar<S: PlotSink + ?Sized>(
         (cx + reach * angle.cos(), cy + reach * angle.sin())
     };
 
+    let rings = !family
+        .axis
+        .is_some_and(|axis| draws_no_line(axis.major_gridline));
     for value in axis_ticks(scale, family.axis.and_then(|axis| axis.major_unit)) {
-        if ops.exhausted() || scale.ratio(value) <= 0.0 {
+        if !rings || ops.exhausted() || scale.ratio(value) <= 0.0 {
             continue;
         }
         let ring: Vec<(f64, f64)> = (0..spokes).map(|index| at(index, value)).collect();
@@ -6211,6 +6231,43 @@ mod tests {
         };
         assert_eq!(grid(true), 5);
         assert_eq!(grid(false), 0);
+    }
+
+    #[test]
+    fn a_gridline_whose_sp_pr_draws_no_line_is_hidden() {
+        let data = source(&[1.0, 2.0, 3.0]);
+        let grid = |chart_type: &'static str, line: Option<PlotLine<'static>>| {
+            let mut group = group(chart_type, vec![series("North", &data)]);
+            group.axis_ids = vec!["1"];
+            let mut axis = value_axis("1", 0.0, 4.0);
+            axis.major_gridline = line;
+            let chart = PlotChart {
+                chart_type,
+                plot_groups: vec![group],
+                axes: vec![axis],
+                ..PlotChart::default()
+            };
+            plot_chart(&chart, rect())
+                .iter()
+                .filter(|op| matches!(op, PlotOp::Line { color, .. } if color == CHART_GRID_COLOR))
+                .count()
+        };
+        let line = |none| {
+            Some(PlotLine {
+                none,
+                color: None,
+                width_emu: None,
+            })
+        };
+        for chart_type in ["column", "radar"] {
+            assert!(grid(chart_type, None) > 0, "{chart_type}");
+            assert_eq!(
+                grid(chart_type, line(false)),
+                grid(chart_type, None),
+                "{chart_type}"
+            );
+            assert_eq!(grid(chart_type, line(true)), 0, "{chart_type}");
+        }
     }
 
     #[test]

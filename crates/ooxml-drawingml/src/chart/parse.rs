@@ -696,6 +696,12 @@ fn parse_axis<E: ChartXml>(axis: &E) -> ChartAxis {
         hidden: val_attr(child(axis, "delete")) == Some("1"),
         major_gridlines: child(axis, "majorGridlines").is_some(),
         minor_gridlines: child(axis, "minorGridlines").is_some(),
+        major_gridline_line: parse_line(
+            child(axis, "majorGridlines").and_then(|gridlines| child(gridlines, "spPr")),
+        ),
+        minor_gridline_line: parse_line(
+            child(axis, "minorGridlines").and_then(|gridlines| child(gridlines, "spPr")),
+        ),
         text: parse_text_properties(child(axis, "txPr")),
         line: parse_line(child(axis, "spPr")),
     }
@@ -1255,6 +1261,52 @@ mod tests {
             "{on_ticks:?} {mid_band:?}"
         );
         assert!((mid_band[0] - on_ticks[0] - band / 2.0).abs() < 1e-6);
+    }
+
+    #[test]
+    fn a_gridline_reads_the_line_its_sp_pr_draws() {
+        let gridlines = |kind: &str, line: Node| {
+            Node::el(
+                kind,
+                vec![Node::el("c:spPr", vec![Node::el("a:ln", vec![line])])],
+            )
+        };
+        let space = Node::el(
+            "c:chartSpace",
+            vec![Node::el(
+                "c:chart",
+                vec![Node::el(
+                    "c:plotArea",
+                    vec![
+                        Node::el("c:barChart", vec![Node::val("c:axId", "1")]),
+                        Node::el(
+                            "c:valAx",
+                            vec![
+                                Node::val("c:axId", "1"),
+                                gridlines("c:majorGridlines", Node::el("a:noFill", Vec::new())),
+                                gridlines(
+                                    "c:minorGridlines",
+                                    Node::el("a:solidFill", vec![Node::val("a:srgbClr", "112233")]),
+                                ),
+                            ],
+                        ),
+                    ],
+                )],
+            )],
+        );
+        let space = parse_chart_space(&space).expect("chart space parses");
+        let axis = &space.axis_list.as_ref().expect("axes")[0];
+        assert!(axis.major_gridlines && axis.minor_gridlines);
+        assert!(
+            axis.major_gridline_line
+                .as_ref()
+                .is_some_and(|line| line.none)
+        );
+        assert!(
+            axis.minor_gridline_line
+                .as_ref()
+                .is_some_and(|line| !line.none)
+        );
     }
 
     #[test]
