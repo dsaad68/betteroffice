@@ -46,6 +46,9 @@ pub struct PptxPackage {
     /// Absent from packages serialized before charts were parsed.
     #[serde(default)]
     pub charts: Vec<ChartPart>,
+    /// The drawing PowerPoint saves beside each SmartArt graphic.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub diagram_drawings: Vec<DiagramDrawing>,
     pub media: Vec<MediaPart>,
     /// Absent from packages serialized before table styles were parsed.
     #[serde(default, skip_serializing_if = "TableStyleList::is_empty")]
@@ -114,6 +117,12 @@ pub struct Presentation {
     pub first_slide_num: i32,
     pub slides: Vec<SlideReference>,
     pub master_part_paths: Vec<String>,
+    /// `p:defaultTextStyle`, one entry per list level.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub default_text_style: Vec<ParagraphProperties>,
+    /// `p:defaultTextStyle/a:defPPr`, under every level.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub default_text_paragraph: Option<Box<ParagraphProperties>>,
 }
 
 fn default_first_slide_num() -> i32 {
@@ -346,7 +355,7 @@ pub struct Shape {
 }
 
 /// An `a:blipFill` on a shape: the image, and the box it stretches into.
-#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct PictureFill {
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -358,6 +367,19 @@ pub struct PictureFill {
     /// `a:stretch/a:fillRect` insets, in thousandths of a percent of the box.
     #[serde(default, skip_serializing_if = "PictureCrop::is_whole")]
     pub fill_rect: PictureCrop,
+    /// `a:tile`: the picture repeats at its own size instead of stretching.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tile: Option<PictureTile>,
+}
+
+/// `a:blipFill/a:tile`. The offset, alignment and flip it can also carry are
+/// not read: every tile in the corpus starts at the top left, unflipped.
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PictureTile {
+    /// `@sx` and `@sy` as a fraction, 1.0 for the picture's own size.
+    pub scale_x: f64,
+    pub scale_y: f64,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -418,6 +440,8 @@ pub enum BlipEffect {
     BiLevel { threshold: f64 },
     /// `a:grayscl`.
     Grayscale,
+    /// `a:alphaModFix`: the whole bitmap drawn at `amount` opacity.
+    Alpha { amount: f64 },
     /// `a:lum`: brightness and contrast, each a fraction in `-1.0..=1.0`.
     Luminance { brightness: f64, contrast: f64 },
     /// `a:duotone`: luminance interpolates between the two colours.
@@ -482,12 +506,25 @@ pub enum GraphicFrameData {
     },
     Diagram {
         relationship_ids: Vec<String>,
+        /// `ppt/diagrams/drawing#.xml`, the shapes PowerPoint saves beside a
+        /// SmartArt graphic so a reader that cannot lay the diagram out can
+        /// still draw it.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        drawing_part_path: Option<String>,
     },
     Unknown {
         uri: Option<String>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         picture: Option<Box<Picture>>,
     },
+}
+
+/// One `ppt/diagrams/drawing#.xml`: the shapes a SmartArt graphic resolves to.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DiagramDrawing {
+    pub part_path: String,
+    pub shapes: Vec<ShapeNode>,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -679,7 +716,15 @@ pub struct TextBody {
     /// Use a 1.2 em percentage pitch.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub compat_line_spacing: Option<bool>,
+    /// `a:bodyPr/@spcFirstLastPara`: honour the first paragraph's space-before
+    /// and the last one's space-after.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub space_first_last_para: Option<bool>,
     pub autofit: Option<TextAutofit>,
+    /// `a:bodyPr/@wrap`: `false` for `none`, which lays every paragraph on one
+    /// line and lets it run past the shape.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub wrap: Option<bool>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub vertical_overflow: Option<TextOverflow>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -869,6 +914,9 @@ pub struct RunProperties {
     pub color: Option<ColorValue>,
     pub language: Option<String>,
     pub hyperlink_relationship_id: Option<String>,
+    /// `a:rPr/a:effectLst`: the shadow PowerPoint draws behind the glyphs.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub effects: Option<ShapeEffects>,
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
