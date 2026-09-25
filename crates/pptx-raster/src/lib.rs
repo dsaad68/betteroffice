@@ -1432,7 +1432,7 @@ impl ImageBudget {
         let image = svg::parse(bytes).ok()?;
         let pixels = image.pixels();
         self.charge(pixels, pixels.saturating_mul(8))?;
-        image.render()
+        image.render().ok()
     }
 
     /// Charges a decode before it allocates, so a stream that fails late still

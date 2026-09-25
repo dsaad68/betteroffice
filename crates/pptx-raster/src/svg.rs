@@ -1,6 +1,8 @@
 //! Sandboxed SVG rasterisation into the straight-alpha RGBA buffer the other
 //! image formats produce.
 
+use std::panic::{AssertUnwindSafe, catch_unwind};
+
 use resvg::usvg;
 use tiny_skia::{IntSize, Pixmap, PremultipliedColorU8, Transform};
 
@@ -37,6 +39,8 @@ pub enum SvgRefusal {
     Unparsable,
     /// Rasterises past [`MAX_SVG_RASTER_DIM`].
     RasterTooLarge,
+    /// `usvg` or `resvg` panicked.
+    Panicked,
 }
 
 /// A parsed SVG and the raster it will render into.
@@ -80,8 +84,8 @@ pub fn parse(bytes: &[u8]) -> Result<SvgImage, SvgRefusal> {
         return Err(SvgRefusal::NotSvg);
     }
     audit_references(root)?;
-    let tree =
-        usvg::Tree::from_xmltree(&document, &sandbox()).map_err(|_| SvgRefusal::Unparsable)?;
+    let tree = guarded(|| usvg::Tree::from_xmltree(&document, &sandbox()))?
+        .map_err(|_| SvgRefusal::Unparsable)?;
     let size = raster_size(tree.size())?;
     Ok(SvgImage { tree, size })
 }
@@ -93,13 +97,14 @@ impl SvgImage {
     }
 
     /// Straight-alpha RGBA, matching what the raster formats hand back.
-    pub fn render(&self) -> Option<(Vec<u8>, IntSize)> {
-        let mut pixmap = Pixmap::new(self.size.width(), self.size.height())?;
+    pub fn render(&self) -> Result<(Vec<u8>, IntSize), SvgRefusal> {
+        let mut pixmap =
+            Pixmap::new(self.size.width(), self.size.height()).ok_or(SvgRefusal::RasterTooLarge)?;
         let scale = Transform::from_scale(
             self.size.width() as f32 / self.tree.size().width(),
             self.size.height() as f32 / self.tree.size().height(),
         );
-        resvg::render(&self.tree, scale, &mut pixmap.as_mut());
+        guarded(|| resvg::render(&self.tree, scale, &mut pixmap.as_mut()))?;
         let mut data = pixmap.take();
         let (pixels, _) = data.as_chunks_mut::<4>();
         for pixel in pixels {
@@ -109,7 +114,7 @@ impl SvgImage {
                 *pixel = [color.red(), color.green(), color.blue(), color.alpha()];
             }
         }
-        Some((data, self.size))
+        Ok((data, self.size))
     }
 }
 
@@ -123,6 +128,12 @@ fn sandbox() -> usvg::Options<'static> {
         },
         ..usvg::Options::default()
     }
+}
+
+/// Runs a `usvg` or `resvg` step with a panic mapped to a refusal. The panic
+/// hook is left alone, so the panic is still reported the usual way.
+fn guarded<T>(step: impl FnOnce() -> T) -> Result<T, SvgRefusal> {
+    catch_unwind(AssertUnwindSafe(step)).map_err(|_| SvgRefusal::Panicked)
 }
 
 /// Element nesting, bounded before any parser sees the document. Runs on the
@@ -388,5 +399,24 @@ mod tests {
         assert!(!looks_like_svg(b"\x89PNG\r\n\x1a\n"));
         assert!(!looks_like_svg(b"not markup, mentions <svg> in prose"));
         assert!(!looks_like_svg(b""));
+    }
+
+    #[test]
+    fn a_panicking_step_is_a_refusal() {
+        assert_eq!(guarded(|| 7), Ok(7));
+        assert_eq!(
+            guarded(|| -> u8 { panic!("usvg fell over") }),
+            Err(SvgRefusal::Panicked)
+        );
+        let overflowing_marker = concat!(
+            r##"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 10 10">"##,
+            r##"<marker id="m" markerWidth="1e30" markerHeight="1e30" viewBox="0 0 1 1"><rect width="1" height="1"/></marker>"##,
+            r##"<path d="M0 0L5 5" stroke="#000" stroke-width="1e30" marker-end="url(#m)"/></svg>"##
+        );
+        assert_eq!(
+            refusal(overflowing_marker.as_bytes()),
+            Some(SvgRefusal::Panicked),
+            "usvg's marker code unwraps a size this overflows"
+        );
     }
 }
