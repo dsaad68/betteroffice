@@ -5,6 +5,7 @@
 
 mod audit;
 mod cost;
+mod reference;
 mod style;
 
 use std::panic::{AssertUnwindSafe, catch_unwind};
@@ -224,43 +225,6 @@ fn raster(tree: &usvg::Tree) -> Result<(IntSize, u64), SvgRefusal> {
         }
         factor -= 1;
     }
-}
-
-/// Whether `haystack` contains `needle`, ASCII case folded.
-fn contains_ignore_case(haystack: &str, needle: &str) -> bool {
-    haystack
-        .as_bytes()
-        .windows(needle.len())
-        .any(|window| window.eq_ignore_ascii_case(needle.as_bytes()))
-}
-
-/// Collects the target of every `url(` in `value`, in any case, refusing one
-/// that is not a fragment of this document. Targets are read the way `svgtypes`
-/// reads a `FuncIRI`, so every reference `usvg` resolves is among them.
-fn local_references<'a>(value: &'a str, targets: &mut Vec<&'a str>) -> Result<(), SvgRefusal> {
-    let space = |c: char| c.is_ascii_whitespace();
-    let mut rest = value;
-    while let Some(at) = rest
-        .as_bytes()
-        .windows(4)
-        .position(|window| window.eq_ignore_ascii_case(b"url("))
-    {
-        rest = rest[at + 4..].trim_start_matches(space);
-        let quote = rest.chars().next().filter(|c| matches!(c, '"' | '\''));
-        if quote.is_some() {
-            rest = rest[1..].trim_start_matches(space);
-        }
-        let target = rest
-            .strip_prefix('#')
-            .ok_or(SvgRefusal::ExternalReference)?;
-        let end = match quote {
-            Some(quote) => target.find(quote),
-            None => target.find([' ', ')']),
-        };
-        targets.push(target[..end.unwrap_or(target.len())].trim_end());
-        rest = target;
-    }
-    Ok(())
 }
 
 /// Element nesting, bounded before any parser sees the document. Runs on the
@@ -608,6 +572,105 @@ pub(crate) mod tests {
     }
 
     #[test]
+    fn a_reference_cycle_is_found_through_targets_exactly_as_usvg_reads_them() {
+        let clips = |ids: [&str; 3], references: [&str; 3]| {
+            let mut body = String::new();
+            for (id, reference) in ids.iter().zip(references) {
+                body.push_str(&format!(
+                    r##"<clipPath id="{id}" {reference}><rect width="9" height="9"/></clipPath>"##
+                ));
+            }
+            body.push_str(&format!(
+                r##"<rect width="9" height="9" clip-path="url(#{})"/>"##,
+                ids[0]
+            ));
+            document(&body)
+        };
+        for source in [
+            clips(
+                ["a&#9;", "b&#9;", "c&#9;"],
+                [
+                    r##"clip-path="url(#b&#9;)""##,
+                    r##"clip-path="url(#c&#9;)""##,
+                    r##"clip-path="url(#a&#9;)""##,
+                ],
+            ),
+            clips(
+                ["a&#9;x", "b&#9;x", "c&#9;x"],
+                [
+                    r##"clip-path="url('#b&#9;x')""##,
+                    r##"clip-path=" url( &quot;#c&#9;x &quot; ) ""##,
+                    r##"style="clip-path:url(#a&#9;x)""##,
+                ],
+            ),
+            document(concat!(
+                r##"<linearGradient id="a" href="#b&#9;"/><linearGradient id="b&#9;" href="#c&#9;"/>"##,
+                r##"<linearGradient id="c&#9;" xlink:href="#b&#9;" xmlns:xlink="http://www.w3.org/1999/xlink"/>"##,
+                r##"<rect width="9" height="9" fill="url(#a)"/>"##
+            )),
+        ] {
+            assert_eq!(
+                refusal(source.as_bytes()),
+                Some(SvgRefusal::ReferenceCycle),
+                "{source}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_clip_path_inherited_into_a_copy_is_refused() {
+        for body in [
+            r##"<g clip-path="url(#t)"><clipPath id="x" clip-path="inherit"><rect width="9" height="9"/></clipPath></g><clipPath id="t"><rect width="9" height="9" clip-path="url(#x)"/></clipPath>"##,
+            r##"<rect width="9" height="9" style="clip-path: inherit"/>"##,
+            r##"<style>.a{clip-path:inherit}</style><rect class="a" width="9" height="9"/>"##,
+        ] {
+            assert_eq!(
+                refusal(document(body).as_bytes()),
+                Some(SvgRefusal::UnsupportedStyle),
+                "{body}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_reference_only_reaches_the_kind_of_element_usvg_converts_for_it() {
+        let body = concat!(
+            r##"<g id="x"><rect width="96" height="96" fill="url(#x)" clip-path="url(#x)"/></g>"##,
+            r##"<linearGradient id="g"><stop offset="0" stop-color="#0f0"/></linearGradient>"##,
+            r##"<clipPath id="c"><rect width="96" height="96" fill="url(#g)"/></clipPath>"##
+        );
+        assert!(parse(document(body).as_bytes()).is_ok());
+    }
+
+    #[test]
+    fn the_audit_reads_a_long_reference_list_in_one_pass() {
+        let list = "url(#".repeat(500_000);
+        for (attribute, outcome) in [
+            ("fill", Some(SvgRefusal::ExternalReference)),
+            ("clip-path", Some(SvgRefusal::ExternalReference)),
+            ("style", Some(SvgRefusal::UnsupportedStyle)),
+            ("data-x", None),
+        ] {
+            let value = if attribute == "style" {
+                format!("fill:{list}")
+            } else {
+                list.clone()
+            };
+            let source = document(&format!(
+                r##"<rect width="9" height="9" {attribute}="{value}"/>"##
+            ));
+            assert!(source.len() < MAX_SVG_BYTES);
+            let started = std::time::Instant::now();
+            assert_eq!(refusal(source.as_bytes()), outcome, "{attribute}");
+            let elapsed = started.elapsed();
+            assert!(
+                elapsed < std::time::Duration::from_secs(5),
+                "{attribute}: {elapsed:?}"
+            );
+        }
+    }
+
+    #[test]
     fn a_clip_path_chain_counts_every_instance() {
         let mut defs = String::from(
             r##"<clipPath id="c0" clipPathUnits="objectBoundingBox"><rect width="1" height="1"/></clipPath>"##,
@@ -647,7 +710,7 @@ pub(crate) mod tests {
 
     #[test]
     fn a_reference_to_a_repeated_id_counts_every_element_that_carries_it() {
-        let targets = r##"<g id="x"/>"##.repeat(1_000);
+        let targets = r##"<linearGradient id="x"/>"##.repeat(1_000);
         let references = "url(#x) ".repeat(200);
         let source = document(&format!(
             r##"<defs>{targets}</defs><rect width="9" height="9" style="fill:{references}"/>"##

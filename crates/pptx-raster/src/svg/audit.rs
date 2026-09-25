@@ -9,10 +9,12 @@ use resvg::usvg::roxmltree::{Document, Node};
 use super::style::StyleSheet;
 use super::{
     MAX_SVG_DEPTH, MAX_SVG_EXPANDED_BYTES, MAX_SVG_EXPANDED_NODES, MAX_SVG_GRADIENT_STOPS,
-    MAX_SVG_STYLE_WORK, SvgRefusal, contains_ignore_case, local_references,
+    MAX_SVG_STYLE_WORK, SvgRefusal, reference,
 };
 
 const SVG_NS: &str = "http://www.w3.org/2000/svg";
+const XLINK_NS: &str = "http://www.w3.org/1999/xlink";
+const XML_NS: &str = "http://www.w3.org/XML/1998/namespace";
 
 /// What a document may draw with. Office icons stay within `svg g defs style
 /// path linearGradient stop`; markers, filters, masks, patterns, scripts and
@@ -52,11 +54,25 @@ enum Slot {
     Element(usize),
 }
 
+/// How `usvg` follows a reference, which decides what its target must be.
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(super) enum Link {
+    /// A `use` instantiates any element.
+    Use,
+    /// A `clip-path` converts a `clipPath`, and only that.
+    Clip,
+    /// A `fill` or `stroke` converts a gradient, and only that.
+    Paint,
+    /// A gradient's `href` reads the gradient it names for stops and
+    /// attributes; the chain goes on only through gradients.
+    Chain,
+}
+
 struct Element<'a> {
     node: Node<'a, 'a>,
     opaque: bool,
     children: Vec<usize>,
-    links: Vec<&'a str>,
+    links: Vec<(Link, &'a str)>,
     bytes: u64,
     style: u64,
 }
@@ -124,10 +140,7 @@ pub(super) fn audit(document: &Document<'_>) -> Result<(), SvgRefusal> {
     }
 
     for element in &elements {
-        if matches!(
-            element.node.tag_name().name(),
-            "linearGradient" | "radialGradient"
-        ) {
+        if is_gradient(element.node) {
             let stops = element
                 .children
                 .iter()
@@ -154,10 +167,13 @@ pub(super) fn audit(document: &Document<'_>) -> Result<(), SvgRefusal> {
         let mut overflow = false;
         sheet.each_match(element.node, |declarations, references| {
             element.style = element.style.saturating_add(1 + declarations);
-            if element.links.len() + references.len() > room {
+            if element.links.len() + 2 * references.len() > room {
                 overflow = true;
-            } else {
-                element.links.extend_from_slice(references);
+                return;
+            }
+            for &target in references {
+                element.links.push((Link::Clip, target));
+                element.links.push((Link::Paint, target));
             }
         });
         links += element.links.len();
@@ -170,11 +186,13 @@ pub(super) fn audit(document: &Document<'_>) -> Result<(), SvgRefusal> {
     let mut adjacency = Vec::with_capacity(elements.len());
     for element in &elements {
         let mut targets = element.children.clone();
-        for link in &element.links {
-            for &node in ids.get(link).into_iter().flatten() {
-                match slots[node] {
-                    Some(Slot::Element(target)) => targets.push(target),
-                    _ => return Err(SvgRefusal::UnsupportedElement),
+        for &(link, id) in &element.links {
+            for &node in ids.get(id).into_iter().flatten() {
+                let Some(Slot::Element(target)) = slots[node] else {
+                    return Err(SvgRefusal::UnsupportedElement);
+                };
+                if follows(link, elements[target].node) {
+                    targets.push(target);
                 }
                 if edges + targets.len() > room {
                     return Err(SvgRefusal::ExpansionTooLarge);
@@ -195,30 +213,74 @@ fn is_svg(node: Node<'_, '_>) -> bool {
     matches!(node.tag_name().namespace(), None | Some(SVG_NS))
 }
 
-/// Markup bytes the element contributes, collecting the ids it references. An
-/// `href` on `a` or `image` is inert: nothing follows a link, and both image
-/// resolvers return `None`.
-fn audit_attributes<'a>(node: Node<'a, 'a>, links: &mut Vec<&'a str>) -> Result<u64, SvgRefusal> {
-    let inert_href = matches!(node.tag_name().name(), "a" | "image");
-    let mut bytes = node.tag_name().name().len() as u64;
+fn is_gradient(node: Node<'_, '_>) -> bool {
+    matches!(node.tag_name().name(), "linearGradient" | "radialGradient")
+}
+
+/// Whether `usvg` goes on into `target` along a `link`: it converts only a
+/// `clipPath` for a clip and only a gradient for a paint or a gradient chain.
+fn follows(link: Link, target: Node<'_, '_>) -> bool {
+    match link {
+        Link::Use => true,
+        Link::Clip => target.tag_name().name() == "clipPath",
+        Link::Paint | Link::Chain => is_gradient(target),
+    }
+}
+
+/// Markup bytes the element contributes, collecting the references `usvg`
+/// follows from it, each read by the parser `usvg` reads it with. An `href`
+/// is followed only on `use` and on gradients: on `a` and `image` it is
+/// inert, since nothing follows a link and both image resolvers return `None`.
+fn audit_attributes<'a>(
+    node: Node<'a, 'a>,
+    links: &mut Vec<(Link, &'a str)>,
+) -> Result<u64, SvgRefusal> {
+    let name = node.tag_name().name();
+    let mut bytes = name.len() as u64;
+    let (mut href, mut xlink_href) = (None, None);
     for attribute in node.attributes() {
-        let (name, value) = (attribute.name(), attribute.value());
-        bytes += (name.len() + value.len()) as u64 + 4;
-        if name == "href" {
-            if !inert_href {
-                let target = value
-                    .strip_prefix('#')
-                    .ok_or(SvgRefusal::ExternalReference)?;
-                links.push(target.split(' ').next().unwrap_or_default());
-            }
-            continue;
-        }
-        local_references(value, links)?;
-        if (name == "filter" && value != "none")
-            || (name == "style" && contains_ignore_case(value, "filter"))
-        {
+        let (local, value) = (attribute.name(), attribute.value());
+        bytes += (local.len() + value.len()) as u64 + 4;
+        if local == "filter" && value != "none" {
             return Err(SvgRefusal::UnsupportedStyle);
         }
+        if local == "style" {
+            style_references(value, links)?;
+            continue;
+        }
+        let namespace = attribute.namespace();
+        if !matches!(namespace, None | Some(SVG_NS | XLINK_NS | XML_NS)) {
+            continue;
+        }
+        match local {
+            "href" if namespace.is_none() => href = href.or(Some(value)),
+            "href" if namespace == Some(XLINK_NS) => xlink_href = xlink_href.or(Some(value)),
+            "clip-path" if value == "inherit" => return Err(SvgRefusal::UnsupportedStyle),
+            "clip-path" => {
+                if let Some(target) = reference::func_iri(value)? {
+                    links.push((Link::Clip, target));
+                }
+            }
+            "fill" | "stroke" => {
+                if let Some(target) = reference::paint(value)? {
+                    links.push((Link::Paint, target));
+                }
+            }
+            "mask" | "marker-start" | "marker-mid" | "marker-end" => {
+                reference::func_iri(value)?;
+            }
+            _ => {}
+        }
+    }
+    let link = match name {
+        "use" => Some(Link::Use),
+        "linearGradient" | "radialGradient" => Some(Link::Chain),
+        _ => None,
+    };
+    if let (Some(link), Some(value)) = (link, href.or(xlink_href))
+        && let Some(target) = reference::href(value)?
+    {
+        links.push((link, target));
     }
     for text in node.children().filter(|child| child.is_text()) {
         bytes += text.text().map_or(0, str::len) as u64;
@@ -226,9 +288,26 @@ fn audit_attributes<'a>(node: Node<'a, 'a>, links: &mut Vec<&'a str>) -> Result<
     Ok(bytes)
 }
 
+/// The references a `style` attribute can make. Its declarations are not
+/// split out, so every target counts as both a clip and a paint.
+fn style_references<'a>(
+    value: &'a str,
+    links: &mut Vec<(Link, &'a str)>,
+) -> Result<(), SvgRefusal> {
+    super::style::screen(value)?;
+    let mut targets = Vec::new();
+    reference::css(value, &mut targets)?;
+    for target in targets {
+        links.push((Link::Clip, target));
+        links.push((Link::Paint, target));
+    }
+    Ok(())
+}
+
 /// Sizes the tree `usvg` would build, where every reference instantiates its
 /// target again: a memoised depth-first walk, iterative so a long chain cannot
-/// overflow the stack, that refuses a cycle and stops at the first bound.
+/// overflow the stack, that refuses a cycle of any length and stops at the
+/// first bound.
 fn expand(elements: &[Element<'_>], adjacency: &[Vec<usize>]) -> Result<(), SvgRefusal> {
     const NEW: u8 = 0;
     const OPEN: u8 = 1;

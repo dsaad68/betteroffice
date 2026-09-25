@@ -83,7 +83,7 @@ impl<'a> StyleSheet<'a> {
     }
 
     fn parse(&mut self, text: &'a str) -> Result<(), SvgRefusal> {
-        if text.contains("/*") {
+        if text.contains("/*") || text.contains('\\') {
             return Err(SvgRefusal::UnsupportedStyle);
         }
         let mut rest = text.trim_start_matches(|c: char| c.is_ascii_whitespace());
@@ -91,11 +91,12 @@ impl<'a> StyleSheet<'a> {
             let open = rest.find('{').ok_or(SvgRefusal::UnsupportedStyle)?;
             let close = rest[open..].find('}').ok_or(SvgRefusal::UnsupportedStyle)? + open;
             let declarations = &rest[open + 1..close];
-            if declarations.contains('{') || super::contains_ignore_case(declarations, "filter") {
+            if declarations.contains('{') || !closed(declarations) {
                 return Err(SvgRefusal::UnsupportedStyle);
             }
+            screen(declarations)?;
             let mut references = Vec::new();
-            super::local_references(declarations, &mut references)?;
+            super::reference::css(declarations, &mut references)?;
             let block = self.blocks.len();
             self.blocks.push(Block {
                 len: declarations.len() as u64,
@@ -116,6 +117,40 @@ impl<'a> StyleSheet<'a> {
         }
         Ok(())
     }
+}
+
+/// Refuses CSS text that could apply a filter, or a clip path inherited from
+/// whatever element a copy lands under.
+pub(super) fn screen(text: &str) -> Result<(), SvgRefusal> {
+    if super::reference::contains_ignore_case(text, b"filter")
+        || (text.contains("clip-path") && text.contains("inherit"))
+    {
+        return Err(SvgRefusal::UnsupportedStyle);
+    }
+    Ok(())
+}
+
+/// Whether every function and string in a block closes inside it, so
+/// `simplecss`, which skips a function to its `)` and a string to its quote,
+/// ends the block at the same `}` this parser does.
+fn closed(block: &str) -> bool {
+    let bytes = block.as_bytes();
+    let mut at = 0;
+    while let Some(&byte) = bytes.get(at) {
+        let close = match byte {
+            b'(' => b')',
+            b'\'' | b'"' => byte,
+            _ => {
+                at += 1;
+                continue;
+            }
+        };
+        match bytes[at + 1..].iter().position(|next| *next == close) {
+            Some(length) => at += length + 2,
+            None => return false,
+        }
+    }
+    true
 }
 
 /// `*`, or an optional type followed by `.class` and `#id` parts, nothing else.
