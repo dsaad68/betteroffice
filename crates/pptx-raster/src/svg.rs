@@ -51,10 +51,11 @@ const BYTE_NS: u64 = 32;
 /// alpha-blended pixel.
 const RENDER_NS: u64 = 4;
 
-/// One document's bytes, which expand at least once: held to
-/// [`MAX_SVG_EXPANDED_BYTES`], they take the byte scan, `roxmltree` and the
-/// audit about 34 ms.
-pub const MAX_SVG_BYTES: usize = MAX_SVG_EXPANDED_BYTES as usize;
+/// One document's bytes, twice what [`MAX_SVG_EXPANDED_BYTES`] lets it draw
+/// so an editor's private markup, which the audit skips, still fits: the byte
+/// scan, `roxmltree` and the audit take about 67 ms over them, and
+/// `roxmltree` copies at most as many bytes again.
+pub const MAX_SVG_BYTES: usize = 1 << 22;
 /// Elements one document may nest, in its markup or once its references are
 /// expanded. The parsers, `usvg`'s converter and `resvg` recurse over it at
 /// about 3 KiB of stack a level: 64 levels fit a 512 KiB thread stack twice.
@@ -103,8 +104,9 @@ pub const MAX_SVG_SELECTOR_PARTS: usize = 16;
 /// Bytes of one selector, which bounds the names each lookup compares.
 pub const MAX_SVG_SELECTOR_BYTES: usize = 256;
 /// Selectors times the bytes of the block they share: `simplecss` copies a
-/// block's declarations once per selector of its list. 5 MiB of the envelope.
-pub const MAX_SVG_STYLE_COPIES: u64 = 1 << 19;
+/// block's declarations once per selector of its list. 2.5 MiB of the
+/// envelope.
+pub const MAX_SVG_STYLE_COPIES: u64 = 1 << 18;
 /// What `simplecss` and `usvg` spend on CSS, in units of about a nanosecond:
 /// rescans of every stylesheet and `style` attribute, selector tests, and
 /// declarations applied, across the expanded document. 201 ms of the time
@@ -128,7 +130,8 @@ pub const MAX_SVG_RASTER_DIM: u32 = 8_192;
 const SVG_SUPERSAMPLE: u32 = 4;
 
 const _: () = assert!(
-    (MAX_SVG_NODES as u64 + MAX_SVG_ATTRIBUTES as u64) * XML_ITEM_BYTES
+    MAX_SVG_BYTES as u64
+        + (MAX_SVG_NODES as u64 + MAX_SVG_ATTRIBUTES as u64) * XML_ITEM_BYTES
         + MAX_SVG_EXPANDED_NODES * NODE_BYTES
         + MAX_SVG_EXPANDED_BYTES * BYTE_BYTES
         + MAX_SVG_PATH_BYTES as u64 * STROKE_BYTES
@@ -686,12 +689,12 @@ pub(crate) mod tests {
 
     #[test]
     fn the_audit_reads_a_long_reference_list_in_one_pass() {
-        let list = "url(#".repeat(400_000);
+        let list = "url(#".repeat(500_000);
         for (attribute, outcome) in [
             ("fill", Some(SvgRefusal::ExternalReference)),
             ("clip-path", Some(SvgRefusal::ExternalReference)),
             ("style", Some(SvgRefusal::UnsupportedStyle)),
-            ("data-x", None),
+            ("data-x", Some(SvgRefusal::ExpansionTooLarge)),
         ] {
             let value = if attribute == "style" {
                 format!("fill:{list}")
