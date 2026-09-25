@@ -8,9 +8,9 @@ use resvg::usvg::roxmltree::{Document, Node};
 
 use super::style::StyleSheet;
 use super::{
-    MAX_SVG_COLLECT_WORK, MAX_SVG_DEPTH, MAX_SVG_EXPANDED_BYTES, MAX_SVG_EXPANDED_NODES,
-    MAX_SVG_GRADIENT_STOPS, MAX_SVG_PAINT_BYTES, MAX_SVG_PATH_BYTES, MAX_SVG_STYLE_WORK,
-    SvgRefusal, reference,
+    MAX_SVG_ATTRIBUTES, MAX_SVG_COLLECT_WORK, MAX_SVG_DEPTH, MAX_SVG_EXPANDED_BYTES,
+    MAX_SVG_EXPANDED_NODES, MAX_SVG_GRADIENT_STOPS, MAX_SVG_PAINT_BYTES, MAX_SVG_PATH_BYTES,
+    MAX_SVG_STYLE_WORK, SvgRefusal, reference,
 };
 
 const SVG_NS: &str = "http://www.w3.org/2000/svg";
@@ -257,12 +257,14 @@ pub(super) fn audit(document: &Document<'_>) -> Result<(), SvgRefusal> {
     }
 
     let mut total = 0usize;
+    let mut visits = MAX_SVG_ATTRIBUTES;
     let mut edges = Vec::with_capacity(elements.len());
     let mut paints = Vec::with_capacity(elements.len());
     let mut scans = Vec::with_capacity(elements.len());
     for element in &elements {
-        let resolve = |link: Link, targets: &mut Vec<usize>| {
-            resolve(&element.links, link, &ids, &slots, &elements, room, targets)
+        let mut resolve = |link: Link, targets: &mut Vec<usize>| {
+            let links = &element.links;
+            resolve(links, link, &ids, &slots, &elements, &mut visits, targets)
         };
         let mut targets = element.children.clone();
         resolve(Link::Use, &mut targets)?;
@@ -310,26 +312,27 @@ pub(super) fn audit(document: &Document<'_>) -> Result<(), SvgRefusal> {
 }
 
 /// Pushes the element every `link` of this kind reaches, as far as `usvg`
-/// follows it, refusing one that lands in content the audit skipped.
+/// follows it, refusing one that lands in content the audit skipped. Every
+/// element carrying a named id is visited, followed or not, out of `visits`
+/// shared across the document, so an id many elements repeat costs the audit
+/// no more than [`MAX_SVG_ATTRIBUTES`] steps in all.
 fn resolve(
     links: &[(Link, &str)],
     link: Link,
     ids: &HashMap<&str, Vec<usize>>,
     slots: &[Option<Slot>],
     elements: &[Element<'_>],
-    room: usize,
+    visits: &mut usize,
     targets: &mut Vec<usize>,
 ) -> Result<(), SvgRefusal> {
     for &(_, id) in links.iter().filter(|(kind, _)| *kind == link) {
         for &node in ids.get(id).into_iter().flatten() {
+            *visits = visits.checked_sub(1).ok_or(SvgRefusal::ExpansionTooLarge)?;
             let Some(Slot::Element(target)) = slots[node] else {
                 return Err(SvgRefusal::UnsupportedElement);
             };
             if follows(link, elements[target].node) {
                 targets.push(target);
-            }
-            if targets.len() > room {
-                return Err(SvgRefusal::ExpansionTooLarge);
             }
         }
     }

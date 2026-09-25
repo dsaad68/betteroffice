@@ -791,6 +791,21 @@ pub(crate) mod tests {
     }
 
     #[test]
+    fn an_id_many_elements_share_is_walked_within_a_bound() {
+        let source = document(&format!(
+            "{}{}",
+            r##"<g id="x"/>"##.repeat(12_000),
+            r##"<rect width="1" height="1" clip-path="url(#x)"/>"##.repeat(12_000)
+        ));
+        let started = std::time::Instant::now();
+        assert_eq!(
+            refusal(source.as_bytes()),
+            Some(SvgRefusal::ExpansionTooLarge)
+        );
+        assert!(started.elapsed() < std::time::Duration::from_secs(5));
+    }
+
+    #[test]
     fn a_stroke_too_wide_for_the_rasteriser_is_refused_before_it_panics() {
         let fuzzed = concat!(
             r##"<svg><g d="e_2"><g id="e1-2"><path d="M .23.11.08  0L5 5" stroke="#000" "##,

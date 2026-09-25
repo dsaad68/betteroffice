@@ -75,9 +75,10 @@ impl<'a> StyleSheet<'a> {
         self.work
     }
 
-    /// Style work testing every rule against one instance of `node`: a
-    /// simple selector looks its attribute up among `node`'s and scans the
-    /// value, and the first to fail ends the rule.
+    /// Style work testing every rule against one instance of `node`, for
+    /// `simplecss` and for the audit's own match: a simple selector looks its
+    /// attribute up among `node`'s and scans the value, and the first to fail
+    /// ends the rule.
     pub(super) fn tests(&self, node: Node<'_, '_>) -> u64 {
         if self.rules.is_empty() {
             return 0;
@@ -88,7 +89,7 @@ impl<'a> StyleSheet<'a> {
             .filter_map(|name| node.attribute(*name))
             .map(str::len)
             .sum::<usize>() as u64;
-        (self.rules.len() as u64 * 4)
+        (self.rules.len() as u64 * 8)
             .saturating_add(self.parts.saturating_mul(4 + 2 * attributes + values / 2))
     }
 
