@@ -1,7 +1,8 @@
 ---
 '@betteroffice/pptx-react': patch
 '@betteroffice/pptx': patch
-'@betteroffice/rust-crates': patch
+'@betteroffice/python-pptx': patch
+'@betteroffice/rust-crates': minor
 ---
 
-pptx: a placeholder that takes its geometry from its layout or master can now be dragged and resized from the frame it draws in. The shape snapshot carries the inherited transform next to the shape's own, which stays zero so a save still writes no `a:xfrm` the author never had. The first geometry edit through `moveShape`, `resizeShape` or `setShapeRect` materializes the whole transform — offset, extent, rotation and flips — so a turned or flipped placeholder keeps its orientation and no caller can observe half of one. A placeholder still draws with the orientation it inherits before that first edit.
+pptx: a placeholder that takes its geometry from its layout or master draws with the rotation and flips it inherits, and can now be dragged and resized from the frame it is drawn in. Its snapshot carries that geometry as `inherited`, and the first `moveShape`, `resizeShape` or `setShapeRect` makes the whole transform its own, so the placeholder keeps its size and orientation live and after a save. The Rust crates add `Placeholder::matches`, the placeholder matching that rendering and editing share, and the facade re-exports `InheritedGeometry`.
