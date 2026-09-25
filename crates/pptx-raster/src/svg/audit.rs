@@ -3,15 +3,17 @@
 //! tree those references expand into is measured before anything builds it.
 
 use std::collections::HashMap;
+use std::str::FromStr;
 
 use resvg::usvg::roxmltree::{Document, Node};
 
-use super::geometry::{self, Outline};
-use super::style::StyleSheet;
+use super::geometry::{self, MEASURE_TOLERANCE, OUTLINE_VERB_BYTES, Outline};
+use super::style::{Strokes, StyleSheet};
 use super::{
     ARC_CUBIC_BYTES, MAX_SVG_ATTRIBUTES, MAX_SVG_COLLECT_WORK, MAX_SVG_DEPTH,
     MAX_SVG_EXPANDED_BYTES, MAX_SVG_EXPANDED_NODES, MAX_SVG_GRADIENT_STOPS, MAX_SVG_PAINT_BYTES,
-    MAX_SVG_PATH_BYTES, MAX_SVG_STYLE_WORK, SvgRefusal, reference,
+    MAX_SVG_PATH_BYTES, MAX_SVG_STROKE_SPAN, MAX_SVG_STROKE_VERBS, MAX_SVG_STYLE_WORK,
+    SVG_TRANSIENT_BYTES, SvgRefusal, reference,
 };
 
 pub(super) const SVG_NS: &str = "http://www.w3.org/2000/svg";
@@ -117,6 +119,10 @@ struct Element<'a> {
     outline: Outline,
     /// Bytes of the longest dash list the element declares.
     dash: u64,
+    strokes: Strokes,
+    /// Pieces the stroker may emit when `usvg` strokes this shape to measure
+    /// it.
+    verbs: u64,
 }
 
 /// An element's instance as `usvg` expands it. Consumers are shapes that will
@@ -126,6 +132,7 @@ struct Expanded {
     nodes: u64,
     bytes: u64,
     style: u64,
+    verbs: u64,
     depth: u64,
     /// Consumers inheriting the paint set above.
     open: [u64; 2],
@@ -202,6 +209,8 @@ pub(super) fn audit(document: &Document<'_>) -> Result<(), SvgRefusal> {
             context: false,
             outline: Outline::default(),
             dash: 0,
+            strokes: Strokes::default(),
+            verbs: 0,
         };
         audit_attributes(&mut element)?;
         element.bytes += node.children().count() as u64;
@@ -248,6 +257,7 @@ pub(super) fn audit(document: &Document<'_>) -> Result<(), SvgRefusal> {
     {
         element.bytes = element.bytes.saturating_add(dash);
     }
+    measure_strokes(&mut elements, sheet.strokes())?;
     let room = MAX_SVG_EXPANDED_NODES as usize;
     let mut links = 0usize;
     for element in &mut elements {
@@ -455,6 +465,7 @@ fn audit_attributes(element: &mut Element<'_>) -> Result<(), SvgRefusal> {
                 .saturating_add(applied);
             super::style::screen(value)?;
             element.dash = element.dash.max(super::style::dash(value)?);
+            element.strokes.read(value)?;
             element.context |= value.contains("context-");
             let mut targets = Vec::new();
             reference::css(value, &mut targets)?;
@@ -482,6 +493,7 @@ fn audit_attributes(element: &mut Element<'_>) -> Result<(), SvgRefusal> {
                     _ => (Link::Stroke, 1),
                 };
                 element.paint[slot].set |= value != "inherit";
+                element.strokes.stroked |= slot == 1 && value.trim() != "none";
                 element.context |= reference::context_paint(value);
                 if let Some(target) = reference::paint(value)? {
                     element.links.push((link, target));
@@ -489,6 +501,14 @@ fn audit_attributes(element: &mut Element<'_>) -> Result<(), SvgRefusal> {
             }
             "stroke-dasharray" => {
                 element.dash = element.dash.max(geometry::dash_list(value)?);
+            }
+            "stroke-width" => {
+                let width = geometry::stroke_width(value)?;
+                element.strokes.width = element.strokes.width.max(width);
+            }
+            "transform" => {
+                element.strokes.turned |= svgtypes::Transform::from_str(value)
+                    .is_ok_and(|transform| transform.b != 0.0 || transform.c != 0.0);
             }
             "mask" | "marker-start" | "marker-mid" | "marker-end" => {
                 reference::func_iri(value)?;
@@ -520,6 +540,41 @@ fn audit_attributes(element: &mut Element<'_>) -> Result<(), SvgRefusal> {
         return Err(SvgRefusal::ExpansionTooLarge);
     }
     element.bytes = element.bytes.saturating_add(arcs);
+    Ok(())
+}
+
+/// Prices what `usvg` spends stroking every shape whole to measure it, when
+/// anything may be stroked: each shape is charged the pieces its outline may
+/// take at the widest width declared anywhere. A rotation or skew anywhere is
+/// refused, since `usvg` then strokes in canvas units the audit cannot see,
+/// and so is a curve too far out for the stroker's `f32` arithmetic.
+fn measure_strokes(elements: &mut [Element<'_>], sheet: Strokes) -> Result<(), SvgRefusal> {
+    let mut strokes = sheet;
+    for element in elements.iter() {
+        strokes.join(element.strokes);
+    }
+    if !strokes.stroked {
+        return Ok(());
+    }
+    if strokes.turned {
+        return Err(SvgRefusal::ExpansionTooLarge);
+    }
+    let radius = strokes.width.max(1.0) / 2.0;
+    for element in elements
+        .iter_mut()
+        .filter(|element| element.role == Role::Shape)
+    {
+        let outline = &element.outline;
+        let span = (outline.reach + radius) / MEASURE_TOLERANCE;
+        let verbs = geometry::stroke_verbs(outline, radius, MEASURE_TOLERANCE);
+        if span.is_nan()
+            || span > MAX_SVG_STROKE_SPAN
+            || verbs * OUTLINE_VERB_BYTES > SVG_TRANSIENT_BYTES as f64
+        {
+            return Err(SvgRefusal::ExpansionTooLarge);
+        }
+        element.verbs = verbs as u64;
+    }
     Ok(())
 }
 
@@ -620,6 +675,7 @@ fn expand(elements: &[Element<'_>], edges: &[Edges], gradients: u64) -> Result<(
         if size.nodes > MAX_SVG_EXPANDED_NODES
             || size.bytes > MAX_SVG_EXPANDED_BYTES
             || size.style > MAX_SVG_STYLE_WORK
+            || size.verbs > MAX_SVG_STROKE_VERBS
             || size.stops.saturating_mul(STOP_BYTES) + size.copies.saturating_mul(PAINT_COPY_BYTES)
                 > MAX_SVG_PAINT_BYTES
             || collection(&size, gradients) > MAX_SVG_COLLECT_WORK
@@ -645,6 +701,7 @@ fn finish(own: &Element<'_>, edges: &Edges, sizes: &[Expanded]) -> Expanded {
         nodes: 1,
         bytes: own.bytes,
         style: own.style,
+        verbs: own.verbs,
         ..Expanded::default()
     };
     for &target in &edges.targets[..edges.expand] {
@@ -652,6 +709,7 @@ fn finish(own: &Element<'_>, edges: &Edges, sizes: &[Expanded]) -> Expanded {
         size.nodes = size.nodes.saturating_add(inner.nodes);
         size.bytes = size.bytes.saturating_add(inner.bytes);
         size.style = size.style.saturating_add(inner.style);
+        size.verbs = size.verbs.saturating_add(inner.verbs);
         size.depth = size.depth.max(inner.depth);
         size.copies = size.copies.saturating_add(inner.copies);
         size.stops = size.stops.saturating_add(inner.stops);

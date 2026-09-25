@@ -2,38 +2,43 @@
 //! tree `usvg` resolved (CSS applied, references expanded) before `resvg` runs.
 
 use resvg::usvg::{self, Node, Paint};
-use tiny_skia::{IntSize, PathSegment, Point, Rect, Transform};
+use tiny_skia::{IntSize, PathSegment, PathStroker, Point, Rect, Transform};
 
+use super::geometry::{self, OUTLINE_VERB_BYTES, Outline};
 use super::{
-    MAX_SVG_EXPANDED_NODES, MAX_SVG_LAYER_DEPTH, MAX_SVG_OVERDRAW, SVG_TRANSIENT_BYTES, SvgRefusal,
+    MAX_SVG_EXPANDED_NODES, MAX_SVG_LAYER_DEPTH, MAX_SVG_OVERDRAW, MAX_SVG_RENDER_WORK,
+    MAX_SVG_STROKE_SPAN, SVG_TRANSIENT_BYTES, SvgRefusal,
 };
 
 /// Work units, each about one painted pixel, per drawn path before any pixel.
 const PATH_WORK: u64 = 128;
 /// Per device pixel of outline length the rasteriser walks for a fill.
 const FILL_EDGE_WORK: f64 = 4.0;
-/// The same for a stroke, which the stroker or hairline rasteriser walks.
-const STROKE_EDGE_WORK: f64 = 16.0;
+/// The same for a hairline, which is drawn a line at a time.
+const HAIRLINE_WORK: f64 = 16.0;
 /// Per dash `tiny-skia` cuts, each stroked as its own contour.
 const DASH_WORK: f64 = 128.0;
+/// Per piece the stroker may emit, as [`super::VERB_NS`] prices it.
+const VERB_WORK: f64 = 8.0;
 /// Per step of the rasteriser's insertion sort of its active edges, about a
 /// nanosecond where a painted pixel is four.
 const SORT_WORK: f64 = 0.25;
-/// Edges the rasteriser builds per filled segment: a curve splits into up to
-/// three pieces monotonic in y.
-const FILL_EDGES: f64 = 3.0;
-/// Edges of the outline the stroker builds per segment or dash: both sides
-/// and the joins or caps between them.
-const STROKE_EDGES: f64 = 4.0;
-/// Bytes of edges the rasteriser builds per filled segment.
-const FILL_BYTES: f64 = 192.0;
-/// Bytes of outline and edges per stroked segment, round joins the costliest
-/// at about 1.3 KiB.
-const OUTLINE_BYTES: f64 = 1_536.0;
-/// The same per dash, each its own contour with two caps.
-const DASH_BYTES: f64 = 768.0;
-/// Bytes of dashed path per dash of a hairline, which is never outlined.
-const HAIRLINE_DASH_BYTES: f64 = 48.0;
+/// Edges a segment becomes when its path lies inside the surface, which
+/// `tiny-skia` then fills unclipped: a curve splits into up to three pieces
+/// monotonic in y.
+const INSIDE_EDGES: f64 = 3.0;
+/// Edges when the path is clipped, for a segment that does not straddle a side
+/// of the surface: the clipper also splits each piece at its x extrema, five
+/// pieces at most, and turns one beyond a side into a vertical edge.
+const CLIPPED_EDGES: f64 = 5.0;
+/// Edges for a clipped segment straddling a side, where every piece may also
+/// gain a vertical edge where it is cut: the clipper's own cap of eighteen.
+const CROSSING_EDGES: f64 = 18.0;
+/// Bytes per edge: an 84-byte edge in a vector that doubles as it grows, and
+/// the scratch its stable sort takes.
+const EDGE_BYTES: f64 = 256.0;
+/// Bytes of dashed path per dash, before any outline.
+const DASH_PATH_BYTES: f64 = 48.0;
 /// Below this many edge pairs a path is charged every pair without sweeping
 /// its rows.
 const SWEEP_PAIRS: f64 = 1_048_576.0;
@@ -81,6 +86,15 @@ impl Area {
             bottom: f64::from(rect.bottom()),
         })
     }
+
+    /// Whether `tiny-skia` fills a path with these bounds unclipped: they fit
+    /// the surface once rounded out, with a pixel to spare.
+    fn holds(self, bounds: Area) -> bool {
+        bounds.left - 1.0 >= self.left
+            && bounds.top - 1.0 >= self.top
+            && bounds.right + 1.0 <= self.right
+            && bounds.bottom + 1.0 <= self.bottom
+    }
 }
 
 struct Frame<'a> {
@@ -121,6 +135,19 @@ impl Tally {
         self.work += painted;
         Ok(())
     }
+
+    /// Prices filling `data`, placed by `place`, into `surface`.
+    fn fill(&mut self, data: &tiny_skia::Path, place: Transform, surface: Area, extra: f64) {
+        let (steps, edges) = sorting(data, place, surface);
+        self.work += FILL_EDGE_WORK * length(data, place) + SORT_WORK * steps;
+        self.transient = self.transient.max(extra + edges * EDGE_BYTES);
+    }
+
+    /// Marks this size as past the budget: the raster steps down, or at its
+    /// intrinsic size is refused.
+    fn exceed(&mut self) {
+        self.work = f64::INFINITY;
+    }
 }
 
 /// Refuses a tree whose render is unbounded in kind (masks, filters, nested
@@ -128,7 +155,15 @@ impl Tally {
 /// [`MAX_SVG_OVERDRAW`]) and prices the rest for a `size` raster. Layers are
 /// sized the way `resvg` allocates them: the group's device bounds grown by two
 /// pixels a side, clamped to five canvases a side around the parent layer.
-pub(super) fn measure(tree: &usvg::Tree, size: IntSize) -> Result<Cost, SvgRefusal> {
+///
+/// Each stroke wider than a hairline is priced for the pieces the stroker may
+/// emit; with `strokes` it is then stroked as `resvg` will stroke it, out of
+/// that many pieces, and its outline priced as the fill it becomes.
+pub(super) fn measure(
+    tree: &usvg::Tree,
+    size: IntSize,
+    mut strokes: Option<&mut f64>,
+) -> Result<Cost, SvgRefusal> {
     let (width, height) = (f64::from(size.width()), f64::from(size.height()));
     let scale = Transform::from_scale(
         size.width() as f32 / tree.size().width(),
@@ -140,6 +175,7 @@ pub(super) fn measure(tree: &usvg::Tree, size: IntSize) -> Result<Cost, SvgRefus
         right: width,
         bottom: height,
     };
+    let output = u64::from(size.width()) * u64::from(size.height());
     let mut tally = Tally::default();
     let mut stack = vec![Frame {
         group: tree.root(),
@@ -188,55 +224,41 @@ pub(super) fn measure(tree: &usvg::Tree, size: IntSize) -> Result<Cost, SvgRefus
                         continue;
                     }
                     let place = scale.pre_concat(path.abs_transform());
-                    let segments = path.data().verbs().len() as f64;
                     tally.work += PATH_WORK as f64;
                     if let Some(fill) = path.fill() {
                         let area = Area::of(path.abs_bounding_box(), scale)
                             .map_or(frame.surface, |area| area.meet(frame.surface));
                         tally.paint(area.pixels(), fill.paint())?;
                         if area.pixels() > 0.0 {
-                            tally.work += FILL_EDGE_WORK * length(path.data(), place);
-                            tally.work += SORT_WORK
-                                * sorting(path.data(), place, frame.surface, 0.0, |_| FILL_EDGES);
+                            tally.fill(path.data(), place, frame.surface, 0.0);
                         }
-                        tally.transient = tally.transient.max(segments * FILL_BYTES);
                     }
                     if let Some(stroke) = path.stroke() {
                         let area = Area::of(path.abs_stroke_bounding_box(), scale)
                             .map_or(frame.surface, |area| area.meet(frame.surface));
                         tally.paint(area.pixels(), stroke.paint())?;
-                        tally.work += STROKE_EDGE_WORK * length(path.data(), place);
-                        let dashes = dashes(path.data(), stroke);
-                        tally.work += DASH_WORK * dashes;
-                        let transient = if hairline(path, stroke, place) {
-                            dashes * HAIRLINE_DASH_BYTES
-                        } else {
-                            let period = period(stroke);
-                            let edges = |run: f64| {
-                                STROKE_EDGES
-                                    * (1.0 + 2.0 * period.map_or(0.0, |period| run / period))
-                            };
-                            let reach = reach(stroke, place);
-                            if reach.is_nan() || reach > MAX_REACH {
-                                return Err(SvgRefusal::RenderTooCostly);
-                            }
-                            tally.work += SORT_WORK
-                                * sorting(path.data(), place, frame.surface, reach, edges);
-                            segments * OUTLINE_BYTES + dashes * DASH_BYTES
-                        };
-                        tally.transient = tally.transient.max(transient);
+                        if area.pixels() > 0.0 {
+                            let budget = strokes.as_deref_mut();
+                            measure_stroke(path, stroke, place, frame.surface, &mut tally, budget)?;
+                        }
                     }
                 }
                 Node::Image(_) | Node::Text(_) => return Err(SvgRefusal::UnsupportedElement),
             }
+            if tally.work > MAX_SVG_RENDER_WORK as f64 {
+                return Ok(Cost {
+                    pixels: output,
+                    work: u64::MAX,
+                });
+            }
         }
     }
-    if tally.painted > (MAX_SVG_OVERDRAW as f64) * width * height
-        || tally.transient > SVG_TRANSIENT_BYTES as f64
-    {
+    if tally.painted > (MAX_SVG_OVERDRAW as f64) * width * height {
         return Err(SvgRefusal::RenderTooCostly);
     }
-    let output = u64::from(size.width()) * u64::from(size.height());
+    if tally.transient > SVG_TRANSIENT_BYTES as f64 {
+        tally.exceed();
+    }
     Ok(Cost {
         pixels: output.saturating_add(tally.peak),
         work: if tally.work.is_finite() {
@@ -245,6 +267,77 @@ pub(super) fn measure(tree: &usvg::Tree, size: IntSize) -> Result<Cost, SvgRefus
             u64::MAX
         },
     })
+}
+
+/// Prices a stroke. A hairline is drawn a line at a time; anything wider is
+/// dashed, outlined by the stroker and filled, so it is charged the pieces
+/// [`geometry::stroke_verbs`] allows it, and with `strokes` left it is
+/// stroked here once, as `resvg` will stroke it, for the outline to be priced.
+/// Its curves must sit where the stroker's `f32` arithmetic stays well inside
+/// its tolerance: within [`MAX_SVG_STROKE_SPAN`] tolerances of the origin.
+fn measure_stroke(
+    path: &usvg::Path,
+    stroke: &usvg::Stroke,
+    place: Transform,
+    surface: Area,
+    tally: &mut Tally,
+    strokes: Option<&mut f64>,
+) -> Result<(), SvgRefusal> {
+    let dashes = dashes(path.data(), stroke);
+    tally.work += DASH_WORK * dashes;
+    let dashed = dashes * DASH_PATH_BYTES;
+    if hairline(path, stroke, place) {
+        tally.work += HAIRLINE_WORK * length(path.data(), place);
+        tally.transient = tally.transient.max(dashed);
+        return Ok(());
+    }
+    let reach = reach(stroke, place);
+    if reach.is_nan() || reach > MAX_REACH {
+        return Err(SvgRefusal::RenderTooCostly);
+    }
+    let resolution = PathStroker::compute_resolution_scale(&place);
+    let tolerance = 0.25 / f64::from(resolution);
+    let radius = f64::from(stroke.width().get()) / 2.0;
+    let mut outline = outline(path.data());
+    outline.segments += dashes;
+    outline.contours += dashes;
+    if outline.curves > 0.0 {
+        outline.curves += dashes;
+    }
+    let span = (outline.reach + radius) / tolerance;
+    let verbs = geometry::stroke_verbs(&outline, radius, tolerance);
+    tally.work += VERB_WORK * verbs;
+    let pieces = dashed + verbs * OUTLINE_VERB_BYTES;
+    if span.is_nan() || span > MAX_SVG_STROKE_SPAN || pieces > SVG_TRANSIENT_BYTES as f64 {
+        tally.exceed();
+        return Ok(());
+    }
+    let Some(strokes) = strokes else {
+        tally.transient = tally.transient.max(pieces);
+        return Ok(());
+    };
+    if verbs > *strokes || tally.work > MAX_SVG_RENDER_WORK as f64 {
+        tally.exceed();
+        return Ok(());
+    }
+    *strokes -= verbs;
+    let outline_stroke = stroke.to_tiny_skia();
+    let dashed_path;
+    let source = match &outline_stroke.dash {
+        Some(dash) => match path.data().dash(dash, resolution) {
+            Some(data) => {
+                dashed_path = data;
+                &dashed_path
+            }
+            None => return Ok(()),
+        },
+        None => path.data(),
+    };
+    if let Some(drawn) = source.stroke(&outline_stroke, resolution) {
+        let pieces = drawn.len() as f64 * OUTLINE_VERB_BYTES;
+        tally.fill(&drawn, place, surface, dashed + pieces);
+    }
+    Ok(())
 }
 
 /// Where `resvg` allocates a group's layer: its device bounds grown two pixels
@@ -301,18 +394,46 @@ fn measure_clip(
                         .map_or(layer, |area| area.meet(layer));
                     let drawn = place.pre_concat(path.abs_transform());
                     tally.painted += area.pixels();
-                    tally.work += PATH_WORK as f64
-                        + area.pixels()
-                        + FILL_EDGE_WORK * length(path.data(), drawn)
-                        + SORT_WORK * sorting(path.data(), drawn, layer, 0.0, |_| FILL_EDGES);
-                    let segments = path.data().verbs().len() as f64;
-                    tally.transient = tally.transient.max(segments * FILL_BYTES);
+                    tally.work += PATH_WORK as f64 + area.pixels();
+                    tally.fill(path.data(), drawn, layer, 0.0);
                 }
                 Node::Image(_) | Node::Text(_) => return Err(SvgRefusal::UnsupportedElement),
             }
         }
     }
     Ok(())
+}
+
+/// A converted path's outline, in its own units, as the stroker reads it.
+fn outline(data: &tiny_skia::Path) -> Outline {
+    let point = |point: Point| (f64::from(point.x), f64::from(point.y));
+    let mut outline = Outline::default();
+    let (mut start, mut current) = ((0.0, 0.0), (0.0, 0.0));
+    for segment in data.segments() {
+        match segment {
+            PathSegment::MoveTo(to) => {
+                (start, current) = (point(to), point(to));
+                outline.contours += 1.0;
+            }
+            PathSegment::LineTo(to) => {
+                current = point(to);
+                outline.segments += 1.0;
+            }
+            PathSegment::QuadTo(control, to) => {
+                outline.curve(&[current, point(control), point(to)]);
+                current = point(to);
+            }
+            PathSegment::CubicTo(first, second, to) => {
+                outline.curve(&[current, point(first), point(second), point(to)]);
+                current = point(to);
+            }
+            PathSegment::Close => {
+                current = start;
+                outline.segments += 1.0;
+            }
+        }
+    }
+    outline
 }
 
 /// The control-polygon length of `data` under `transform`, which a curve never
@@ -353,22 +474,22 @@ fn length(data: &tiny_skia::Path, transform: Transform) -> f64 {
     total
 }
 
-/// Steps the rasteriser may take insertion-sorting its active edges as it
-/// fills a path: at most one per pair of edges, since two monotone edges swap
-/// at most once, and at most every pair active together on each of the four
-/// anti-aliasing sub-rows of every row. Each segment adds `edges(run)` edges,
-/// `run` its length in the path's own units, over the rows its control points
-/// span within `surface`, widened by `reach` for a stroke's outline; one with
-/// no height to cross a sub-row adds none.
-fn sorting(
-    data: &tiny_skia::Path,
-    place: Transform,
-    surface: Area,
-    reach: f64,
-    edges: impl Fn(f64) -> f64,
-) -> f64 {
+/// The edges `tiny-skia` builds to fill `data` into `surface`, and the steps
+/// it may take insertion-sorting its active edges. A segment wholly above or
+/// below a clipped surface is dropped. Sorting takes at most one step per pair
+/// of edges, since two monotone edges swap at most once, and at most every
+/// pair active together on each of the four anti-aliasing sub-rows of every
+/// row a segment's control points span.
+fn sorting(data: &tiny_skia::Path, place: Transform, surface: Area) -> (f64, f64) {
+    let inside = Area::of(data.bounds(), place).is_some_and(|bounds| surface.holds(bounds));
+    let map = |point: &Point| {
+        (
+            f64::from(place.sx * point.x + place.kx * point.y + place.tx),
+            f64::from(place.ky * point.x + place.sy * point.y + place.ty),
+        )
+    };
     let mut spans = Vec::new();
-    let mut total = 0.0;
+    let mut edges = 0.0;
     let (mut start, mut current) = (Point::zero(), Point::zero());
     for segment in data.segments() {
         let points: &[Point] = match &segment {
@@ -382,31 +503,39 @@ fn sorting(
             PathSegment::CubicTo(first, second, point) => &[*first, *second, *point],
             PathSegment::Close => std::slice::from_ref(&start),
         };
-        let mut run = 0.0;
-        let mut rows = (f64::INFINITY, f64::NEG_INFINITY);
-        let mut previous = current;
+        let (mut columns, mut rows) = (
+            (f64::INFINITY, f64::NEG_INFINITY),
+            (f64::INFINITY, f64::NEG_INFINITY),
+        );
         for point in std::iter::once(&current).chain(points) {
-            run += f64::from(point.distance(previous));
-            previous = *point;
-            let y = f64::from(place.ky * point.x + place.sy * point.y + place.ty);
+            let (x, y) = map(point);
+            columns = (columns.0.min(x), columns.1.max(x));
             rows = (rows.0.min(y), rows.1.max(y));
         }
-        current = previous;
-        if rows.1 - rows.0 + 2.0 * reach < 0.25 {
+        current = *points.last().unwrap_or(&current);
+        let count = if inside {
+            INSIDE_EDGES
+        } else if rows.1 <= surface.top || rows.0 >= surface.bottom {
             continue;
-        }
-        let count = edges(run);
-        total += count;
-        let top = (rows.0 - reach).floor().max(surface.top.floor());
-        let bottom = (rows.1 + reach).ceil().min(surface.bottom.ceil());
+        } else if columns.1 <= surface.left
+            || columns.0 >= surface.right
+            || (columns.0 >= surface.left && columns.1 <= surface.right)
+        {
+            CLIPPED_EDGES
+        } else {
+            CROSSING_EDGES
+        };
+        edges += count;
+        let top = rows.0.floor().max(surface.top.floor());
+        let bottom = rows.1.ceil().min(surface.bottom.ceil());
         if top <= bottom {
             spans.push((top, count));
             spans.push((bottom + 1.0, -count));
         }
     }
-    let pairs = 2.0 * total * total;
+    let pairs = 2.0 * edges * edges;
     if !pairs.is_finite() || pairs <= SWEEP_PAIRS {
-        return pairs;
+        return (pairs, edges);
     }
     spans.sort_by(|a, b| a.0.total_cmp(&b.0));
     let (mut active, mut row, mut crowded) = (0.0f64, f64::NEG_INFINITY, 0.0);
@@ -417,7 +546,7 @@ fn sorting(
         active += change;
         row = at;
     }
-    pairs.min(crowded)
+    (pairs.min(crowded), edges)
 }
 
 /// Whether `tiny-skia` draws a stroke as a hairline, which it never outlines:
@@ -445,14 +574,6 @@ fn reach(stroke: &usvg::Stroke, place: Transform) -> f64 {
         _ => 1.0,
     };
     f64::from(stroke.width().get()) / 2.0 * scale * miter.max(std::f64::consts::SQRT_2) + 1.0
-}
-
-/// A stroke's dash period over the dashes it cuts in one, in the path's units.
-fn period(stroke: &usvg::Stroke) -> Option<f64> {
-    let array = stroke.dasharray()?;
-    let period: f64 = array.iter().map(|value| f64::from(*value)).sum();
-    (period.is_finite() && period > 0.0 && array.len() >= 2)
-        .then(|| period / (array.len() / 2) as f64)
 }
 
 /// Dashes `tiny-skia` cuts from a stroke, at most, in the path's own units: a

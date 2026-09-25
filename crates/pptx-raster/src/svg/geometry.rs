@@ -17,6 +17,21 @@ use super::audit::SVG_NS;
 const MAX_ARC_CUBICS: f64 = 64.0;
 /// The tolerance `svgtypes` and `usvg` hand `kurbo` to subdivide an arc.
 const ARC_TOLERANCE: f64 = 0.1;
+/// Bytes per piece the stroker emits: its points and verb, in the outer and
+/// inner outlines it builds and the path it joins them into, at most 43
+/// measured over a million pieces.
+pub(super) const OUTLINE_VERB_BYTES: f64 = 48.0;
+/// The tolerance `usvg` strokes a shape with to measure it: a quarter of a
+/// user unit, at a resolution scale of one.
+pub(super) const MEASURE_TOLERANCE: f64 = 0.25;
+/// Outline pieces the stroker may emit for any path besides its segments, and
+/// its setup, about half a microsecond a path.
+const PATH_VERBS: f64 = 16.0;
+/// Pieces a curve may add besides one per tolerance of its length: the spiral
+/// of lines the stroker leaves around a cusp as it splits down to the float
+/// precision of `t`, and the circle it adds there.
+const CURVE_VERBS: f64 = 64.0;
+
 /// A shape's outline as the arc converter and the stroker see it.
 #[derive(Clone, Copy, Default)]
 pub(super) struct Outline {
@@ -32,7 +47,8 @@ pub(super) struct Outline {
 }
 
 impl Outline {
-    fn curve(&mut self, points: &[(f64, f64)]) {
+    /// Adds a curve through its control points.
+    pub(super) fn curve(&mut self, points: &[(f64, f64)]) {
         self.segments += 1.0;
         self.curves += 1.0;
         for pair in points.windows(2) {
@@ -52,6 +68,22 @@ impl Outline {
         self.length += 8.0 * radius;
         self.reach = self.reach.max(middle + 2.0 * radius);
     }
+}
+
+/// Pieces `tiny-skia`'s stroker may emit for `outline` stroked at `radius`
+/// with `tolerance`, all in the units it strokes in, while its curves stay
+/// within [`super::MAX_SVG_STROKE_SPAN`] tolerances of the origin. Round
+/// joins, caps and cusp circles are conics of up to 32 quads, and a curve
+/// splits until its pieces meet the tolerance: about a piece per tolerance of
+/// control polygon at worst, six times what a search over adversarial cubics
+/// reached.
+pub(super) fn stroke_verbs(outline: &Outline, radius: f64, tolerance: f64) -> f64 {
+    let quads = (1.0 + (radius / tolerance).sqrt()).min(32.0);
+    PATH_VERBS
+        + outline.segments * (4.0 + 2.0 * quads)
+        + outline.contours * 4.0 * quads
+        + outline.curves * (CURVE_VERBS + 4.0 * quads)
+        + outline.length / tolerance
 }
 
 /// Path data as `svgtypes` simplifies it for `usvg`, which stops at the first
@@ -212,8 +244,8 @@ pub(super) fn shape(node: Node<'_, '_>) -> Result<Outline, SvgRefusal> {
 /// rounded to `f32` and each starts where `kurbo` left the last, so `kurbo`
 /// may widen the radii to reach them: never past three times the larger.
 fn ellipse(outline: &mut Outline, rx: f64, ry: f64, centre: f64) -> Result<(), SvgRefusal> {
-    let radius = 3.0 * rx.max(ry);
-    let cubics = 4.0 * arc_cubics(radius, false)?;
+    let radius = rx.max(ry);
+    let cubics = 4.0 * arc_cubics(3.0 * radius, false)?;
     outline.arc(cubics, radius, centre);
     outline.segments += 1.0;
     outline.contours = outline.contours.max(1.0);
@@ -255,21 +287,19 @@ fn absolute(node: Node<'_, '_>, name: &str) -> Result<Option<f64>, SvgRefusal> {
         let Ok(length) = Length::from_str(value) else {
             continue;
         };
-        let scale = match length.unit {
-            LengthUnit::None | LengthUnit::Px => 1.0,
-            LengthUnit::In => 96.0,
-            LengthUnit::Cm => 96.0 / 2.54,
-            LengthUnit::Mm => 96.0 / 25.4,
-            LengthUnit::Pt => 96.0 / 72.0,
-            LengthUnit::Pc => 16.0,
-            LengthUnit::Em | LengthUnit::Ex | LengthUnit::Percent => {
-                return Err(SvgRefusal::ExpansionTooLarge);
-            }
-        };
-        let value = length.number * scale;
+        let value = length.number * unit(length.unit)?;
         largest = Some(largest.map_or(value, |largest| largest.max(value)));
     }
     Ok(largest)
+}
+
+/// A `stroke-width` in user units, as `svgtypes::Length` reads it for `usvg`;
+/// zero for one `usvg` ignores. `em`, `ex` and `%` are refused.
+pub(super) fn stroke_width(value: &str) -> Result<f64, SvgRefusal> {
+    let Ok(length) = Length::from_str(value) else {
+        return Ok(0.0);
+    };
+    Ok(length.number * unit(length.unit)?)
 }
 
 /// Bytes of a dash list, which `usvg` parses anew for every shape that
@@ -282,6 +312,21 @@ pub(super) fn dash_list(value: &str) -> Result<u64, SvgRefusal> {
         }
     }
     Ok(value.len() as u64)
+}
+
+/// User units per `unit` at `usvg`'s 96 dpi; `em`, `ex` and `%` are refused.
+fn unit(unit: LengthUnit) -> Result<f64, SvgRefusal> {
+    Ok(match unit {
+        LengthUnit::None | LengthUnit::Px => 1.0,
+        LengthUnit::In => 96.0,
+        LengthUnit::Cm => 96.0 / 2.54,
+        LengthUnit::Mm => 96.0 / 25.4,
+        LengthUnit::Pt => 96.0 / 72.0,
+        LengthUnit::Pc => 16.0,
+        LengthUnit::Em | LengthUnit::Ex | LengthUnit::Percent => {
+            return Err(SvgRefusal::ExpansionTooLarge);
+        }
+    })
 }
 
 /// Every value of `name` in no namespace or the SVG one, the two `usvg` reads.

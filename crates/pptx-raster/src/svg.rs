@@ -55,6 +55,9 @@ const BYTE_NS: u64 = 32;
 /// Time `resvg` takes per unit of [`MAX_SVG_RENDER_WORK`]: an anti-aliased,
 /// alpha-blended pixel.
 const RENDER_NS: u64 = 4;
+/// Time the stroker takes per piece it may emit: 35 to 40 ns a piece measured
+/// on long outlines, which the bound on pieces overstates at least twofold.
+const VERB_NS: u64 = 32;
 
 /// One document's bytes, twice what [`MAX_SVG_EXPANDED_BYTES`] lets it draw
 /// so an editor's private markup, which the audit skips, still fits: the byte
@@ -91,7 +94,7 @@ pub const MAX_SVG_EXPANDED_BYTES: u64 = 1 << 21;
 pub const MAX_SVG_PATH_BYTES: usize = 1 << 16;
 /// That share: what the edges, outline and dashes of any one path may take
 /// while `usvg` measures it or `resvg` paints it.
-const SVG_TRANSIENT_BYTES: u64 = MAX_SVG_PATH_BYTES as u64 * STROKE_BYTES;
+pub(super) const SVG_TRANSIENT_BYTES: u64 = MAX_SVG_PATH_BYTES as u64 * STROKE_BYTES;
 /// Stops one gradient may carry. `usvg` drops equal offsets by shifting the
 /// list, quadratic in its length, and `tiny-skia` tests every stop per pixel.
 pub const MAX_SVG_GRADIENT_STOPS: usize = 256;
@@ -101,8 +104,8 @@ pub const MAX_SVG_GRADIENT_STOPS: usize = 256;
 pub const MAX_SVG_PAINT_BYTES: u64 = 1 << 23;
 /// What `usvg` spends collecting distinct gradients and clip paths, which it
 /// compares each reference against every one collected so far at about a
-/// quarter nanosecond each: 67 ms of the time envelope.
-pub const MAX_SVG_COLLECT_WORK: u64 = 1 << 26;
+/// quarter nanosecond each: 34 ms of the time envelope.
+pub const MAX_SVG_COLLECT_WORK: u64 = 1 << 25;
 /// `<style>` elements plus the rules they declare. `simplecss` re-sorts every
 /// rule after each sheet, so the sorts stay under ten million comparisons.
 pub const MAX_SVG_STYLE_RULES: usize = 1_024;
@@ -117,9 +120,18 @@ pub const MAX_SVG_SELECTOR_BYTES: usize = 256;
 pub const MAX_SVG_STYLE_COPIES: u64 = 1 << 18;
 /// What `simplecss` and `usvg` spend on CSS, in units of about a nanosecond:
 /// rescans of every stylesheet and `style` attribute, selector tests, and
-/// declarations applied, across the expanded document. 201 ms of the time
+/// declarations applied, across the expanded document. 101 ms of the time
 /// envelope.
-pub const MAX_SVG_STYLE_WORK: u64 = 3 << 26;
+pub const MAX_SVG_STYLE_WORK: u64 = 3 << 25;
+/// Pieces the stroker may emit while `usvg` strokes every shape instance whole
+/// to measure it, bounded before conversion; and again, separately, while the
+/// render is priced by stroking what `resvg` will stroke. 67 ms each.
+pub const MAX_SVG_STROKE_VERBS: u64 = 1 << 21;
+/// How far from the origin, in multiples of its tolerance, the stroker may
+/// meet a curve or reach with its width. Past `2^17` tolerances an `f32` step
+/// is more than a sixty-fourth of one, and the stroker, splitting until its
+/// arithmetic agrees with itself, emits millions of pieces for one curve.
+pub const MAX_SVG_STROKE_SPAN: f64 = 131_072.0;
 /// Group layers (opacity, clip, blend, isolation) one render may stack. Each
 /// is a raster charged to the slide's image budget with the output.
 pub const MAX_SVG_LAYER_DEPTH: usize = 8;
@@ -153,6 +165,7 @@ const _: () = assert!(
         + MAX_SVG_EXPANDED_BYTES * BYTE_NS
         + MAX_SVG_STYLE_WORK
         + MAX_SVG_COLLECT_WORK
+        + 2 * MAX_SVG_STROKE_VERBS * VERB_NS
         + MAX_SVG_RENDER_WORK * RENDER_NS
         <= SVG_TIME_ENVELOPE
 );
@@ -189,16 +202,21 @@ pub enum SvgRefusal {
     /// A reference that leads back to itself.
     ReferenceCycle,
     /// Past [`MAX_SVG_EXPANDED_NODES`], [`MAX_SVG_EXPANDED_BYTES`],
-    /// [`MAX_SVG_STYLE_WORK`], [`MAX_SVG_STYLE_COPIES`], [`MAX_SVG_PAINT_BYTES`]
-    /// or [`MAX_SVG_COLLECT_WORK`] once references are expanded, or a gradient
-    /// past [`MAX_SVG_GRADIENT_STOPS`] or a shape past [`MAX_SVG_PATH_BYTES`].
+    /// [`MAX_SVG_STYLE_WORK`], [`MAX_SVG_STYLE_COPIES`], [`MAX_SVG_PAINT_BYTES`],
+    /// [`MAX_SVG_COLLECT_WORK`] or [`MAX_SVG_STROKE_VERBS`] once references are
+    /// expanded; a gradient past [`MAX_SVG_GRADIENT_STOPS`], a shape past
+    /// [`MAX_SVG_PATH_BYTES`] or an arc of more than 64 cubics; a curved shape,
+    /// stroke width or dash list in relative units; or, where anything is
+    /// stroked, a rotation or skew, or a curve or width past
+    /// [`MAX_SVG_STROKE_SPAN`].
     ExpansionTooLarge,
     /// Group layers past [`MAX_SVG_LAYER_DEPTH`], or a clip path that is
     /// itself clipped.
     TooManyLayers,
-    /// Paints past [`MAX_SVG_OVERDRAW`] or [`MAX_SVG_RENDER_WORK`], or draws a
-    /// path whose edges, outline and dashes would outgrow the envelope's share
-    /// for one path, or a stroke too wide for the rasteriser's fixed point.
+    /// Paints past [`MAX_SVG_OVERDRAW`], or even at its intrinsic size past
+    /// [`MAX_SVG_RENDER_WORK`] or with a path whose edges, outline and dashes
+    /// would outgrow the envelope's share for one path; or a stroke too wide
+    /// for the rasteriser's fixed point.
     RenderTooCostly,
     /// `usvg` or `resvg` panicked.
     Panicked,
@@ -305,8 +323,11 @@ fn guarded<T>(step: impl FnOnce() -> T) -> Result<T, SvgRefusal> {
 
 /// The raster an intrinsic size renders into and the pixels it allocates: the
 /// largest supersample whose output and layers fit [`MAX_IMAGE_PIXELS`] and
-/// whose painting fits [`MAX_SVG_RENDER_WORK`]. At the intrinsic size only the
-/// painting refuses; a raster too large for the budget is the caller's to skip.
+/// whose painting fits [`MAX_SVG_RENDER_WORK`]. Sizes are priced first without
+/// stroking anything; the largest that fits and then the intrinsic one are
+/// priced again with their strokes drawn, out of [`MAX_SVG_STROKE_VERBS`]
+/// pieces split between the two. At the intrinsic size only the painting
+/// refuses; a raster too large for the budget is the caller's to skip.
 fn raster(tree: &usvg::Tree) -> Result<(IntSize, u64), SvgRefusal> {
     let width = tree.size().width();
     let height = tree.size().height();
@@ -318,28 +339,38 @@ fn raster(tree: &usvg::Tree) -> Result<(IntSize, u64), SvgRefusal> {
     if width > limit || height > limit {
         return Err(SvgRefusal::RasterTooLarge);
     }
-    let mut factor = SVG_SUPERSAMPLE;
-    loop {
+    let mut sizes = Vec::new();
+    for factor in (1..=SVG_SUPERSAMPLE).rev() {
         let (scaled_width, scaled_height) = (width * factor as f32, height * factor as f32);
-        if factor > 1 && (scaled_width > limit || scaled_height > limit) {
-            factor -= 1;
-            continue;
+        if factor == 1 || (scaled_width <= limit && scaled_height <= limit) {
+            let size = IntSize::from_wh(scaled_width as u32, scaled_height as u32);
+            sizes.push(size.ok_or(SvgRefusal::Unparsable)?);
         }
-        let size = IntSize::from_wh(scaled_width as u32, scaled_height as u32)
-            .ok_or(SvgRefusal::Unparsable)?;
-        let cost = cost::measure(tree, size)?;
-        let affordable = cost.work <= MAX_SVG_RENDER_WORK;
-        if affordable && cost.pixels <= MAX_IMAGE_PIXELS {
-            return Ok((size, cost.pixels));
-        }
-        if factor == 1 {
-            if !affordable {
-                return Err(SvgRefusal::RenderTooCostly);
-            }
-            return Ok((size, cost.pixels));
-        }
-        factor -= 1;
     }
+    let intrinsic = sizes[sizes.len() - 1];
+    let fits = |cost: &cost::Cost, size: IntSize| {
+        cost.work <= MAX_SVG_RENDER_WORK && (cost.pixels <= MAX_IMAGE_PIXELS || size == intrinsic)
+    };
+    let mut first = intrinsic;
+    for &size in &sizes {
+        if fits(&cost::measure(tree, size, None)?, size) {
+            first = size;
+            break;
+        }
+    }
+    let share = (MAX_SVG_STROKE_VERBS / 2) as f64;
+    let mut strokes = share;
+    for size in [first, intrinsic] {
+        let cost = cost::measure(tree, size, Some(&mut strokes))?;
+        if fits(&cost, size) {
+            return Ok((size, cost.pixels));
+        }
+        if size == intrinsic {
+            break;
+        }
+        strokes += share;
+    }
+    Err(SvgRefusal::RenderTooCostly)
 }
 
 #[cfg(test)]
@@ -858,7 +889,8 @@ pub(crate) mod tests {
         );
         assert_eq!(
             refusal(fuzzed.as_bytes()),
-            Some(SvgRefusal::RenderTooCostly)
+            Some(SvgRefusal::ExpansionTooLarge),
+            "refused before usvg strokes it to measure it"
         );
     }
 
@@ -1222,6 +1254,56 @@ pub(crate) mod tests {
             Some(SvgRefusal::RenderTooCostly)
         );
         assert!(started.elapsed() < std::time::Duration::from_secs(1));
+    }
+
+    #[test]
+    fn a_clipped_curve_is_charged_the_edges_the_clipper_cuts_it_into() {
+        let curves = |x: i32| {
+            let (near, far) = (x - 2, x + 2);
+            document(&format!(
+                r#"<path d="M{near} 40{}"/>"#,
+                format!("C{far} 40 {far} 44 {near} 44C{far} 44 {far} 40 {near} 40").repeat(500)
+            ))
+        };
+        assert_eq!(
+            refusal(curves(0).as_bytes()),
+            Some(SvgRefusal::RenderTooCostly),
+            "every curve straddles the left side"
+        );
+        assert!(parse(curves(48).as_bytes()).is_ok());
+    }
+
+    #[test]
+    fn a_stroke_is_bounded_before_the_stroker_subdivides_it() {
+        let cusp = "M687.08 -722.33C660.37 -517.96 673.22 -539.96 -10.98 434.07";
+        let cusps = format!(
+            r##"<g transform="scale(0.05) translate(800 800)"><path d="{}" fill="none" stroke="#000"/></g>"##,
+            cusp.repeat(2_000)
+        );
+        for body in [
+            r##"<path d="M10 10C60 90 20 -50 80 40" stroke="#000" stroke-width="1e7"/>"##,
+            r##"<path d="M1000000 1000000c50 80 10 -60 70 30" stroke="#000"/>"##,
+            r##"<g transform="scale(0.003)"><path d="M0 0C30000 60000 -20000 -50000 32000 30000" stroke="#000" stroke-width="10"/></g>"##,
+            r##"<g transform="rotate(30 48 48)"><path d="M10 10C60 90 20 -50 80 40" stroke="#000"/></g>"##,
+            r##"<style>path { transform: rotate(30deg) }</style><path d="M10 10L80 40" stroke="#000"/>"##,
+            r##"<path d="M10 10L80 40" stroke="#000" stroke-width="10%"/>"##,
+            cusps.as_str(),
+        ] {
+            let started = std::time::Instant::now();
+            assert_eq!(
+                refusal(document(body).as_bytes()),
+                Some(SvgRefusal::ExpansionTooLarge),
+                "{body}"
+            );
+            assert!(started.elapsed() < std::time::Duration::from_secs(1));
+        }
+        let icon = format!(
+            r##"<circle cx="48" cy="48" r="40" fill="none" stroke="#000" stroke-width="2"/><rect x="10" y="10" width="76" height="76" rx="8" fill="none" stroke="#000" stroke-dasharray="4 2"/><g transform="scale(0.05) translate(800 800)"><path d="{cusp}" fill="none" stroke="#000" stroke-width="20"/></g>"##
+        );
+        assert!(parse(document(&icon).as_bytes()).is_ok());
+        let markers =
+            r##"<circle cx="48" cy="48" r="3" fill="none" stroke="#000"/>"##.repeat(1_000);
+        assert!(parse(document(&markers).as_bytes()).is_ok());
     }
 
     pub(crate) fn opacity_nest(depth: usize) -> String {

@@ -26,6 +26,39 @@ pub(super) struct StyleSheet<'a> {
     copies: u64,
     /// Bytes of the longest dash list a block declares.
     dash: u64,
+    strokes: Strokes,
+}
+
+/// What CSS or an element's attributes say about strokes, for the bound on
+/// what `usvg` spends stroking every shape whole to measure it.
+#[derive(Clone, Copy, Default)]
+pub(super) struct Strokes {
+    /// Whether anything may be stroked.
+    pub(super) stroked: bool,
+    /// The widest `stroke-width`, in user units.
+    pub(super) width: f64,
+    /// Whether a transform may rotate or skew, which has `usvg` stroke in
+    /// canvas units instead of the shape's own.
+    pub(super) turned: bool,
+}
+
+impl Strokes {
+    /// Reads CSS text.
+    pub(super) fn read(&mut self, text: &str) -> Result<(), SvgRefusal> {
+        let has = |word: &[u8]| super::reference::contains_ignore_case(text, word);
+        self.stroked |= has(b"stroke");
+        self.turned |= has(b"transform");
+        for value in values(text, "stroke-width") {
+            self.width = self.width.max(super::geometry::stroke_width(value)?);
+        }
+        Ok(())
+    }
+
+    pub(super) fn join(&mut self, other: Strokes) {
+        self.stroked |= other.stroked;
+        self.turned |= other.turned;
+        self.width = self.width.max(other.width);
+    }
 }
 
 struct Rule<'a> {
@@ -80,6 +113,11 @@ impl<'a> StyleSheet<'a> {
     /// Bytes of the longest dash list any rule declares.
     pub(super) fn dash(&self) -> u64 {
         self.dash
+    }
+
+    /// What the rules say about strokes.
+    pub(super) fn strokes(&self) -> Strokes {
+        self.strokes
     }
 
     /// Style work testing every rule against one instance of `node`, for
@@ -146,6 +184,7 @@ impl<'a> StyleSheet<'a> {
             }
             screen(declarations)?;
             self.dash = self.dash.max(dash(declarations)?);
+            self.strokes.read(declarations)?;
             let mut references = Vec::new();
             super::reference::css(declarations, &mut references)?;
             let block = self.blocks.len();
