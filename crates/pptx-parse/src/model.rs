@@ -331,7 +331,8 @@ pub struct Placeholder {
 const SINGLETON_PLACEHOLDERS: [&str; 5] = ["title", "sldNum", "dt", "ftr", "hdr"];
 
 impl Placeholder {
-    /// Whether one placeholder inherits from the other, on a layout or master.
+    /// Whether this placeholder and `other` fill the same slot, so one
+    /// inherits from the other.
     pub fn matches(&self, other: &Placeholder) -> bool {
         let left_type = normalize_placeholder_type(self.placeholder_type.as_deref());
         let right_type = normalize_placeholder_type(other.placeholder_type.as_deref());

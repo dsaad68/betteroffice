@@ -99,8 +99,8 @@ pub(crate) fn inherited_transform<'a>(
         .find(|transform| transform.width > 0 && transform.height > 0)
 }
 
-/// Whether the slide's own node spells out a transform, even a partial one,
-/// which the shape then draws and edits instead of the inherited one.
+/// Whether the slide's own node spells out any part of a transform, which
+/// keeps the shape from inheriting one.
 fn has_own_transform(context: &SlideContext<'_>, source_id: u32) -> bool {
     source_id != 0
         && find_source_node(context.source_shapes, source_id)
