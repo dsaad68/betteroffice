@@ -61,15 +61,19 @@ impl<'a> StyleSheet<'a> {
         if self.rules.is_empty() {
             return;
         }
-        let classes: Vec<&str> = node
+        let mut classes: Vec<&str> = node
             .attribute("class")
             .unwrap_or_default()
             .split_ascii_whitespace()
             .collect();
+        classes.sort_unstable();
         let id = node.attribute("id");
         for rule in &self.rules {
             let applies = rule.tag.is_none_or(|tag| node.tag_name().name() == tag)
-                && rule.classes.iter().all(|name| classes.contains(name))
+                && rule
+                    .classes
+                    .iter()
+                    .all(|name| classes.binary_search(name).is_ok())
                 && rule.ids.iter().all(|name| id == Some(*name));
             if applies {
                 let block = &self.blocks[rule.block];

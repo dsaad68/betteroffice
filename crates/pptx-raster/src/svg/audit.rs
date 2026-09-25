@@ -166,7 +166,7 @@ pub(super) fn audit(document: &Document<'_>) -> Result<(), SvgRefusal> {
         }
     }
 
-    let mut edges = 0u64;
+    let mut edges = 0usize;
     let mut adjacency = Vec::with_capacity(elements.len());
     for element in &elements {
         let mut targets = element.children.clone();
@@ -176,10 +176,13 @@ pub(super) fn audit(document: &Document<'_>) -> Result<(), SvgRefusal> {
                     Some(Slot::Element(target)) => targets.push(target),
                     _ => return Err(SvgRefusal::UnsupportedElement),
                 }
+                if edges + targets.len() > room {
+                    return Err(SvgRefusal::ExpansionTooLarge);
+                }
             }
         }
-        edges += targets.len() as u64;
-        if edges > MAX_SVG_EXPANDED_NODES {
+        edges += targets.len();
+        if edges > room {
             return Err(SvgRefusal::ExpansionTooLarge);
         }
         adjacency.push(targets);

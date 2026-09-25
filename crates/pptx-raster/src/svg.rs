@@ -646,6 +646,19 @@ pub(crate) mod tests {
     }
 
     #[test]
+    fn a_reference_to_a_repeated_id_counts_every_element_that_carries_it() {
+        let targets = r##"<g id="x"/>"##.repeat(1_000);
+        let references = "url(#x) ".repeat(200);
+        let source = document(&format!(
+            r##"<defs>{targets}</defs><rect width="9" height="9" style="fill:{references}"/>"##
+        ));
+        assert_eq!(
+            refusal(source.as_bytes()),
+            Some(SvgRefusal::ExpansionTooLarge)
+        );
+    }
+
+    #[test]
     fn a_stylesheet_is_held_to_plain_rules_and_a_matching_budget() {
         let deep = format!(
             "<style>.x {} {{fill:red}}</style>{}<rect width=\"9\" height=\"9\"/>{}",
