@@ -392,6 +392,10 @@ function drawCropped(
   source: CanvasImageSource,
   image: ImagePrimitive
 ): void {
+  if (image.tile) {
+    drawTiled(ctx, source, image, image.tile);
+    return;
+  }
   const crop = image.crop;
   const left = clampCrop(crop?.left);
   const top = clampCrop(crop?.top);
@@ -422,6 +426,57 @@ function drawCropped(
     ctx.drawImage(source, image.x, image.y, image.w, image.h);
   }
   if (masked) ctx.restore();
+}
+
+/** Repeats the cropped source from the box's top left, at its own size times the scale. */
+function drawTiled(
+  ctx: CanvasRenderingContext2D,
+  source: CanvasImageSource,
+  image: ImagePrimitive,
+  tile: { scaleX: number; scaleY: number }
+): void {
+  const width = sourceWidth(source);
+  const height = sourceHeight(source);
+  if (width <= 0 || height <= 0) return;
+  const left = Math.round(clampCrop(image.crop?.left) * width);
+  const top = Math.round(clampCrop(image.crop?.top) * height);
+  const right = width - Math.round(clampCrop(image.crop?.right) * width);
+  const bottom = height - Math.round(clampCrop(image.crop?.bottom) * height);
+  if (right <= left || bottom <= top) return;
+  const cropped = left > 0 || top > 0 || right < width || bottom < height;
+  const pattern = ctx.createPattern(
+    cropped ? croppedTile(source, left, top, right - left, bottom - top) : source,
+    'repeat'
+  );
+  if (!pattern) return;
+  ctx.save();
+  buildImageOutline(ctx, image);
+  ctx.clip();
+  pattern.setTransform(
+    new DOMMatrix().translateSelf(image.x, image.y).scaleSelf(tile.scaleX, tile.scaleY)
+  );
+  ctx.fillStyle = pattern;
+  ctx.fillRect(image.x, image.y, image.w, image.h);
+  ctx.restore();
+}
+
+/** The `a:srcRect` part of a tile's source, which the pattern repeats in its place. */
+function croppedTile(
+  source: CanvasImageSource,
+  x: number,
+  y: number,
+  width: number,
+  height: number
+): CanvasImageSource {
+  try {
+    const canvas = offscreen(width, height);
+    const ctx = canvas?.getContext('2d') as CanvasRenderingContext2D | null;
+    if (!canvas || !ctx) return source;
+    ctx.drawImage(source, x, y, width, height, 0, 0, width, height);
+    return canvas as CanvasImageSource;
+  } catch {
+    return source;
+  }
 }
 
 /** The picture's own outline when it has one, else its frame. */
@@ -753,6 +808,13 @@ export function applyImageEffects(data: Uint8ClampedArray, effects: ImageEffect[
         }
         break;
       }
+      case 'alpha': {
+        const amount = Math.min(Math.max(effect.amount, 0), 1);
+        for (let index = 3; index < data.length; index += 4) {
+          data[index] = Math.round(data[index] * amount);
+        }
+        break;
+      }
       case 'grayscale': {
         for (let index = 0; index < data.length; index += 4) {
           const value = Math.round(luma(data, index));
@@ -822,9 +884,20 @@ function paintTextBox(
   ctx.textBaseline = 'alphabetic';
   const changes = textChanges.filter((change) => change.storyId === textBox.storyId);
   paintTextChanges(ctx, textBox, changes, false);
+  const shadow = textBox.textShadow;
+  if (shadow) {
+    ctx.save();
+    // The canvas blurs by a radius of about twice the Gaussian sigma, and a
+    // shape's shadow halves the authored radius for the same reason.
+    ctx.shadowColor = shadow.color;
+    ctx.shadowBlur = Math.max(shadow.blur ?? 0, 0);
+    ctx.shadowOffsetX = shadow.dx ?? 0;
+    ctx.shadowOffsetY = shadow.dy ?? 0;
+  }
   for (const line of textBox.lines) {
     for (const run of line.runs) paintTextRun(ctx, run, line.baseline);
   }
+  if (shadow) ctx.restore();
   paintTextChanges(ctx, textBox, changes, true);
 }
 
