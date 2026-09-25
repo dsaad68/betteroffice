@@ -5,4 +5,4 @@
 '@betteroffice/rust-crates': minor
 ---
 
-pptx: a placeholder that takes its geometry from its layout or master draws with the rotation and flips it inherits, and can now be dragged and resized from the frame it is drawn in. Its snapshot carries that geometry as `inherited`, and the first `moveShape`, `resizeShape` or `setShapeRect` makes the whole transform its own, so the placeholder keeps its size and orientation live and after a save. The Rust crates add `Placeholder::matches`, the placeholder matching that rendering and editing share, and the facade re-exports `InheritedGeometry`.
+Drag and resize placeholders that take their geometry from the layout or master, from the frame they are drawn in, and draw them with the rotation and flips they inherit. The snapshot carries that geometry as `inherited`; the first `moveShape`, `resizeShape` or `setShapeRect` makes the whole transform the placeholder's own, so it keeps its size and orientation live and after a save. The Rust crates add `Placeholder::matches`, the placeholder matching that rendering and editing share, and the facade re-exports `InheritedGeometry`.
