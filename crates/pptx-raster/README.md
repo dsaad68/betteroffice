@@ -63,13 +63,16 @@ it, and the shares are checked at compile time to sum within it.
   `MAX_SVG_NAMESPACES`, and refuses any DTD.
 - **Before `usvg`.** Every reference is read with `svgtypes`, the parser `usvg`
   resolves it with, and must name a fragment of the document; the graph they
-  form must be acyclic. The tree every `<use>` and clip path expands into is
+  form must be acyclic. No attribute may come from the SVG, XLink or XML
+  namespace, which `usvg` reads as if unprefixed, beyond `xlink:href`,
+  `xlink:title`, `xml:space` and `xml:lang`. The tree every `<use>` and clip path expands into is
   sized first, to `MAX_SVG_EXPANDED_NODES` elements and
   `MAX_SVG_EXPANDED_BYTES` of markup, with `MAX_SVG_PATH_BYTES` per shape and
   `MAX_SVG_GRADIENT_STOPS` per gradient. Stylesheets are plain type, class and
   id rules within `MAX_SVG_STYLE_RULES`, `MAX_SVG_SELECTOR_PARTS` and
   `MAX_SVG_SELECTOR_BYTES`, and `MAX_SVG_STYLE_WORK` charges what `simplecss`
-  spends on them, text rescans included; CSS may not say `inherit`. Gradient
+  spends on them, text rescans included; declarations are read with its own
+  tokenizer, and CSS may not say `inherit`. Gradient
   copies for the shapes that inherit one are charged to `MAX_SVG_PAINT_BYTES`,
   collecting them and the clip paths to `MAX_SVG_COLLECT_WORK`, and a dash list
   to every shape that may stroke with it. Path data is read with `svgtypes`
@@ -80,6 +83,8 @@ it, and the shares are checked at compile time to sum within it.
   every shape is charged the pieces the stroker may emit as `usvg` strokes it
   to measure it, within `MAX_SVG_STROKE_VERBS`; curves and widths must stay
   within `MAX_SVG_STROKE_SPAN` tolerances, and rotations and skews are refused.
+  The inherited-property lookups `usvg` makes through every ancestor are
+  charged to `MAX_SVG_INHERIT_WORK`.
 - **Before `resvg`.** The converted tree is priced: group layers stack at most
   `MAX_SVG_LAYER_DEPTH` deep and are charged to the slide's image budget with
   the output raster, painted area stays within `MAX_SVG_OVERDRAW` times that
@@ -87,7 +92,8 @@ it, and the shares are checked at compile time to sum within it.
   clipper cuts and their sorting included, and each stroke's outline, which
   is stroked once here as `resvg` will stroke it. The raster renders at up to
   four times the document's intrinsic size and steps down when it would not
-  fit.
+  fit, the slide's image budget left included; it and every layer stay within
+  `MAX_SVG_RASTER_DIM` a side, one `tiny-skia` tile.
 - **During both.** A panic in either library becomes a refusal.
 
 A refused document is a skipped image like any other and carries nothing from
