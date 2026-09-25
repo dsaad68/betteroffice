@@ -7,8 +7,9 @@ use libfuzzer_sys::fuzz_target;
 use pptx_raster::SVG_MEMORY_ENVELOPE;
 use pptx_raster::fuzzing::decode;
 
-/// Image budget the slide has left: a 16 MiB raster, outside the envelope.
-const PIXELS: u64 = 1 << 22;
+/// Image budget the slide has left: a 4 MiB raster, outside the envelope, so
+/// the envelope and libFuzzer's in-memory corpus fit a 150 MB RSS cap.
+const PIXELS: u64 = 1 << 20;
 /// The thread stack the sandbox's nesting bound is measured against.
 const STACK: usize = 512 * 1024;
 /// A decode's peak heap: the envelope plus the raster it outputs.
