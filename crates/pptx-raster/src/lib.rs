@@ -8,6 +8,25 @@ mod blur;
 mod font;
 mod svg;
 
+/// Entry points for the fuzz targets in `fuzz/`; not a stable API.
+#[cfg(feature = "fuzzing")]
+#[doc(hidden)]
+pub mod fuzzing {
+    pub use crate::svg::{SvgImage, parse as parse_svg};
+
+    /// Decodes `bytes` as a picture on a slide with `pixels` of its image
+    /// budget left, as a slide render would, returning the decoded size.
+    pub fn decode(bytes: &[u8], pixels: u64) -> Option<(u32, u32)> {
+        let pixels = pixels.min(crate::MAX_SLIDE_IMAGE_PIXELS);
+        let mut budget = crate::ImageBudget {
+            pixels: crate::MAX_SLIDE_IMAGE_PIXELS - pixels,
+            bytes: crate::MAX_SLIDE_IMAGE_BYTES - pixels * 8,
+        };
+        let image = budget.decode(bytes, &[])?;
+        Some((image.pixmap.width(), image.pixmap.height()))
+    }
+}
+
 pub use font::GlyphCache;
 pub use svg::{
     MAX_SVG_BYTES, MAX_SVG_DEPTH, MAX_SVG_EXPANDED_BYTES, MAX_SVG_EXPANDED_NODES,

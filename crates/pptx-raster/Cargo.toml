@@ -14,6 +14,9 @@ categories = ["rendering", "multimedia::images"]
 [lib]
 name = "pptx_raster"
 
+[features]
+fuzzing = []
+
 [dependencies]
 image = { version = "0.25", default-features = false, features = [
   "bmp",
