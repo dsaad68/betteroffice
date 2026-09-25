@@ -124,8 +124,9 @@ pub const MAX_SVG_STYLE_COPIES: u64 = 1 << 18;
 /// envelope.
 pub const MAX_SVG_STYLE_WORK: u64 = 3 << 25;
 /// Pieces the stroker may emit while `usvg` strokes every shape instance whole
-/// to measure it, bounded before conversion; and again, separately, while the
-/// render is priced by stroking what `resvg` will stroke. 67 ms each.
+/// to measure it, bounded before conversion; and, separately, the pieces it
+/// emits while the render is priced by stroking what `resvg` will stroke,
+/// each stroke started only while its bound still fits. 67 ms each.
 pub const MAX_SVG_STROKE_VERBS: u64 = 1 << 21;
 /// How far from the origin, in multiples of its tolerance, the stroker may
 /// meet a curve or reach with its width. Past `2^17` tolerances an `f32` step

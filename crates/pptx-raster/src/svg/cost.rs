@@ -18,22 +18,18 @@ const FILL_EDGE_WORK: f64 = 4.0;
 const HAIRLINE_WORK: f64 = 16.0;
 /// Per dash `tiny-skia` cuts, each stroked as its own contour.
 const DASH_WORK: f64 = 128.0;
-/// Per piece the stroker may emit, as [`super::VERB_NS`] prices it.
+/// Per piece the stroker emits, as [`super::VERB_NS`] prices it.
 const VERB_WORK: f64 = 8.0;
 /// Per step of the rasteriser's insertion sort of its active edges, about a
 /// nanosecond where a painted pixel is four.
 const SORT_WORK: f64 = 0.25;
-/// Edges a segment becomes when its path lies inside the surface, which
-/// `tiny-skia` then fills unclipped: a curve splits into up to three pieces
-/// monotonic in y.
-const INSIDE_EDGES: f64 = 3.0;
-/// Edges when the path is clipped, for a segment that does not straddle a side
-/// of the surface: the clipper also splits each piece at its x extrema, five
-/// pieces at most, and turns one beyond a side into a vertical edge.
-const CLIPPED_EDGES: f64 = 5.0;
-/// Edges for a clipped segment straddling a side, where every piece may also
-/// gain a vertical edge where it is cut: the clipper's own cap of eighteen.
-const CROSSING_EDGES: f64 = 18.0;
+/// Edges a line, quad and cubic become. Inside the surface `tiny-skia` fills
+/// unclipped, splitting a curve into pieces monotonic in y: one, two, three.
+/// Clipped, it also splits them at their x extrema, one, three, five, turning
+/// a piece beyond a side into a vertical edge; and a piece straddling a side
+/// gains a vertical edge on either end, up to three a line, nine a quad and
+/// the clipper's own cap of eighteen a cubic.
+const EDGES: [[f64; 3]; 3] = [[1.0, 1.0, 3.0], [2.0, 3.0, 9.0], [3.0, 5.0, 18.0]];
 /// Bytes per edge: an 84-byte edge in a vector that doubles as it grows, and
 /// the scratch its stable sort takes.
 const EDGE_BYTES: f64 = 256.0;
@@ -157,8 +153,9 @@ impl Tally {
 /// pixels a side, clamped to five canvases a side around the parent layer.
 ///
 /// Each stroke wider than a hairline is priced for the pieces the stroker may
-/// emit; with `strokes` it is then stroked as `resvg` will stroke it, out of
-/// that many pieces, and its outline priced as the fill it becomes.
+/// emit. With `strokes` it is instead stroked as `resvg` will stroke it, when
+/// that many are still left, and charged the pieces it took, its outline
+/// priced as the fill it becomes.
 pub(super) fn measure(
     tree: &usvg::Tree,
     size: IntSize,
@@ -311,13 +308,13 @@ fn measure_stroke(
         outline.curves += dashes;
     }
     let verbs = geometry::stroke_verbs(&outline, radius, tolerance);
-    tally.work += VERB_WORK * verbs;
     let pieces = dashed + verbs * OUTLINE_VERB_BYTES;
     if far || pieces > SVG_TRANSIENT_BYTES as f64 {
         tally.exceed();
         return Ok(());
     }
     let Some(strokes) = strokes else {
+        tally.work += VERB_WORK * verbs;
         tally.transient = tally.transient.max(pieces);
         return Ok(());
     };
@@ -325,7 +322,6 @@ fn measure_stroke(
         tally.exceed();
         return Ok(());
     }
-    *strokes -= verbs;
     let outline_stroke = stroke.to_tiny_skia();
     let dashed_path;
     let source = match &outline_stroke.dash {
@@ -339,8 +335,15 @@ fn measure_stroke(
         None => path.data(),
     };
     if let Some(drawn) = source.stroke(&outline_stroke, resolution) {
-        let pieces = drawn.len() as f64 * OUTLINE_VERB_BYTES;
-        tally.fill(&drawn, place, surface, dashed + pieces);
+        let emitted = drawn.len() as f64;
+        *strokes -= emitted;
+        tally.work += VERB_WORK * emitted;
+        tally.fill(
+            &drawn,
+            place,
+            surface,
+            dashed + emitted * OUTLINE_VERB_BYTES,
+        );
     }
     Ok(())
 }
@@ -518,17 +521,18 @@ fn sorting(data: &tiny_skia::Path, place: Transform, surface: Area) -> (f64, f64
             rows = (rows.0.min(y), rows.1.max(y));
         }
         current = *points.last().unwrap_or(&current);
+        let kind = &EDGES[points.len().min(3) - 1];
         let count = if inside {
-            INSIDE_EDGES
+            kind[0]
         } else if rows.1 <= surface.top || rows.0 >= surface.bottom {
             continue;
         } else if columns.1 <= surface.left
             || columns.0 >= surface.right
             || (columns.0 >= surface.left && columns.1 <= surface.right)
         {
-            CLIPPED_EDGES
+            kind[1]
         } else {
-            CROSSING_EDGES
+            kind[2]
         };
         edges += count;
         let top = rows.0.floor().max(surface.top.floor());
