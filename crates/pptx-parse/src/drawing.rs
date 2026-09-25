@@ -280,6 +280,7 @@ fn embed_relationship_id(element: &XmlElement) -> Option<&str> {
     element
         .attribute("r:embed")
         .or_else(|| element.attribute_local("embed"))
+        .filter(|id| !id.is_empty())
 }
 
 fn svg_blip(blip: &XmlElement) -> Option<&XmlElement> {
@@ -2556,6 +2557,18 @@ mod tests {
     fn a_picture_embedded_through_the_svg_extension_resolves_its_media_part() {
         let picture = svg_extension_picture(
             br#"<a:blip><a:extLst><a:ext uri="{96DAC541-7B7A-43D3-8B79-37D633B846F1}"><asvg:svgBlip xmlns:asvg="http://schemas.microsoft.com/office/drawing/2016/SVG/main" r:embed="rId4"/></a:ext></a:extLst></a:blip>"#,
+        );
+        assert_eq!(picture.relationship_id.as_deref(), Some("rId4"));
+        assert_eq!(
+            picture.media_part_path.as_deref(),
+            Some("ppt/media/vector.svg")
+        );
+    }
+
+    #[test]
+    fn an_empty_blip_relationship_resolves_through_the_svg_extension() {
+        let picture = svg_extension_picture(
+            br#"<a:blip r:embed=""><a:extLst><a:ext uri="{96DAC541-7B7A-43D3-8B79-37D633B846F1}"><asvg:svgBlip xmlns:asvg="http://schemas.microsoft.com/office/drawing/2016/SVG/main" r:embed="rId4"/></a:ext></a:extLst></a:blip>"#,
         );
         assert_eq!(picture.relationship_id.as_deref(), Some("rId4"));
         assert_eq!(
