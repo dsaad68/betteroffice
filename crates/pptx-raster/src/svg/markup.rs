@@ -6,17 +6,23 @@
 use std::collections::HashSet;
 
 use super::{
-    MAX_SVG_ATTRIBUTES, MAX_SVG_DEPTH, MAX_SVG_ELEMENT_ATTRIBUTES, MAX_SVG_NAMESPACES, SvgRefusal,
+    MAX_SVG_ATTRIBUTES, MAX_SVG_DEPTH, MAX_SVG_ELEMENT_ATTRIBUTES, MAX_SVG_NAMESPACES,
+    MAX_SVG_NODES, SvgRefusal,
 };
 
 /// Refuses markup nested past [`MAX_SVG_DEPTH`], with more than
-/// [`MAX_SVG_ELEMENT_ATTRIBUTES`] on one element or [`MAX_SVG_ATTRIBUTES`] in
-/// all, or with more than [`MAX_SVG_NAMESPACES`] namespace declarations in
-/// scope at one element or distinct across the document.
+/// [`MAX_SVG_ELEMENT_ATTRIBUTES`] on one element, or with more than
+/// [`MAX_SVG_NAMESPACES`] namespace declarations in scope at one element or
+/// distinct across the document. `roxmltree` reserves a node for every `<` and
+/// an attribute for every `=` in the text before it parses, so those are held
+/// to [`MAX_SVG_NODES`] and [`MAX_SVG_ATTRIBUTES`] wherever they appear.
 pub(super) fn scan(bytes: &[u8]) -> Result<(), SvgRefusal> {
+    let count = |needle: u8| bytes.iter().filter(|byte| **byte == needle).count();
+    if count(b'<') > MAX_SVG_NODES as usize || count(b'=') > MAX_SVG_ATTRIBUTES {
+        return Err(SvgRefusal::DocumentTooLarge);
+    }
     let mut index = 0;
     let mut scopes: Vec<usize> = Vec::new();
-    let mut attributes = 0usize;
     let mut namespaces: HashSet<(&[u8], &[u8])> = HashSet::new();
     while let Some(open) = bytes[index..].iter().position(|byte| *byte == b'<') {
         index += open + 1;
@@ -35,8 +41,7 @@ pub(super) fn scan(bytes: &[u8]) -> Result<(), SvgRefusal> {
         } else {
             let tag = Tag::read(bytes, index, &mut namespaces)?;
             index = tag.end;
-            attributes += tag.attributes;
-            if tag.attributes > MAX_SVG_ELEMENT_ATTRIBUTES || attributes > MAX_SVG_ATTRIBUTES {
+            if tag.attributes > MAX_SVG_ELEMENT_ATTRIBUTES {
                 return Err(SvgRefusal::DocumentTooLarge);
             }
             let scope = scopes.last().copied().unwrap_or(0) + tag.declarations;
@@ -189,6 +194,17 @@ mod tests {
         assert_eq!(scan(spread.as_bytes()), Err(SvgRefusal::DocumentTooLarge));
         let redeclared = "<g xmlns=\"http://www.w3.org/2000/svg\"/>".repeat(10_000);
         assert_eq!(scan(redeclared.as_bytes()), Ok(()));
+    }
+
+    #[test]
+    fn what_roxmltree_reserves_for_is_bounded_wherever_it_appears() {
+        let comment = format!("<svg><!--{}--></svg>", "<".repeat(MAX_SVG_NODES as usize));
+        assert_eq!(scan(comment.as_bytes()), Err(SvgRefusal::DocumentTooLarge));
+        let text = format!(
+            "<svg><desc>{}</desc></svg>",
+            "=".repeat(MAX_SVG_ATTRIBUTES + 1)
+        );
+        assert_eq!(scan(text.as_bytes()), Err(SvgRefusal::DocumentTooLarge));
     }
 
     #[test]

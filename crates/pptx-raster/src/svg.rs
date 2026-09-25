@@ -60,9 +60,11 @@ pub const MAX_SVG_BYTES: usize = 1 << 22;
 /// expanded. The parsers, `usvg`'s converter and `resvg` recurse over it at
 /// about 3 KiB of stack a level: 64 levels fit a 512 KiB thread stack twice.
 pub const MAX_SVG_DEPTH: usize = 64;
-/// Nodes `roxmltree` will build: 10 MiB of the memory envelope.
+/// Nodes `roxmltree` will build, and the `<` it reserves one for before
+/// parsing: 10 MiB of the memory envelope.
 pub const MAX_SVG_NODES: u32 = 1 << 17;
-/// Attributes across the markup: 10 MiB of the memory envelope.
+/// Attributes across the markup, and the `=` `roxmltree` reserves one for:
+/// 10 MiB of the memory envelope.
 pub const MAX_SVG_ATTRIBUTES: usize = 1 << 17;
 /// Attributes on one element. `roxmltree` compares each with every earlier
 /// one, so the markup costs at most 64 comparisons an attribute.
@@ -155,8 +157,9 @@ const _: () = assert!(
 pub enum SvgRefusal {
     /// Not UTF-8, or the root element is not `svg`.
     NotSvg,
-    /// Past [`MAX_SVG_BYTES`], or markup past [`MAX_SVG_ELEMENT_ATTRIBUTES`],
-    /// [`MAX_SVG_ATTRIBUTES`] or [`MAX_SVG_NAMESPACES`].
+    /// Past [`MAX_SVG_BYTES`], or markup past [`MAX_SVG_NODES`],
+    /// [`MAX_SVG_ELEMENT_ATTRIBUTES`], [`MAX_SVG_ATTRIBUTES`] or
+    /// [`MAX_SVG_NAMESPACES`].
     DocumentTooLarge,
     /// Carries a `<!DOCTYPE>`, so it may declare entities.
     DoctypeDeclared,
