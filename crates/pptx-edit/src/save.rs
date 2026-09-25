@@ -401,8 +401,10 @@ fn shape_patch(
     if moved || resized {
         patch.offset = moved.then_some((shape.x, shape.y));
         patch.extent = resized.then_some((shape.width, shape.height));
+        patch.materializes = base.inherited.is_some();
         patch.inherited = source_inherited.then(|| {
             base.inherited
+                .filter(|_| !materialized)
                 .map(|transform| InheritedTransform {
                     x: transform.x,
                     y: transform.y,
