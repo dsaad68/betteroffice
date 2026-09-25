@@ -479,7 +479,9 @@ impl SlideRenderer {
             })
             .map(|(_, face)| self.with_requested_metrics(face, &requested, bold, italic))
             .ok_or(RenderError::NoFont)?;
-        substitutions.record(family, &requested, &face.family);
+        if normalize_family(&face.family) != requested {
+            substitutions.record(family, &requested, &face.family);
+        }
         Ok(face)
     }
 
@@ -9760,6 +9762,30 @@ mod tests {
             .resolve_face("Missing", false, false, &mut log)
             .unwrap();
         assert_eq!(log.entries.len(), 1);
+    }
+
+    #[test]
+    fn only_a_different_drawn_family_is_reported() {
+        let mut renderer = SlideRenderer::new();
+        renderer.register_font("Arial", true, false, FONT).unwrap();
+        let mut log = SubstitutionLog::default();
+        let face = renderer
+            .resolve_face("Arial", false, false, &mut log)
+            .unwrap();
+        assert_eq!(face.family, "Arial");
+        assert!(log.entries.is_empty());
+
+        let mut renderer = SlideRenderer::new();
+        renderer
+            .register_font("Liberation Sans", false, false, FONT)
+            .unwrap();
+        renderer.register_font("Arial", true, false, FONT).unwrap();
+        renderer
+            .resolve_face("Arial", false, false, &mut log)
+            .unwrap();
+        assert_eq!(log.entries.len(), 1);
+        assert_eq!(log.entries[0].requested_family, "Arial");
+        assert_eq!(log.entries[0].selected_family, "Liberation Sans");
     }
 
     #[test]
