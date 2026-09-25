@@ -193,6 +193,22 @@ describe('presentation image blobs', () => {
     );
   });
 
+  test('reads past comments and instructions inside a DOCTYPE internal subset', async () => {
+    for (const prologue of [
+      '<!DOCTYPE svg [ <!-- ]> --> ]>',
+      "<!DOCTYPE svg [ <!-- it's ]> not the end --> <!ENTITY a \"]>\"> ]>",
+      '<!DOCTYPE svg [ <?note ]> ?> ]>',
+    ]) {
+      const svg = `${prologue}\n<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 16"/>`;
+      const blob = presentationImageBlob(new TextEncoder().encode(svg));
+      expect(await blob.text()).toBe(
+        `${prologue}\n<svg width="24" height="16" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 16"/>`
+      );
+    }
+    const unterminated = '<!DOCTYPE svg [ <!-- ]> <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 16"/>';
+    expect(await presentationImageBlob(new TextEncoder().encode(unterminated)).text()).toBe(unterminated);
+  });
+
   test('leaves a document alone when no root element settles what it is', async () => {
     for (const svg of [
       '<!-- unterminated <svg viewBox="0 0 24 16"/>',

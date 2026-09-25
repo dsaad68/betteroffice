@@ -96,7 +96,8 @@ function past(at: number, length: number): number {
 
 /**
  * The `>` closing a markup declaration or start tag, past `>` inside a quoted
- * value or a DOCTYPE's internal subset.
+ * value or a DOCTYPE's internal subset, and past the comments and processing
+ * instructions that subset may hold.
  */
 function declarationEnd(text: string, from: number): number {
   let quote = '';
@@ -105,6 +106,12 @@ function declarationEnd(text: string, from: number): number {
     const character = text[index];
     if (quote) {
       if (character === quote) quote = '';
+    } else if (subset && text.startsWith('<!--', index)) {
+      index = past(text.indexOf('-->', index + 4), 2);
+      if (index < 0) return -1;
+    } else if (subset && text.startsWith('<?', index)) {
+      index = past(text.indexOf('?>', index + 2), 1);
+      if (index < 0) return -1;
     } else if (character === '"' || character === "'") quote = character;
     else if (character === '[') subset = true;
     else if (character === ']') subset = false;
