@@ -1812,7 +1812,7 @@ fn wrap_legend_label<S: PlotSink + ?Sized>(
 ) -> Vec<String> {
     let mut remaining: String = label.chars().take(MAX_LABEL_CHARS).collect();
     let mut lines = Vec::new();
-    while legend_text_width(&remaining, style, ops) > width {
+    while !remaining.is_empty() && legend_text_width(&remaining, style, ops) > width {
         let mut end = 0;
         for (index, ch) in remaining.char_indices() {
             let next = index + ch.len_utf8();
@@ -6719,6 +6719,20 @@ mod tests {
             widest(true),
             widest(false)
         );
+    }
+
+    #[test]
+    fn a_band_with_no_room_still_finishes_its_wrap() {
+        let mut ops = Vec::new();
+        let mut emitter = Emitter {
+            sink: &mut ops,
+            remaining: MAX_PLOT_OPS,
+        };
+        let style = PlotTextStyle::default().resolve(CHART_LABEL_SIZE_PX, 400);
+        // A negative band leaves the remainder empty and still wider than the
+        // band, the state the wrap used to spin in.
+        let lines = wrap_legend_label("North", -1.0, &style, &mut emitter);
+        assert_eq!(lines.concat(), "North");
     }
 
     #[test]
