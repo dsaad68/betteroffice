@@ -1,5 +1,9 @@
 //! Sandboxed SVG rasterisation into the straight-alpha RGBA buffer the other
-//! image formats produce.
+//! image formats produce. The document is audited before `usvg` builds
+//! anything, so what it expands into is bounded by construction.
+
+mod audit;
+mod style;
 
 use std::panic::{AssertUnwindSafe, catch_unwind};
 
@@ -8,12 +12,24 @@ use tiny_skia::{IntSize, Pixmap, PremultipliedColorU8, Transform};
 
 /// One SVG document's source bytes.
 pub const MAX_SVG_BYTES: usize = 4_194_304;
-/// Elements one SVG document may nest. Both the XML parser and `usvg`'s
-/// converter recurse over nesting, so past this a document is a stack overflow
-/// rather than an error.
+/// Elements one SVG document may nest, in its markup or once its references are
+/// expanded. The parsers, `usvg`'s converter and `resvg` all recurse over it.
 pub const MAX_SVG_DEPTH: usize = 64;
 /// Nodes the XML parser will materialise for one document.
 pub const MAX_SVG_NODES: u32 = 1_048_576;
+/// Elements a document expands into once every `<use>`, `clip-path` and paint
+/// reference instantiates its target, and nodes in the tree `usvg` builds.
+pub const MAX_SVG_EXPANDED_NODES: u64 = 100_000;
+/// Markup bytes that expansion hands `usvg`, which re-reads a target's path
+/// data and embedded payloads once per instance.
+pub const MAX_SVG_EXPANDED_BYTES: u64 = 8_388_608;
+/// Stops one gradient may carry. `usvg` drops equal offsets by shifting the
+/// list, quadratic in its length, and `tiny-skia` tests every stop per pixel.
+pub const MAX_SVG_GRADIENT_STOPS: usize = 256;
+/// `<style>` elements plus the rules they declare.
+pub const MAX_SVG_STYLE_RULES: usize = 1_024;
+/// Selector tests and declarations `usvg` applies across the expanded document.
+pub const MAX_SVG_STYLE_WORK: u64 = 16_777_216;
 /// One rasterised SVG's longest side.
 pub const MAX_SVG_RASTER_DIM: u32 = 8_192;
 /// How far above its intrinsic size an SVG rasterises, so a picture frame
@@ -30,7 +46,7 @@ pub enum SvgRefusal {
     DocumentTooLarge,
     /// Carries a `<!DOCTYPE>`, so it may declare entities.
     DoctypeDeclared,
-    /// Past [`MAX_SVG_DEPTH`].
+    /// Past [`MAX_SVG_DEPTH`], in the markup or once references are expanded.
     TooDeeplyNested,
     /// References something outside itself: a network or filesystem href, or a
     /// `url()` that is not a same-document fragment.
@@ -39,6 +55,18 @@ pub enum SvgRefusal {
     Unparsable,
     /// Rasterises past [`MAX_SVG_RASTER_DIM`].
     RasterTooLarge,
+    /// An element outside the drawing allowlist, or a reference into content
+    /// the audit skips.
+    UnsupportedElement,
+    /// A stylesheet past [`MAX_SVG_STYLE_RULES`] or beyond plain type, class and
+    /// id rules, or a `filter` in any form.
+    UnsupportedStyle,
+    /// A reference that leads back to itself.
+    ReferenceCycle,
+    /// Past [`MAX_SVG_EXPANDED_NODES`], [`MAX_SVG_EXPANDED_BYTES`] or
+    /// [`MAX_SVG_STYLE_WORK`] once references are expanded, or a gradient past
+    /// [`MAX_SVG_GRADIENT_STOPS`].
+    ExpansionTooLarge,
     /// `usvg` or `resvg` panicked.
     Panicked,
 }
@@ -59,8 +87,8 @@ pub fn looks_like_svg(bytes: &[u8]) -> bool {
         && head.windows(4).any(|window| window == b"<svg")
 }
 
-/// Parses under the sandbox: no DTD, no external reference, bounded document,
-/// nesting and output raster.
+/// Parses under the sandbox: no DTD, no external reference, an allowlisted
+/// document whose expansion is bounded, and a bounded output raster.
 pub fn parse(bytes: &[u8]) -> Result<SvgImage, SvgRefusal> {
     if bytes.len() > MAX_SVG_BYTES {
         return Err(SvgRefusal::DocumentTooLarge);
@@ -79,11 +107,10 @@ pub fn parse(bytes: &[u8]) -> Result<SvgImage, SvgRefusal> {
         usvg::roxmltree::Error::DtdDetected => SvgRefusal::DoctypeDeclared,
         _ => SvgRefusal::Unparsable,
     })?;
-    let root = document.root_element();
-    if root.tag_name().name() != "svg" {
+    if document.root_element().tag_name().name() != "svg" {
         return Err(SvgRefusal::NotSvg);
     }
-    audit_references(root)?;
+    audit::audit(&document)?;
     let tree = guarded(|| usvg::Tree::from_xmltree(&document, &sandbox()))?
         .map_err(|_| SvgRefusal::Unparsable)?;
     let size = raster_size(tree.size())?;
@@ -134,6 +161,63 @@ fn sandbox() -> usvg::Options<'static> {
 /// hook is left alone, so the panic is still reported the usual way.
 fn guarded<T>(step: impl FnOnce() -> T) -> Result<T, SvgRefusal> {
     catch_unwind(AssertUnwindSafe(step)).map_err(|_| SvgRefusal::Panicked)
+}
+
+/// The raster an intrinsic size renders into, supersampled where the bound
+/// leaves room.
+fn raster_size(size: usvg::Size) -> Result<IntSize, SvgRefusal> {
+    let width = size.width();
+    let height = size.height();
+    if !width.is_finite() || !height.is_finite() || width <= 0.0 || height <= 0.0 {
+        return Err(SvgRefusal::Unparsable);
+    }
+    let limit = MAX_SVG_RASTER_DIM as f32;
+    let (width, height) = (width.ceil().max(1.0), height.ceil().max(1.0));
+    if width > limit || height > limit {
+        return Err(SvgRefusal::RasterTooLarge);
+    }
+    let factor = (1..=SVG_SUPERSAMPLE)
+        .rev()
+        .find(|factor| width * *factor as f32 <= limit && height * *factor as f32 <= limit)
+        .unwrap_or(1);
+    IntSize::from_wh(width as u32 * factor, height as u32 * factor).ok_or(SvgRefusal::Unparsable)
+}
+
+/// Whether `haystack` contains `needle`, ASCII case folded.
+fn contains_ignore_case(haystack: &str, needle: &str) -> bool {
+    haystack
+        .as_bytes()
+        .windows(needle.len())
+        .any(|window| window.eq_ignore_ascii_case(needle.as_bytes()))
+}
+
+/// Collects the target of every `url(` in `value`, in any case, refusing one
+/// that is not a fragment of this document. Targets are read the way `svgtypes`
+/// reads a `FuncIRI`, so every reference `usvg` resolves is among them.
+fn local_references<'a>(value: &'a str, targets: &mut Vec<&'a str>) -> Result<(), SvgRefusal> {
+    let space = |c: char| c.is_ascii_whitespace();
+    let mut rest = value;
+    while let Some(at) = rest
+        .as_bytes()
+        .windows(4)
+        .position(|window| window.eq_ignore_ascii_case(b"url("))
+    {
+        rest = rest[at + 4..].trim_start_matches(space);
+        let quote = rest.chars().next().filter(|c| matches!(c, '"' | '\''));
+        if quote.is_some() {
+            rest = rest[1..].trim_start_matches(space);
+        }
+        let target = rest
+            .strip_prefix('#')
+            .ok_or(SvgRefusal::ExternalReference)?;
+        let end = match quote {
+            Some(quote) => target.find(quote),
+            None => target.find([' ', ')']),
+        };
+        targets.push(target[..end.unwrap_or(target.len())].trim_end());
+        rest = target;
+    }
+    Ok(())
 }
 
 /// Element nesting, bounded before any parser sees the document. Runs on the
@@ -195,82 +279,15 @@ fn tag_end(bytes: &[u8], from: usize) -> Result<(usize, bool), SvgRefusal> {
     Err(SvgRefusal::Unparsable)
 }
 
-/// Walks the element tree iteratively, so auditing a hostile document cannot
-/// itself overflow the stack.
-fn audit_references(root: usvg::roxmltree::Node<'_, '_>) -> Result<(), SvgRefusal> {
-    let mut node = root;
-    loop {
-        for attribute in node.attributes() {
-            if !reference_is_local(attribute.name(), attribute.value()) {
-                return Err(SvgRefusal::ExternalReference);
-            }
-        }
-        if let Some(child) = node.first_element_child() {
-            node = child;
-            continue;
-        }
-        loop {
-            if node.id() == root.id() {
-                return Ok(());
-            }
-            if let Some(sibling) = node.next_sibling_element() {
-                node = sibling;
-                break;
-            }
-            let Some(parent) = node.parent_element() else {
-                return Ok(());
-            };
-            node = parent;
-        }
-    }
-}
-
-/// An `href` may only name a fragment of this document, and a `url()` anywhere
-/// in a value may only do the same.
-fn reference_is_local(name: &str, value: &str) -> bool {
-    if name == "href" && !value.starts_with('#') {
-        return false;
-    }
-    let mut rest = value;
-    while let Some(open) = rest.find("url(") {
-        rest = &rest[open + 4..];
-        let target = rest.trim_start().trim_start_matches(['"', '\'']);
-        if !target.starts_with('#') {
-            return false;
-        }
-    }
-    true
-}
-
-/// The raster an intrinsic size renders into, supersampled where the bound
-/// leaves room.
-fn raster_size(size: usvg::Size) -> Result<IntSize, SvgRefusal> {
-    let width = size.width();
-    let height = size.height();
-    if !width.is_finite() || !height.is_finite() || width <= 0.0 || height <= 0.0 {
-        return Err(SvgRefusal::Unparsable);
-    }
-    let limit = MAX_SVG_RASTER_DIM as f32;
-    let (width, height) = (width.ceil().max(1.0), height.ceil().max(1.0));
-    if width > limit || height > limit {
-        return Err(SvgRefusal::RasterTooLarge);
-    }
-    let factor = (1..=SVG_SUPERSAMPLE)
-        .rev()
-        .find(|factor| width * *factor as f32 <= limit && height * *factor as f32 <= limit)
-        .unwrap_or(1);
-    IntSize::from_wh(width as u32 * factor, height as u32 * factor).ok_or(SvgRefusal::Unparsable)
-}
-
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
 
     fn refusal(bytes: &[u8]) -> Option<SvgRefusal> {
         parse(bytes).err()
     }
 
-    fn document(body: &str) -> String {
+    pub(crate) fn document(body: &str) -> String {
         format!(r##"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 96 96">{body}</svg>"##)
     }
 
@@ -355,10 +372,13 @@ mod tests {
     #[test]
     fn a_reference_outside_the_document_is_refused() {
         for body in [
-            r##"<image href="https://example.invalid/pixel.png" width="96" height="96"/>"##,
-            r##"<image xmlns:xlink="http://www.w3.org/1999/xlink" xlink:href="../../secret.png" width="96" height="96"/>"##,
+            r##"<use href="https://example.invalid/sprite.svg#icon"/>"##,
+            r##"<linearGradient xmlns:xlink="http://www.w3.org/1999/xlink" id="g" xlink:href="../../secret.svg#g"/>"##,
             r##"<rect width="96" height="96" fill="url(https://example.invalid/paint.svg#g)"/>"##,
             r##"<rect width="96" height="96" style="fill:url('/etc/paint.svg#g')"/>"##,
+            r##"<rect width="96" height="96" fill="URL(http://example.invalid/paint.svg#g)"/>"##,
+            r##"<rect width="96" height="96" style="clip-path:Url( data:image/svg+xml,x)"/>"##,
+            r##"<style>rect{fill:uRl(https://example.invalid/paint.svg#g)}</style><rect width="96" height="96"/>"##,
         ] {
             assert_eq!(
                 refusal(document(body).as_bytes()),
@@ -388,6 +408,10 @@ mod tests {
         assert_eq!(refusal(b"<svg><g></svg>"), Some(SvgRefusal::Unparsable));
         assert_eq!(refusal(b"<html><svg/></html>"), Some(SvgRefusal::NotSvg));
         assert_eq!(refusal(&[0xff, 0xfe, 0x3c, 0x73]), Some(SvgRefusal::NotSvg));
+        assert_eq!(
+            refusal(br#"<svg xmlns="urn:not-svg" viewBox="0 0 4 4"/>"#),
+            Some(SvgRefusal::NotSvg)
+        );
     }
 
     #[test]
@@ -401,22 +425,259 @@ mod tests {
         assert!(!looks_like_svg(b""));
     }
 
+    pub(crate) fn marker_chain(vertices: usize, levels: usize) -> String {
+        let mut d = String::from("M0 0");
+        for index in 1..vertices {
+            d.push_str(&format!(" L{} {}", index % 10, index / 10));
+        }
+        let mut defs = String::from(
+            r##"<marker id="m0" markerWidth="1" markerHeight="1" overflow="visible"><rect width="1" height="1" fill="#f00"/></marker>"##,
+        );
+        for level in 1..=levels {
+            defs.push_str(&format!(
+                r##"<marker id="m{level}" markerWidth="1" markerHeight="1" overflow="visible" markerUnits="userSpaceOnUse"><path d="{d}" fill="none" stroke="#000" marker-mid="url(#m{})"/></marker>"##,
+                level - 1
+            ));
+        }
+        document(&format!(
+            r##"<defs>{defs}</defs><path d="{d}" fill="none" stroke="#000" marker-mid="url(#m{levels})"/>"##
+        ))
+    }
+
+    #[test]
+    fn a_marker_chain_is_refused_before_usvg_multiplies_it() {
+        assert_eq!(
+            refusal(marker_chain(6, 12).as_bytes()),
+            Some(SvgRefusal::UnsupportedElement)
+        );
+    }
+
+    #[test]
+    fn a_marker_sized_to_overflow_is_refused_instead_of_panicking() {
+        let source = concat!(
+            r##"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 10 10">"##,
+            r##"<marker id="m" markerWidth="1e30" markerHeight="1e30" viewBox="0 0 1 1"><rect width="1" height="1"/></marker>"##,
+            r##"<path d="M0 0L5 5" stroke="#000" stroke-width="1e30" marker-end="url(#m)"/></svg>"##
+        );
+        assert_eq!(
+            refusal(source.as_bytes()),
+            Some(SvgRefusal::UnsupportedElement)
+        );
+    }
+
+    #[test]
+    fn elements_outside_the_allowlist_are_refused() {
+        for body in [
+            r##"<filter id="f"><feGaussianBlur stdDeviation="9"/></filter>"##,
+            r##"<mask id="m"><rect width="9" height="9"/></mask>"##,
+            r##"<pattern id="p" width="1" height="1"><rect width="1" height="1"/></pattern>"##,
+            r##"<foreignObject width="9" height="9"/>"##,
+            r##"<script>alert(1)</script>"##,
+            r##"<switch><rect width="9" height="9"/></switch>"##,
+            r##"<text><textPath href="#p">x</textPath></text>"##,
+            r##"<rect width="9" height="9"><animate attributeName="x" to="9"/></rect>"##,
+            r##"<desc><marker id="m"/></desc>"##,
+        ] {
+            assert_eq!(
+                refusal(document(body).as_bytes()),
+                Some(SvgRefusal::UnsupportedElement),
+                "{body}"
+            );
+        }
+    }
+
+    #[test]
+    fn metadata_and_foreign_markup_are_skipped_but_never_instantiated() {
+        let skipped = concat!(
+            r##"<metadata><rdf:RDF xmlns:rdf="urn:rdf"><filter id="f"/></rdf:RDF><marker id="m"/></metadata>"##,
+            r##"<sodipodi:namedview xmlns:sodipodi="urn:sodipodi" id="base"><marker/></sodipodi:namedview>"##,
+            r##"<rect width="96" height="96" fill="#00f"/>"##
+        );
+        assert!(parse(document(skipped).as_bytes()).is_ok());
+        for body in [
+            r##"<metadata><g id="x"><rect width="9" height="9"/></g></metadata><use href="#x"/>"##,
+            r##"<x:y xmlns:x="urn:x"><svg:g xmlns:svg="http://www.w3.org/2000/svg" id="x"/></x:y><use href="#x"/>"##,
+        ] {
+            assert_eq!(
+                refusal(document(body).as_bytes()),
+                Some(SvgRefusal::UnsupportedElement),
+                "{body}"
+            );
+        }
+    }
+
+    pub(crate) fn use_fan_out(levels: usize, uses: usize) -> String {
+        let mut defs = String::from(r##"<rect id="l0" width="1" height="1" fill="#f00"/>"##);
+        for level in 1..=levels {
+            let copies = format!(r##"<use href="#l{}"/>"##, level - 1).repeat(uses);
+            defs.push_str(&format!(r##"<g id="l{level}">{copies}</g>"##));
+        }
+        document(&format!(r##"<defs>{defs}</defs><use href="#l{levels}"/>"##))
+    }
+
+    #[test]
+    fn an_exponential_use_fan_out_is_refused_before_it_expands() {
+        assert_eq!(
+            refusal(use_fan_out(10, 10).as_bytes()),
+            Some(SvgRefusal::ExpansionTooLarge)
+        );
+        assert!(parse(use_fan_out(2, 10).as_bytes()).is_ok());
+    }
+
+    pub(crate) fn use_chain(hops: usize) -> String {
+        let mut defs = String::from(r##"<g id="g0"><rect width="9" height="9" fill="#f00"/></g>"##);
+        for hop in 1..=hops {
+            defs.push_str(&format!(
+                r##"<g id="g{hop}"><use href="#g{}"/></g>"##,
+                hop - 1
+            ));
+        }
+        document(&format!(r##"<defs>{defs}</defs><use href="#g{hops}"/>"##))
+    }
+
+    #[test]
+    fn a_use_chain_past_the_depth_bound_is_refused() {
+        assert_eq!(
+            refusal(use_chain(MAX_SVG_DEPTH).as_bytes()),
+            Some(SvgRefusal::TooDeeplyNested)
+        );
+        assert_eq!(
+            refusal(use_chain(256).as_bytes()),
+            Some(SvgRefusal::TooDeeplyNested)
+        );
+        assert!(parse(use_chain(8).as_bytes()).is_ok());
+    }
+
+    #[test]
+    fn a_reference_cycle_is_refused() {
+        for body in [
+            r##"<g id="a"><use href="#b"/></g><g id="b"><use href="#a"/></g>"##,
+            r##"<g id="a"><rect width="9" height="9"/><use href="#a"/></g>"##,
+            r##"<linearGradient id="a" href="#b"/><linearGradient id="b" href="#c"/><linearGradient id="c" href="#b"/><rect width="9" height="9" fill="url(#a)"/>"##,
+            r##"<clipPath id="c"><rect width="9" height="9" clip-path="url(#c)"/></clipPath>"##,
+        ] {
+            assert_eq!(
+                refusal(document(body).as_bytes()),
+                Some(SvgRefusal::ReferenceCycle),
+                "{body}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_clip_path_chain_counts_every_instance() {
+        let mut defs = String::from(
+            r##"<clipPath id="c0" clipPathUnits="objectBoundingBox"><rect width="1" height="1"/></clipPath>"##,
+        );
+        for level in 1..=8 {
+            let children = format!(
+                r##"<rect width="1" height="1" clip-path="url(#c{})"/>"##,
+                level - 1
+            )
+            .repeat(10);
+            defs.push_str(&format!(
+                r##"<clipPath id="c{level}" clipPathUnits="objectBoundingBox">{children}</clipPath>"##
+            ));
+        }
+        let source = document(&format!(
+            r##"<defs>{defs}</defs><rect width="96" height="96" clip-path="url(#c8)"/>"##
+        ));
+        assert_eq!(
+            refusal(source.as_bytes()),
+            Some(SvgRefusal::ExpansionTooLarge)
+        );
+    }
+
+    #[test]
+    fn path_data_reread_per_use_counts_against_the_expansion() {
+        let d = "M0 0L1 1".repeat(20_000);
+        let uses = r##"<use href="#p"/>"##.repeat(64);
+        let source = document(&format!(
+            r##"<defs><path id="p" d="{d}" stroke="#000"/></defs>{uses}"##
+        ));
+        assert!(source.len() < MAX_SVG_BYTES);
+        assert_eq!(
+            refusal(source.as_bytes()),
+            Some(SvgRefusal::ExpansionTooLarge)
+        );
+    }
+
+    #[test]
+    fn a_stylesheet_is_held_to_plain_rules_and_a_matching_budget() {
+        let deep = format!(
+            "<style>.x {} {{fill:red}}</style>{}<rect width=\"9\" height=\"9\"/>{}",
+            "g ".repeat(32),
+            "<g>".repeat(60),
+            "</g>".repeat(60)
+        );
+        assert_eq!(
+            refusal(document(&deep).as_bytes()),
+            Some(SvgRefusal::UnsupportedStyle)
+        );
+        let rules: String = (0..1_000)
+            .map(|index| format!(".c{index}{{fill:red}}"))
+            .collect();
+        let rects = r##"<rect width="9" height="9"/>"##.repeat(20_000);
+        let wide = document(&format!("<style>{rules}</style>{rects}"));
+        assert_eq!(
+            refusal(wide.as_bytes()),
+            Some(SvgRefusal::ExpansionTooLarge)
+        );
+        let many: String = (0..MAX_SVG_STYLE_RULES)
+            .map(|index| format!(".c{index}{{fill:red}}"))
+            .collect();
+        assert_eq!(
+            refusal(document(&format!("<style>{many}</style>")).as_bytes()),
+            Some(SvgRefusal::UnsupportedStyle)
+        );
+    }
+
+    #[test]
+    fn a_filter_in_any_form_is_refused() {
+        for body in [
+            r##"<rect width="9" height="9" filter="blur(4)"/>"##,
+            r##"<rect width="9" height="9" style="fill:red;filter:drop-shadow(1 1 1 red)"/>"##,
+            r##"<style>rect{filter:blur(4)}</style><rect width="9" height="9"/>"##,
+        ] {
+            assert_eq!(
+                refusal(document(body).as_bytes()),
+                Some(SvgRefusal::UnsupportedStyle),
+                "{body}"
+            );
+        }
+        assert!(
+            parse(document(r##"<rect width="9" height="9" filter="none"/>"##).as_bytes()).is_ok()
+        );
+    }
+
+    fn gradient_fills(stops: usize, fills: usize) -> String {
+        let stops: String = (0..stops)
+            .map(|index| {
+                let offset = index as f32 / stops as f32;
+                format!(r##"<stop offset="{offset}" stop-color="#f00"/>"##)
+            })
+            .collect();
+        let fills = r##"<rect width="96" height="96" fill="url(#g)"/>"##.repeat(fills);
+        document(&format!(
+            r##"<linearGradient id="g">{stops}</linearGradient>{fills}"##
+        ))
+    }
+
+    #[test]
+    fn a_gradient_past_the_stop_bound_is_refused() {
+        assert_eq!(
+            refusal(gradient_fills(MAX_SVG_GRADIENT_STOPS + 1, 1).as_bytes()),
+            Some(SvgRefusal::ExpansionTooLarge)
+        );
+        assert!(parse(gradient_fills(MAX_SVG_GRADIENT_STOPS, 1).as_bytes()).is_ok());
+    }
+
     #[test]
     fn a_panicking_step_is_a_refusal() {
         assert_eq!(guarded(|| 7), Ok(7));
         assert_eq!(
             guarded(|| -> u8 { panic!("usvg fell over") }),
             Err(SvgRefusal::Panicked)
-        );
-        let overflowing_marker = concat!(
-            r##"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 10 10">"##,
-            r##"<marker id="m" markerWidth="1e30" markerHeight="1e30" viewBox="0 0 1 1"><rect width="1" height="1"/></marker>"##,
-            r##"<path d="M0 0L5 5" stroke="#000" stroke-width="1e30" marker-end="url(#m)"/></svg>"##
-        );
-        assert_eq!(
-            refusal(overflowing_marker.as_bytes()),
-            Some(SvgRefusal::Panicked),
-            "usvg's marker code unwraps a size this overflows"
         );
     }
 }

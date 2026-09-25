@@ -9,7 +9,11 @@ mod font;
 mod svg;
 
 pub use font::GlyphCache;
-pub use svg::{MAX_SVG_BYTES, MAX_SVG_DEPTH, MAX_SVG_NODES, MAX_SVG_RASTER_DIM, SvgRefusal};
+pub use svg::{
+    MAX_SVG_BYTES, MAX_SVG_DEPTH, MAX_SVG_EXPANDED_BYTES, MAX_SVG_EXPANDED_NODES,
+    MAX_SVG_GRADIENT_STOPS, MAX_SVG_NODES, MAX_SVG_RASTER_DIM, MAX_SVG_STYLE_RULES,
+    MAX_SVG_STYLE_WORK, SvgRefusal,
+};
 
 use std::collections::hash_map::DefaultHasher;
 use std::collections::{HashMap, VecDeque};
@@ -2741,9 +2745,9 @@ mod tests {
             "<g>".repeat(MAX_SVG_DEPTH + 1),
             "</g>".repeat(MAX_SVG_DEPTH + 1)
         );
-        let refused: [Vec<u8>; 5] = [
+        let refused: Vec<Vec<u8>> = vec![
             br##"<!DOCTYPE svg [<!ENTITY a SYSTEM "file:///etc/passwd">]><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 4 4"><desc>&a;</desc></svg>"##.to_vec(),
-            br##"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 4 4"><image href="https://example.invalid/p.png" width="4" height="4"/></svg>"##.to_vec(),
+            br##"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 4 4"><use href="https://example.invalid/p.svg#icon"/></svg>"##.to_vec(),
             deep.into_bytes(),
             br##"<svg xmlns="http://www.w3.org/2000/svg" width="100000" height="100000"><rect width="100000" height="100000" fill="#000"/></svg>"##.to_vec(),
             format!(
@@ -2751,6 +2755,12 @@ mod tests {
                 " ".repeat(MAX_SVG_BYTES)
             )
             .into_bytes(),
+            svg::tests::marker_chain(6, 12).into_bytes(),
+            br##"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 10 10"><marker id="m" markerWidth="1e30" markerHeight="1e30" viewBox="0 0 1 1"><rect width="1" height="1"/></marker><path d="M0 0L5 5" stroke="#000" stroke-width="1e30" marker-end="url(#m)"/></svg>"##.to_vec(),
+            svg::tests::use_fan_out(10, 10).into_bytes(),
+            svg::tests::use_chain(256).into_bytes(),
+            svg::tests::document(r##"<g id="a"><use href="#b"/></g><g id="b"><use href="#a"/></g>"##).into_bytes(),
+            svg::tests::document(r##"<rect width="96" height="96" fill="URL(http://example.invalid/p.svg#g)"/>"##).into_bytes(),
         ];
         for (index, bytes) in refused.iter().enumerate() {
             let images = AssetMap::from([("icon.svg", bytes.as_slice())]);
@@ -2762,6 +2772,70 @@ mod tests {
             .expect("render");
             assert_eq!(rendered.skipped_images, 1, "refused document {index}");
         }
+    }
+
+    fn render_strip(asset: &[u8]) -> (usize, Pixmap) {
+        let fonts = FontStore::new();
+        let images = AssetMap::from([("icon.svg", asset)]);
+        let rendered = render_slide(
+            &picture_on_a_strip("icon.svg", ImageCrop::default()),
+            &resources(&fonts, &images),
+            &RenderOptions {
+                background: Background::Transparent,
+                ..RenderOptions::default()
+            },
+        )
+        .expect("render");
+        (
+            rendered.skipped_images,
+            Pixmap::decode_png(&rendered.bytes).unwrap(),
+        )
+    }
+
+    #[test]
+    fn a_hyperlink_and_an_embedded_raster_leave_the_shapes_drawn() {
+        let source = concat!(
+            r##"<svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" viewBox="0 0 4 4">"##,
+            r##"<a xlink:href="https://example.invalid/"><rect width="2" height="4" fill="#ff0000"/></a>"##,
+            r##"<image x="2" width="2" height="4" preserveAspectRatio="none" "##,
+            r##"href="data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR4nGNgYPj/HwADAgH/5ncLrgAAAABJRU5ErkJggg=="/></svg>"##
+        );
+        let (skipped, strip) = render_strip(source.as_bytes());
+        assert_eq!(skipped, 0);
+        assert_eq!(
+            strip.pixel(150, 50).unwrap(),
+            ColorU8::from_rgba(255, 0, 0, 255).premultiply(),
+            "the linked rect draws"
+        );
+        assert_eq!(
+            strip.pixel(250, 50).unwrap().alpha(),
+            0,
+            "the embedded raster is dropped"
+        );
+    }
+
+    #[test]
+    fn an_office_icon_with_a_stylesheet_and_a_gradient_renders() {
+        let source = concat!(
+            r##"<svg viewBox="0 0 96 96" xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" id="Icons_Gear" overflow="hidden">"##,
+            "<style>\n.MsftOfcThm_Accent1_Fill_v2 {\n fill:#4472C4; \n}\n</style>",
+            r##"<defs><linearGradient x1="48" y1="0" x2="96" y2="0" gradientUnits="userSpaceOnUse" id="fill">"##,
+            r##"<stop offset="0" stop-color="#FF0000"/><stop offset="1" stop-color="#0000FF"/></linearGradient></defs>"##,
+            r##"<g id="Icons"><path d="M0 0H48V96H0Z" class="MsftOfcThm_Accent1_Fill_v2"/>"##,
+            r##"<path d="M48 0H96V96H48Z" fill="url(#fill)"/></g></svg>"##
+        );
+        let (skipped, strip) = render_strip(source.as_bytes());
+        assert_eq!(skipped, 0);
+        assert_eq!(
+            strip.pixel(150, 50).unwrap(),
+            ColorU8::from_rgba(0x44, 0x72, 0xc4, 255).premultiply(),
+            "the class rule fills the left half"
+        );
+        let blend = strip.pixel(250, 50).unwrap();
+        assert!(
+            blend.red() > 64 && blend.blue() > 64 && blend.green() < 16,
+            "the gradient spans the right half: {blend:?}"
+        );
     }
 
     #[test]
