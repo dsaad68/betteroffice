@@ -36,6 +36,8 @@ struct Rule<'a> {
 struct Block<'a> {
     len: u64,
     references: Vec<&'a str>,
+    /// Whether a declaration may paint with the context element's paint.
+    context: bool,
 }
 
 impl<'a> StyleSheet<'a> {
@@ -90,9 +92,14 @@ impl<'a> StyleSheet<'a> {
             .saturating_add(self.parts.saturating_mul(4 + 2 * attributes + values / 2))
     }
 
-    /// Calls `matched` with the block length and same-document references of
-    /// every rule that may apply to `node`: a superset of what `simplecss` matches.
-    pub(super) fn each_match(&self, node: Node<'_, '_>, mut matched: impl FnMut(u64, &[&'a str])) {
+    /// Calls `matched` with the block length, same-document references and
+    /// context paint of every rule that may apply to `node`: a superset of
+    /// what `simplecss` matches.
+    pub(super) fn each_match(
+        &self,
+        node: Node<'_, '_>,
+        mut matched: impl FnMut(u64, &[&'a str], bool),
+    ) {
         if self.rules.is_empty() {
             return;
         }
@@ -112,7 +119,7 @@ impl<'a> StyleSheet<'a> {
                 && rule.ids.iter().all(|name| id == Some(*name));
             if applies {
                 let block = &self.blocks[rule.block];
-                matched(block.len, &block.references);
+                matched(block.len, &block.references, block.context);
             }
         }
     }
@@ -136,6 +143,7 @@ impl<'a> StyleSheet<'a> {
             self.blocks.push(Block {
                 len: declarations.len() as u64,
                 references,
+                context: declarations.contains("context-"),
             });
             for selector in rest[..open].split(',') {
                 let rule = compound(

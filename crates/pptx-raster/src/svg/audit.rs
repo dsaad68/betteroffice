@@ -9,7 +9,7 @@ use resvg::usvg::roxmltree::{Document, Node};
 use super::style::StyleSheet;
 use super::{
     MAX_SVG_DEPTH, MAX_SVG_EXPANDED_BYTES, MAX_SVG_EXPANDED_NODES, MAX_SVG_GRADIENT_STOPS,
-    MAX_SVG_STYLE_WORK, SvgRefusal, reference,
+    MAX_SVG_PAINT_BYTES, MAX_SVG_PAINT_WORK, MAX_SVG_STYLE_WORK, SvgRefusal, reference,
 };
 
 const SVG_NS: &str = "http://www.w3.org/2000/svg";
@@ -46,6 +46,11 @@ const ALLOWED: [&str; 24] = [
     "tspan",
 ];
 
+/// Bytes `usvg` spends on one copy of a gradient, besides its stops.
+const PAINT_COPY_BYTES: u64 = 256;
+/// Bytes of one copied stop.
+const STOP_BYTES: u64 = 12;
+
 #[derive(Clone, Copy)]
 enum Slot {
     /// Inside `metadata` or a foreign namespace: `usvg` never builds it, so a
@@ -56,33 +61,87 @@ enum Slot {
 
 /// How `usvg` follows a reference, which decides what its target must be.
 #[derive(Clone, Copy, PartialEq, Eq)]
-pub(super) enum Link {
+enum Link {
     /// A `use` instantiates any element.
     Use,
     /// A `clip-path` converts a `clipPath`, and only that.
     Clip,
-    /// A `fill` or `stroke` converts a gradient, and only that.
-    Paint,
+    /// A `fill` converts a gradient, and only that.
+    Fill,
+    /// A `stroke`, likewise.
+    Stroke,
     /// A gradient's `href` reads the gradient it names for stops and
     /// attributes; the chain goes on only through gradients.
     Chain,
 }
 
+/// How an element takes part in painting.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Role {
+    /// Converted to a path that resolves its own fill and stroke.
+    Shape,
+    /// Converted with its children, which inherit its paint.
+    Group,
+    /// A group around the element it instantiates, which also hands its own
+    /// fill and stroke to any `context-fill` or `context-stroke` inside.
+    Use,
+    /// Never painted directly, so nothing inside inherits paint through it.
+    Inert,
+}
+
+/// One of an element's `fill` and `stroke`.
+#[derive(Clone, Copy, Default)]
+struct Paint {
+    /// Set on the element itself, so nothing inside inherits it from above.
+    set: bool,
+    /// Stops of the largest gradient it may name.
+    stops: u64,
+    /// Whether that gradient may be in `objectBoundingBox` units, which
+    /// `usvg` copies for every shape that paints with it.
+    per_shape: bool,
+}
+
 struct Element<'a> {
     node: Node<'a, 'a>,
+    role: Role,
     opaque: bool,
     children: Vec<usize>,
     links: Vec<(Link, &'a str)>,
     bytes: u64,
     style: u64,
+    paint: [Paint; 2],
+    /// Paints with the context element's paint, as `context-fill` does.
+    context: bool,
 }
 
+/// An element's instance as `usvg` expands it. Consumers are shapes that will
+/// resolve a paint above this element, in the order `[fill, stroke]`.
 #[derive(Clone, Copy, Default)]
 struct Expanded {
     nodes: u64,
     bytes: u64,
     style: u64,
     depth: u64,
+    /// Consumers inheriting the paint set above.
+    open: [u64; 2],
+    /// Consumers that copy that paint whatever its units: a context paint
+    /// `usvg` resolves against a `use`.
+    forced: [u64; 2],
+    /// Shapes waiting for the nearest `use` to hand them its paint.
+    context: u64,
+    /// Gradient copies, the stops they carry, and every gradient paint.
+    copies: u64,
+    stops: u64,
+    paints: u64,
+}
+
+/// An element's edges: the first `render` targets are the children and `use`
+/// instances whose paint it passes down, up to `expand` more are clip paths it
+/// instantiates, and the rest are gradients it reads through a chain.
+struct Edges {
+    targets: Vec<usize>,
+    render: usize,
+    expand: usize,
 }
 
 /// Refuses a document outside the sandbox before `usvg` converts it.
@@ -123,29 +182,36 @@ pub(super) fn audit(document: &Document<'_>) -> Result<(), SvgRefusal> {
             return Err(SvgRefusal::ExpansionTooLarge);
         }
         let index = elements.len();
-        let mut links = Vec::new();
-        let (bytes, style) = audit_attributes(node, &mut links)?;
-        elements.push(Element {
+        let mut element = Element {
             node,
+            role: role(name),
             opaque: name == "metadata",
             children: Vec::new(),
-            links,
-            bytes,
-            style,
-        });
+            links: Vec::new(),
+            bytes: 0,
+            style: 0,
+            paint: [Paint::default(); 2],
+            context: false,
+        };
+        audit_attributes(&mut element)?;
+        elements.push(element);
         if let Some(Slot::Element(parent)) = parent {
             elements[parent].children.push(index);
         }
         slots[node.id().get_usize()] = Some(Slot::Element(index));
     }
 
-    for element in &elements {
+    let mut stops = vec![0u64; elements.len()];
+    let mut gradients = 0u64;
+    for (index, element) in elements.iter().enumerate() {
         if is_gradient(element.node) {
-            let stops = element
+            gradients += 1;
+            stops[index] = element
                 .children
                 .iter()
-                .filter(|child| elements[**child].node.tag_name().name() == "stop");
-            if stops.count() > MAX_SVG_GRADIENT_STOPS {
+                .filter(|child| elements[**child].node.tag_name().name() == "stop")
+                .count() as u64;
+            if stops[index] > MAX_SVG_GRADIENT_STOPS as u64 {
                 return Err(SvgRefusal::ExpansionTooLarge);
             }
         }
@@ -166,17 +232,17 @@ pub(super) fn audit(document: &Document<'_>) -> Result<(), SvgRefusal> {
     for element in &mut elements {
         let mut overflow = false;
         let insert = declaration_work(element.node);
-        sheet.each_match(element.node, |declarations, references| {
+        sheet.each_match(element.node, |declarations, references, context| {
             element.style = element
                 .style
                 .saturating_add(declarations.saturating_mul(insert));
-            if element.links.len() + 2 * references.len() > room {
+            element.context |= context;
+            if element.links.len() + 3 * references.len() > room {
                 overflow = true;
                 return;
             }
             for &target in references {
-                element.links.push((Link::Clip, target));
-                element.links.push((Link::Paint, target));
+                css_links(&mut element.links, target);
             }
         });
         links += element.links.len();
@@ -185,30 +251,84 @@ pub(super) fn audit(document: &Document<'_>) -> Result<(), SvgRefusal> {
         }
     }
 
-    let mut edges = 0usize;
-    let mut adjacency = Vec::with_capacity(elements.len());
+    let mut total = 0usize;
+    let mut edges = Vec::with_capacity(elements.len());
+    let mut paints = Vec::with_capacity(elements.len());
     for element in &elements {
+        let resolve = |link: Link, targets: &mut Vec<usize>| {
+            resolve(&element.links, link, &ids, &slots, &elements, room, targets)
+        };
         let mut targets = element.children.clone();
-        for &(link, id) in &element.links {
-            for &node in ids.get(id).into_iter().flatten() {
-                let Some(Slot::Element(target)) = slots[node] else {
-                    return Err(SvgRefusal::UnsupportedElement);
-                };
-                if follows(link, elements[target].node) {
-                    targets.push(target);
-                }
-                if edges + targets.len() > room {
-                    return Err(SvgRefusal::ExpansionTooLarge);
-                }
-            }
-        }
-        edges += targets.len();
-        if edges > room {
+        resolve(Link::Use, &mut targets)?;
+        let render = targets.len();
+        resolve(Link::Clip, &mut targets)?;
+        let expand = targets.len();
+        resolve(Link::Chain, &mut targets)?;
+        let mut painted = Vec::new();
+        resolve(Link::Fill, &mut painted)?;
+        let fills = painted.len();
+        resolve(Link::Stroke, &mut painted)?;
+        total += targets.len() + painted.len();
+        if total > room {
             return Err(SvgRefusal::ExpansionTooLarge);
         }
-        adjacency.push(targets);
+        edges.push(Edges {
+            targets,
+            render,
+            expand,
+        });
+        paints.push((painted, fills));
     }
-    expand(&elements, &adjacency)
+
+    chain_stops(&edges, &mut stops)?;
+    let per_shape: Vec<bool> = elements
+        .iter()
+        .map(|element| is_gradient(element.node) && !user_units(element.node))
+        .collect();
+    for (element, (painted, fills)) in elements.iter_mut().zip(&paints) {
+        for (at, &target) in painted.iter().enumerate() {
+            let paint = &mut element.paint[usize::from(at >= *fills)];
+            paint.stops = paint.stops.max(stops[target]);
+            paint.per_shape |= per_shape[target];
+        }
+    }
+    expand(&elements, &edges, gradients)
+}
+
+/// Pushes the element every `link` of this kind reaches, as far as `usvg`
+/// follows it, refusing one that lands in content the audit skipped.
+fn resolve(
+    links: &[(Link, &str)],
+    link: Link,
+    ids: &HashMap<&str, Vec<usize>>,
+    slots: &[Option<Slot>],
+    elements: &[Element<'_>],
+    room: usize,
+    targets: &mut Vec<usize>,
+) -> Result<(), SvgRefusal> {
+    for &(_, id) in links.iter().filter(|(kind, _)| *kind == link) {
+        for &node in ids.get(id).into_iter().flatten() {
+            let Some(Slot::Element(target)) = slots[node] else {
+                return Err(SvgRefusal::UnsupportedElement);
+            };
+            if follows(link, elements[target].node) {
+                targets.push(target);
+            }
+            if targets.len() > room {
+                return Err(SvgRefusal::ExpansionTooLarge);
+            }
+        }
+    }
+    Ok(())
+}
+
+fn role(name: &str) -> Role {
+    match name {
+        "rect" | "circle" | "ellipse" | "line" | "polyline" | "polygon" | "path" => Role::Shape,
+        "svg" | "g" | "a" | "symbol" => Role::Group,
+        "use" => Role::Use,
+        _ => Role::Inert,
+    }
 }
 
 /// `usvg` reads an element as SVG when it has no namespace or the SVG one.
@@ -220,41 +340,67 @@ fn is_gradient(node: Node<'_, '_>) -> bool {
     matches!(node.tag_name().name(), "linearGradient" | "radialGradient")
 }
 
+/// Whether a gradient is in `userSpaceOnUse` units on its own, which `usvg`
+/// shares between the shapes it paints instead of copying it per shape.
+fn user_units(node: Node<'_, '_>) -> bool {
+    node.attributes()
+        .find(|attribute| {
+            attribute.name() == "gradientUnits"
+                && matches!(
+                    attribute.namespace(),
+                    None | Some(SVG_NS | XLINK_NS | XML_NS)
+                )
+        })
+        .is_some_and(|attribute| attribute.value() == "userSpaceOnUse")
+}
+
 /// Whether `usvg` goes on into `target` along a `link`: it converts only a
 /// `clipPath` for a clip and only a gradient for a paint or a gradient chain.
 fn follows(link: Link, target: Node<'_, '_>) -> bool {
     match link {
         Link::Use => true,
         Link::Clip => target.tag_name().name() == "clipPath",
-        Link::Paint | Link::Chain => is_gradient(target),
+        Link::Fill | Link::Stroke | Link::Chain => is_gradient(target),
     }
 }
 
-/// Markup bytes the element contributes and the style work a `style`
-/// attribute costs per instance, collecting the references `usvg` follows
-/// from it, each read by the parser `usvg` reads it with. An `href` is
-/// followed only on `use` and on gradients: on `a` and `image` it is inert,
-/// since nothing follows a link and both image resolvers return `None`.
-fn audit_attributes<'a>(
-    node: Node<'a, 'a>,
-    links: &mut Vec<(Link, &'a str)>,
-) -> Result<(u64, u64), SvgRefusal> {
+/// A target named in CSS text, whose declarations are not split out: it
+/// counts as a clip, a fill and a stroke alike.
+fn css_links<'a>(links: &mut Vec<(Link, &'a str)>, target: &'a str) {
+    links.push((Link::Clip, target));
+    links.push((Link::Fill, target));
+    links.push((Link::Stroke, target));
+}
+
+/// Collects the element's markup bytes, the style work a `style` attribute
+/// costs per instance, its paint, and the references `usvg` follows from it,
+/// each read by the parser `usvg` reads it with. An `href` is followed only on
+/// `use` and on gradients: on `a` and `image` it is inert, since nothing
+/// follows a link and both image resolvers return `None`.
+fn audit_attributes(element: &mut Element<'_>) -> Result<(), SvgRefusal> {
+    let node = element.node;
     let name = node.tag_name().name();
-    let mut bytes = name.len() as u64;
-    let mut style = 0u64;
+    element.bytes = name.len() as u64;
     let (mut href, mut xlink_href) = (None, None);
     for attribute in node.attributes() {
         let (local, value) = (attribute.name(), attribute.value());
-        bytes += (local.len() + value.len()) as u64 + 4;
+        element.bytes += (local.len() + value.len()) as u64 + 4;
         if local == "filter" && value != "none" {
             return Err(SvgRefusal::UnsupportedStyle);
         }
         if local == "style" {
             let applied = (value.len() as u64).saturating_mul(declaration_work(node));
-            style = style
+            element.style = element
+                .style
                 .saturating_add(super::style::rescans(value.len()))
                 .saturating_add(applied);
-            style_references(value, links)?;
+            super::style::screen(value)?;
+            element.context |= value.contains("context-");
+            let mut targets = Vec::new();
+            reference::css(value, &mut targets)?;
+            for target in targets {
+                css_links(&mut element.links, target);
+            }
             continue;
         }
         let namespace = attribute.namespace();
@@ -267,12 +413,18 @@ fn audit_attributes<'a>(
             "clip-path" if value == "inherit" => return Err(SvgRefusal::UnsupportedStyle),
             "clip-path" => {
                 if let Some(target) = reference::func_iri(value)? {
-                    links.push((Link::Clip, target));
+                    element.links.push((Link::Clip, target));
                 }
             }
             "fill" | "stroke" => {
+                let (link, slot) = match local {
+                    "fill" => (Link::Fill, 0),
+                    _ => (Link::Stroke, 1),
+                };
+                element.paint[slot].set |= value != "inherit";
+                element.context |= reference::context_paint(value);
                 if let Some(target) = reference::paint(value)? {
-                    links.push((Link::Paint, target));
+                    element.links.push((link, target));
                 }
             }
             "mask" | "marker-start" | "marker-mid" | "marker-end" => {
@@ -289,12 +441,12 @@ fn audit_attributes<'a>(
     if let (Some(link), Some(value)) = (link, href.or(xlink_href))
         && let Some(target) = reference::href(value)?
     {
-        links.push((link, target));
+        element.links.push((link, target));
     }
     for text in node.children().filter(|child| child.is_text()) {
-        bytes += text.text().map_or(0, str::len) as u64;
+        element.bytes += text.text().map_or(0, str::len) as u64;
     }
-    Ok((bytes, style))
+    Ok(())
 }
 
 /// Style work per byte of declarations applied to one instance of `node`:
@@ -304,18 +456,43 @@ fn declaration_work(node: Node<'_, '_>) -> u64 {
     32 + node.attributes().len() as u64
 }
 
-/// The references a `style` attribute can make. Its declarations are not
-/// split out, so every target counts as both a clip and a paint.
-fn style_references<'a>(
-    value: &'a str,
-    links: &mut Vec<(Link, &'a str)>,
-) -> Result<(), SvgRefusal> {
-    super::style::screen(value)?;
-    let mut targets = Vec::new();
-    reference::css(value, &mut targets)?;
-    for target in targets {
-        links.push((Link::Clip, target));
-        links.push((Link::Paint, target));
+/// Raises each gradient's stops to the most any gradient its `href` chain
+/// reaches carries, since `usvg` takes the stops of the first one with any.
+/// A chain that returns to itself is refused: `usvg` would walk it forever.
+fn chain_stops(edges: &[Edges], stops: &mut [u64]) -> Result<(), SvgRefusal> {
+    const NEW: u8 = 0;
+    const OPEN: u8 = 1;
+    const DONE: u8 = 2;
+    let mut state = vec![NEW; stops.len()];
+    for start in 0..stops.len() {
+        if state[start] != NEW || edges[start].targets.len() == edges[start].expand {
+            continue;
+        }
+        let mut stack = vec![(start, edges[start].expand)];
+        state[start] = OPEN;
+        while let Some((index, next)) = stack.last_mut() {
+            let index = *index;
+            if let Some(&target) = edges[index].targets.get(*next) {
+                *next += 1;
+                match state[target] {
+                    NEW => {
+                        state[target] = OPEN;
+                        stack.push((target, edges[target].expand));
+                    }
+                    OPEN => return Err(SvgRefusal::ReferenceCycle),
+                    _ => {}
+                }
+                continue;
+            }
+            let chained = edges[index].targets[edges[index].expand..]
+                .iter()
+                .map(|target| stops[*target])
+                .max()
+                .unwrap_or(0);
+            stops[index] = stops[index].max(chained);
+            state[index] = DONE;
+            stack.pop();
+        }
     }
     Ok(())
 }
@@ -323,8 +500,9 @@ fn style_references<'a>(
 /// Sizes the tree `usvg` would build, where every reference instantiates its
 /// target again: a memoised depth-first walk, iterative so a long chain cannot
 /// overflow the stack, that refuses a cycle of any length and stops at the
-/// first bound.
-fn expand(elements: &[Element<'_>], adjacency: &[Vec<usize>]) -> Result<(), SvgRefusal> {
+/// first bound. `gradients` is how many gradients the document declares, each
+/// converted once and collected alongside the copies.
+fn expand(elements: &[Element<'_>], edges: &[Edges], gradients: u64) -> Result<(), SvgRefusal> {
     const NEW: u8 = 0;
     const OPEN: u8 = 1;
     const DONE: u8 = 2;
@@ -334,7 +512,7 @@ fn expand(elements: &[Element<'_>], adjacency: &[Vec<usize>]) -> Result<(), SvgR
     state[0] = OPEN;
     while let Some((index, next)) = stack.last_mut() {
         let index = *index;
-        if let Some(&target) = adjacency[index].get(*next) {
+        if let Some(&target) = edges[index].targets.get(*next) {
             *next += 1;
             match state[target] {
                 NEW => {
@@ -346,24 +524,13 @@ fn expand(elements: &[Element<'_>], adjacency: &[Vec<usize>]) -> Result<(), SvgR
             }
             continue;
         }
-        let own = &elements[index];
-        let mut size = Expanded {
-            nodes: 1,
-            bytes: own.bytes,
-            style: own.style,
-            depth: 0,
-        };
-        for &target in &adjacency[index] {
-            let inner = sizes[target];
-            size.nodes = size.nodes.saturating_add(inner.nodes);
-            size.bytes = size.bytes.saturating_add(inner.bytes);
-            size.style = size.style.saturating_add(inner.style);
-            size.depth = size.depth.max(inner.depth);
-        }
-        size.depth += 1;
+        let size = finish(&elements[index], &edges[index], &sizes);
         if size.nodes > MAX_SVG_EXPANDED_NODES
             || size.bytes > MAX_SVG_EXPANDED_BYTES
             || size.style > MAX_SVG_STYLE_WORK
+            || size.stops.saturating_mul(STOP_BYTES) + size.copies.saturating_mul(PAINT_COPY_BYTES)
+                > MAX_SVG_PAINT_BYTES
+            || size.paints.saturating_mul(size.copies + gradients) / 4 > MAX_SVG_PAINT_WORK
         {
             return Err(SvgRefusal::ExpansionTooLarge);
         }
@@ -375,4 +542,80 @@ fn expand(elements: &[Element<'_>], adjacency: &[Vec<usize>]) -> Result<(), SvgR
         stack.pop();
     }
     Ok(())
+}
+
+/// One element's instance, from the instances of the elements it expands. A
+/// shape's fill and stroke resolve at the nearest element up its instance
+/// that sets them, and a gradient there is copied per shape when its units are
+/// the shape's box, or always when a `use` hands it down as context paint.
+fn finish(own: &Element<'_>, edges: &Edges, sizes: &[Expanded]) -> Expanded {
+    let mut size = Expanded {
+        nodes: 1,
+        bytes: own.bytes,
+        style: own.style,
+        ..Expanded::default()
+    };
+    for &target in &edges.targets[..edges.expand] {
+        let inner = &sizes[target];
+        size.nodes = size.nodes.saturating_add(inner.nodes);
+        size.bytes = size.bytes.saturating_add(inner.bytes);
+        size.style = size.style.saturating_add(inner.style);
+        size.depth = size.depth.max(inner.depth);
+        size.copies = size.copies.saturating_add(inner.copies);
+        size.stops = size.stops.saturating_add(inner.stops);
+        size.paints = size.paints.saturating_add(inner.paints);
+    }
+    size.depth += 1;
+    let mut open = [0u64; 2];
+    let mut forced = [0u64; 2];
+    let mut context = 0u64;
+    match own.role {
+        Role::Shape => open = [1, 1],
+        Role::Group | Role::Use => {
+            for &target in &edges.targets[..edges.render] {
+                let inner = &sizes[target];
+                for slot in 0..2 {
+                    open[slot] = open[slot].saturating_add(inner.open[slot]);
+                    forced[slot] = forced[slot].saturating_add(inner.forced[slot]);
+                }
+                context = context.saturating_add(inner.context);
+            }
+        }
+        Role::Inert => {}
+    }
+    if own.role == Role::Use {
+        for slot in &mut forced {
+            *slot = slot.saturating_add(context);
+        }
+        context = 0;
+    }
+    for (slot, paint) in own.paint.iter().enumerate() {
+        if paint.stops > 0 {
+            let copies = forced[slot].saturating_add(if paint.per_shape { open[slot] } else { 0 });
+            size.copies = size.copies.saturating_add(copies);
+            size.stops = size
+                .stops
+                .saturating_add(copies.saturating_mul(paint.stops));
+            size.paints = size
+                .paints
+                .saturating_add(open[slot].saturating_add(forced[slot]));
+        }
+    }
+    if own.context {
+        let waiting = open
+            .iter()
+            .chain(&forced)
+            .fold(0u64, |sum, count| sum.saturating_add(*count));
+        context = context.saturating_add(waiting);
+    }
+    for (slot, paint) in own.paint.iter().enumerate() {
+        if paint.set || own.context {
+            open[slot] = 0;
+            forced[slot] = 0;
+        }
+    }
+    size.open = open;
+    size.forced = forced;
+    size.context = context;
+    size
 }

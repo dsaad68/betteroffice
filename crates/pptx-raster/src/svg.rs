@@ -31,6 +31,14 @@ pub const MAX_SVG_EXPANDED_BYTES: u64 = 8_388_608;
 /// Stops one gradient may carry. `usvg` drops equal offsets by shifting the
 /// list, quadratic in its length, and `tiny-skia` tests every stop per pixel.
 pub const MAX_SVG_GRADIENT_STOPS: usize = 256;
+/// Bytes of the gradient copies `usvg` makes per shape: one for every shape
+/// that paints with a gradient in its own box's units or with a `use`'s
+/// context paint, each ~256 bytes plus 12 a stop.
+pub const MAX_SVG_PAINT_BYTES: u64 = 1 << 24;
+/// What `usvg` spends collecting distinct gradients, in units of about a
+/// nanosecond: it compares every gradient paint against every gradient
+/// collected so far, about a quarter nanosecond each.
+pub const MAX_SVG_PAINT_WORK: u64 = 1 << 26;
 /// `<style>` elements plus the rules they declare.
 pub const MAX_SVG_STYLE_RULES: usize = 1_024;
 /// Simple selectors (a type, `.class` or `#id`) one rule may compound.
@@ -870,6 +878,67 @@ pub(crate) mod tests {
             Some(SvgRefusal::ExpansionTooLarge)
         );
         assert!(parse(gradient_fills(MAX_SVG_GRADIENT_STOPS, 1).as_bytes()).is_ok());
+    }
+
+    fn inherited(gradient: &str, stops: usize, paint: &str, shapes: usize) -> String {
+        let stops: String = (0..stops)
+            .map(|index| {
+                let offset = index as f32 / stops as f32;
+                format!(r##"<stop offset="{offset}" stop-color="#f00"/>"##)
+            })
+            .collect();
+        document(&format!(
+            r##"<linearGradient id="g" {gradient}>{stops}</linearGradient><g {paint}="url(#g)">{}</g>"##,
+            r##"<rect width="1" height="1"/>"##.repeat(shapes)
+        ))
+    }
+
+    #[test]
+    fn an_inherited_gradient_is_charged_per_shape_that_paints_with_it() {
+        for paint in ["fill", "stroke"] {
+            let source = inherited("", MAX_SVG_GRADIENT_STOPS, paint, 90_000);
+            let started = std::time::Instant::now();
+            assert_eq!(
+                refusal(source.as_bytes()),
+                Some(SvgRefusal::ExpansionTooLarge),
+                "{paint}"
+            );
+            assert!(started.elapsed() < std::time::Duration::from_secs(5));
+            assert!(parse(inherited("", MAX_SVG_GRADIENT_STOPS, paint, 16).as_bytes()).is_ok());
+        }
+        let shared = inherited(r##"gradientUnits="userSpaceOnUse""##, 2, "fill", 20_000);
+        assert!(
+            parse(shared.as_bytes()).is_ok(),
+            "a gradient in user units is shared, not copied"
+        );
+        assert_eq!(
+            refusal(inherited("", 2, "fill", 20_000).as_bytes()),
+            Some(SvgRefusal::ExpansionTooLarge),
+            "every copy is compared against every other when usvg collects them"
+        );
+        assert!(parse(inherited("", 2, "fill", 2_000).as_bytes()).is_ok());
+    }
+
+    #[test]
+    fn a_context_paint_is_charged_per_use_that_hands_it_down() {
+        let copies = |uses: usize| {
+            let stops: String = (0..MAX_SVG_GRADIENT_STOPS)
+                .map(|index| format!(r##"<stop offset="{}" stop-color="#f00"/>"##, index))
+                .collect();
+            document(&format!(
+                concat!(
+                    r##"<linearGradient id="g" gradientUnits="userSpaceOnUse">{}</linearGradient>"##,
+                    r##"<defs><g id="r"><rect width="1" height="1" fill="context-fill"/></g></defs>{}"##
+                ),
+                stops,
+                r##"<use href="#r" fill="url(#g)"/>"##.repeat(uses)
+            ))
+        };
+        assert!(parse(copies(4).as_bytes()).is_ok());
+        assert_eq!(
+            refusal(copies(20_000).as_bytes()),
+            Some(SvgRefusal::ExpansionTooLarge)
+        );
     }
 
     #[test]
