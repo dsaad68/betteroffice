@@ -37,6 +37,10 @@ const HAIRLINE_DASH_BYTES: f64 = 48.0;
 /// Below this many edge pairs a path is charged every pair without sweeping
 /// its rows.
 const SWEEP_PAIRS: f64 = 1_048_576.0;
+/// How far, in device pixels, a stroke's outline may reach past its path:
+/// eight times the largest raster. `tiny-skia` rasterises in 16.16 fixed
+/// point, and an outline far past that overflows its coverage runs.
+const MAX_REACH: f64 = 65_536.0;
 
 pub(super) struct Cost {
     /// The output raster plus the deepest stack of layers and clip masks.
@@ -213,6 +217,9 @@ pub(super) fn measure(tree: &usvg::Tree, size: IntSize) -> Result<Cost, SvgRefus
                                     * (1.0 + 2.0 * period.map_or(0.0, |period| run / period))
                             };
                             let reach = reach(stroke, place);
+                            if reach.is_nan() || reach > MAX_REACH {
+                                return Err(SvgRefusal::RenderTooCostly);
+                            }
                             tally.work += SORT_WORK
                                 * sorting(path.data(), place, frame.surface, reach, edges);
                             segments * OUTLINE_BYTES + dashes * DASH_BYTES

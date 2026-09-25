@@ -788,6 +788,18 @@ pub(crate) mod tests {
     }
 
     #[test]
+    fn a_stroke_too_wide_for_the_rasteriser_is_refused_before_it_panics() {
+        let fuzzed = concat!(
+            r##"<svg><g d="e_2"><g id="e1-2"><path d="M .23.11.08  0L5 5" stroke="#000" "##,
+            r##"stroke-width="1e30" arke=""/></g></g></svg>"##
+        );
+        assert_eq!(
+            refusal(fuzzed.as_bytes()),
+            Some(SvgRefusal::RenderTooCostly)
+        );
+    }
+
+    #[test]
     fn a_clip_path_chain_counts_every_instance() {
         let mut defs = String::from(
             r##"<clipPath id="c0" clipPathUnits="objectBoundingBox"><rect width="1" height="1"/></clipPath>"##,
