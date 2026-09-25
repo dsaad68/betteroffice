@@ -1,7 +1,7 @@
 pub use pptx_edit::{
     CaretAnchor, CommentFlavor, CommentReceipt, CommentSnapshot, DeckSnapshot, EditCtx, EditError,
-    EditOrigin, ParagraphSnapshot, PresetShapeDraft, ShapeAdjustReceipt, ShapeDraft,
-    ShapeFillReceipt, ShapeKind, ShapeReceipt, ShapeRect, ShapeSnapshot, ShapeStroke,
+    EditOrigin, InheritedGeometry, ParagraphSnapshot, PresetShapeDraft, ShapeAdjustReceipt,
+    ShapeDraft, ShapeFillReceipt, ShapeKind, ShapeReceipt, ShapeRect, ShapeSnapshot, ShapeStroke,
     ShapeStrokeReceipt, SlideReceipt, SlideSnapshot, StorySnapshot, TextReceipt, TextRunSnapshot,
     TextSearchMatch, TextStyle, TextStylePatch, TransformReceipt, UpdateEvent, UpdateOrigin,
     UpdateSubscription,

@@ -898,15 +898,15 @@ impl<'a> LayoutBuilder<'a> {
                     self.theme,
                     space,
                     rect,
-                    shape.rotation_deg as f32,
-                    shape.flip_h,
-                    shape.flip_v,
+                    resolved.rotation_deg as f32,
+                    resolved.flip_h,
+                    resolved.flip_v,
                 )
             });
         let transform = Transform {
-            rotation_deg: shape.rotation_deg as f32,
-            flip_h: shape.flip_h,
-            flip_v: shape.flip_v,
+            rotation_deg: resolved.rotation_deg as f32,
+            flip_h: resolved.flip_h,
+            flip_v: resolved.flip_v,
         };
         match shape.kind {
             ShapeKind::Shape => {
@@ -4591,7 +4591,7 @@ fn find_node(nodes: &[ShapeNode], id: u32) -> Option<&ShapeNode> {
 
 fn find_placeholder<'a>(nodes: &'a [ShapeNode], target: &Placeholder) -> Option<&'a ShapeNode> {
     for node in nodes {
-        if node_placeholder(node).is_some_and(|value| placeholders_match(value, target)) {
+        if node_placeholder(node).is_some_and(|value| value.matches(target)) {
             return Some(node);
         }
         if let ShapeNode::Group(group) = node
@@ -4601,23 +4601,6 @@ fn find_placeholder<'a>(nodes: &'a [ShapeNode], target: &Placeholder) -> Option<
         }
     }
     None
-}
-
-/// A slide holds one of each of these, so they inherit by type: PowerPoint
-/// writes a slide number as `idx="12"` over a master's `idx="4"` and still
-/// draws it where the master put it (#797).
-const SINGLETON_PLACEHOLDERS: [&str; 5] = ["title", "sldNum", "dt", "ftr", "hdr"];
-
-fn placeholders_match(left: &Placeholder, right: &Placeholder) -> bool {
-    let left_type = normalize_placeholder_type(left.placeholder_type.as_deref());
-    let right_type = normalize_placeholder_type(right.placeholder_type.as_deref());
-    if SINGLETON_PLACEHOLDERS.contains(&left_type) || SINGLETON_PLACEHOLDERS.contains(&right_type) {
-        return left_type == right_type;
-    }
-    match (left.index, right.index) {
-        (Some(left), Some(right)) => left == right,
-        _ => left_type == right_type,
-    }
 }
 
 fn normalize_placeholder_type(value: Option<&str>) -> &str {
@@ -4971,40 +4954,44 @@ fn style_from_properties(properties: &RunProperties, theme: &Theme) -> TextStyle
     }
 }
 
+/// The transform a shape draws at. Without an extent it takes the inherited
+/// one, keeping its own orientation when its node spells out a transform.
 fn resolved_transform_value(
     shape: &ShapeSnapshot,
     original: Option<&ShapeNode>,
     layout: Option<&ShapeNode>,
     master: Option<&ShapeNode>,
 ) -> ShapeTransform {
+    let own = ShapeTransform {
+        x: shape.x,
+        y: shape.y,
+        width: shape.width,
+        height: shape.height,
+        rotation_deg: shape.rotation_deg,
+        flip_h: shape.flip_h,
+        flip_v: shape.flip_v,
+        ..ShapeTransform::default()
+    };
     if shape.width > 0 && shape.height > 0 {
+        return own;
+    }
+    let Some(inherited) = [original, layout, master]
+        .into_iter()
+        .flatten()
+        .map(|node| &node_base(node).transform)
+        .find(|transform| transform.width > 0 && transform.height > 0)
+    else {
+        return own;
+    };
+    if original.is_some_and(|node| node_base(node).transform != ShapeTransform::default()) {
         ShapeTransform {
-            x: shape.x,
-            y: shape.y,
-            width: shape.width,
-            height: shape.height,
-            rotation_deg: shape.rotation_deg,
-            flip_h: shape.flip_h,
-            flip_v: shape.flip_v,
-            ..ShapeTransform::default()
+            rotation_deg: own.rotation_deg,
+            flip_h: own.flip_h,
+            flip_v: own.flip_v,
+            ..inherited.clone()
         }
     } else {
-        [original, layout, master]
-            .into_iter()
-            .flatten()
-            .map(|node| &node_base(node).transform)
-            .find(|transform| transform.width > 0 && transform.height > 0)
-            .cloned()
-            .unwrap_or_else(|| ShapeTransform {
-                x: shape.x,
-                y: shape.y,
-                width: shape.width,
-                height: shape.height,
-                rotation_deg: shape.rotation_deg,
-                flip_h: shape.flip_h,
-                flip_v: shape.flip_v,
-                ..ShapeTransform::default()
-            })
+        inherited.clone()
     }
 }
 
@@ -5740,6 +5727,8 @@ mod tests {
     const NUMBERED_FIXTURE: &[u8] =
         include_bytes!("../../pptx-parse/tests/fixtures/slide-number-fields.pptx");
     const STYLE_FIXTURE: &[u8] = include_bytes!("../../pptx-parse/tests/fixtures/shape-style.pptx");
+    const STYLE_MATRIX_FIXTURE: &[u8] =
+        include_bytes!("../../pptx-parse/tests/fixtures/style-matrix-deck.pptx");
     const HIDDEN_FIXTURE: &[u8] =
         include_bytes!("../../pptx-edit/tests/fixtures/hidden-shapes.pptx");
     const V2_UPDATE: &[u8] =
@@ -7687,6 +7676,50 @@ mod tests {
                         .flat_map(|line| line.runs.iter().map(|run| run.text.as_str()))
                         .collect(),
                 )),
+                _ => None,
+            })
+            .unwrap_or_else(|| panic!("{shape_id} was not drawn"))
+    }
+
+    #[test]
+    fn a_placeholder_without_a_transform_draws_with_the_orientation_it_inherits() {
+        let mut package = pptx_parse::parse_pptx(STYLE_MATRIX_FIXTURE).unwrap();
+        let session = DeckSession::open(STYLE_MATRIX_FIXTURE, 8_320).unwrap();
+        let snapshot = session.snapshot().unwrap();
+        let title = snapshot.slides[1].shapes[0].id.clone();
+        let layout = package
+            .layouts
+            .iter_mut()
+            .find(|layout| layout.part_path == "ppt/slideLayouts/slideLayout2.xml")
+            .unwrap();
+        let ShapeNode::Shape(placeholder) = &mut layout.shapes[0] else {
+            panic!("the layout title is a shape")
+        };
+        placeholder.base.transform.rotation_deg = 30.0;
+        placeholder.base.transform.flip_v = true;
+
+        let rendered = renderer().layout_slide(&package, &snapshot, 1).unwrap();
+        assert_eq!(
+            drawn_transform(&rendered, &title),
+            Transform {
+                rotation_deg: 30.0,
+                flip_h: false,
+                flip_v: true,
+            }
+        );
+    }
+
+    fn drawn_transform(rendered: &RenderedSlide, shape_id: &str) -> Transform {
+        rendered
+            .display_list
+            .primitives
+            .iter()
+            .find_map(|primitive| match primitive {
+                Primitive::Shape {
+                    shape_id: Some(id),
+                    transform,
+                    ..
+                } if id == shape_id => Some(*transform),
                 _ => None,
             })
             .unwrap_or_else(|| panic!("{shape_id} was not drawn"))
@@ -9844,16 +9877,16 @@ mod tests {
             orientation: None,
             size: None,
         };
-        assert!(!placeholders_match(&indexed, &same_index));
-        assert!(placeholders_match(&centered_title, &title));
+        assert!(!indexed.matches(&same_index));
+        assert!(centered_title.matches(&title));
         let slide_number = |index| Placeholder {
             placeholder_type: Some("sldNum".to_owned()),
             index: Some(index),
             orientation: None,
             size: None,
         };
-        assert!(placeholders_match(&slide_number(12), &slide_number(4)));
-        assert!(!placeholders_match(&slide_number(12), &indexed));
+        assert!(slide_number(12).matches(&slide_number(4)));
+        assert!(!slide_number(12).matches(&indexed));
 
         let snapshot = ShapeSnapshot {
             id: "placeholder".to_owned(),
@@ -9867,6 +9900,7 @@ mod tests {
             rotation_deg: 0.0,
             flip_h: false,
             flip_v: false,
+            inherited: None,
             hidden: false,
             geometry: "rect".to_owned(),
             adjust_values: BTreeMap::new(),
