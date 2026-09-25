@@ -14,7 +14,6 @@ use pptx_parse::{
 
 use crate::comments::{derived_guid, seeded_comment_id};
 use crate::deck::baseline_snapshot;
-use crate::inherit::SlideContext;
 use crate::{
     CommentSnapshot, DeckSession, DeckSnapshot, EditError, EditResult, ParagraphSnapshot,
     ShapeKind, ShapeSnapshot, SlideSnapshot, StorySnapshot, TextRunSnapshot,
@@ -61,14 +60,7 @@ fn deck_write(
             },
             Some(base) => SlideWrite::Patch {
                 part_path: source_part_path(slide)?,
-                shapes: {
-                    let context = SlideContext::new(
-                        package,
-                        slide.source_part_path.as_deref(),
-                        slide.layout_part_path.as_deref(),
-                    );
-                    shape_writes(&slide.shapes, &base.shapes, &context, context.source_shapes)?
-                },
+                shapes: shape_writes(&slide.shapes, &base.shapes, source_shapes(package, slide))?,
             },
             None => SlideWrite::Add {
                 name: slide.name.clone(),
@@ -324,10 +316,23 @@ fn source_part_path(slide: &SlideSnapshot) -> EditResult<String> {
         .ok_or_else(|| EditError::Write(format!("slide {} has no source part", slide.id)))
 }
 
+fn source_shapes<'a>(package: &'a PptxPackage, slide: &SlideSnapshot) -> &'a [ShapeNode] {
+    slide
+        .source_part_path
+        .as_deref()
+        .and_then(|path| {
+            package
+                .slides
+                .iter()
+                .find(|source| source.part_path == path)
+        })
+        .map(|source| source.shapes.as_slice())
+        .unwrap_or_default()
+}
+
 fn shape_writes(
     current: &[ShapeSnapshot],
     baseline: &[ShapeSnapshot],
-    context: &SlideContext<'_>,
     source: &[ShapeNode],
 ) -> EditResult<Vec<ShapeWrite>> {
     let baseline_shapes: HashMap<&str, &ShapeSnapshot> = baseline
@@ -344,12 +349,7 @@ fn shape_writes(
                 let index = addressed_source_index(shape, source)?;
                 ShapeWrite::Patch {
                     source_index: index,
-                    patch: Box::new(shape_patch(
-                        shape,
-                        base,
-                        context,
-                        group_children(source, index),
-                    )?),
+                    patch: Box::new(shape_patch(shape, base, group_children(source, index))?),
                 }
             }
             None => ShapeWrite::Add(Box::new(shape_add(shape)?)),
@@ -391,7 +391,6 @@ fn source_index(shape_id: &str) -> EditResult<usize> {
 fn shape_patch(
     shape: &ShapeSnapshot,
     base: &ShapeSnapshot,
-    context: &SlideContext<'_>,
     source_children: &[ShapeNode],
 ) -> EditResult<ShapePatch> {
     let mut patch = ShapePatch::default();
@@ -453,7 +452,7 @@ fn shape_patch(
         });
     }
     if shape.children != base.children {
-        patch.children = shape_writes(&shape.children, &base.children, context, source_children)?;
+        patch.children = shape_writes(&shape.children, &base.children, source_children)?;
     }
     Ok(patch)
 }
