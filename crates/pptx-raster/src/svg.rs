@@ -193,8 +193,10 @@ pub enum SvgRefusal {
     Unparsable,
     /// Rasterises past [`MAX_SVG_RASTER_DIM`].
     RasterTooLarge,
-    /// An element outside the drawing allowlist, a reference into content the
-    /// audit skips, or a mask, filter, pattern, image or text node in the tree.
+    /// An element outside the drawing allowlist, an attribute in the SVG, XLink
+    /// or XML namespace other than `xlink:href`, `xlink:title`, `xml:space` and
+    /// `xml:lang`, a reference into content the audit skips, or a mask, filter,
+    /// pattern, image or text node in the tree.
     UnsupportedElement,
     /// A stylesheet past [`MAX_SVG_STYLE_RULES`] or beyond plain type, class and
     /// id rules within [`MAX_SVG_SELECTOR_PARTS`] and [`MAX_SVG_SELECTOR_BYTES`],
@@ -742,6 +744,35 @@ pub(crate) mod tests {
                 "{source}"
             );
         }
+    }
+
+    #[test]
+    fn an_attribute_usvg_would_read_from_a_prefix_is_refused() {
+        let radius = "6".repeat(57) + "1";
+        let points = "1 1 ".repeat(250_000);
+        for body in [
+            format!(r#"<path xml:d="M0 0a{radius}1 1 0 0 0 1 1"/>"#),
+            r#"<circle xml:r="3e38"/>"#.to_owned(),
+            format!(r##"<polygon xml:points="{points}" stroke="#000"/>"##),
+            r##"<linearGradient id="g"><stop offset="0"/></linearGradient><g fill="url(#g)"><rect width="1" height="1" fill="inherit" xml:fill="red"/></g>"##.to_owned(),
+            r##"<rect xmlns:s="http://www.w3.org/2000/svg" width="1" height="1" s:fill="red"/>"##.to_owned(),
+            r##"<rect width="1" height="1" xlink:style="fill:red" xmlns:xlink="http://www.w3.org/1999/xlink"/>"##.to_owned(),
+        ] {
+            let started = std::time::Instant::now();
+            assert_eq!(
+                refusal(document(&body).as_bytes()),
+                Some(SvgRefusal::UnsupportedElement),
+                "{}",
+                &body[..body.len().min(120)]
+            );
+            assert!(started.elapsed() < std::time::Duration::from_secs(1));
+        }
+        let allowed = concat!(
+            r##"<g xml:space="preserve" xml:lang="en"><rect id="r" width="1" height="1"/></g>"##,
+            r##"<use xmlns:xlink="http://www.w3.org/1999/xlink" xlink:href="#r" xlink:title="copy"/>"##,
+            r##"<g xmlns:x="urn:x" x:fill="url(https://example.invalid/g)"/>"##
+        );
+        assert!(parse(document(allowed).as_bytes()).is_ok());
     }
 
     #[test]

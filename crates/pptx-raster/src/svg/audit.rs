@@ -446,6 +446,11 @@ fn css_links<'a>(links: &mut Vec<(Link, &'a str)>, target: &'a str) {
 /// each read by the parser `usvg` reads it with. An `href` is followed only on
 /// `use` and on gradients: on `a` and `image` it is inert, since nothing
 /// follows a link and both image resolvers return `None`.
+///
+/// `usvg` reads an attribute by its local name from the SVG, XLink and XML
+/// namespaces as well as from none, so a prefixed copy could shadow or stand
+/// in for the one audited. Only `xlink:href`, whose precedence `usvg` settles,
+/// and the inert `xlink:title`, `xml:space` and `xml:lang` may carry one.
 fn audit_attributes(element: &mut Element<'_>) -> Result<(), SvgRefusal> {
     let node = element.node;
     let name = node.tag_name().name();
@@ -454,6 +459,12 @@ fn audit_attributes(element: &mut Element<'_>) -> Result<(), SvgRefusal> {
     for attribute in node.attributes() {
         let (local, value) = (attribute.name(), attribute.value());
         element.bytes += (local.len() + value.len()) as u64 + 4;
+        let namespace = attribute.namespace();
+        match (namespace, local) {
+            (None, _) | (Some(XLINK_NS), "href" | "title") | (Some(XML_NS), "space" | "lang") => {}
+            (Some(SVG_NS | XLINK_NS | XML_NS), _) => return Err(SvgRefusal::UnsupportedElement),
+            _ => continue,
+        }
         if local == "filter" && value != "none" {
             return Err(SvgRefusal::UnsupportedStyle);
         }
@@ -472,10 +483,6 @@ fn audit_attributes(element: &mut Element<'_>) -> Result<(), SvgRefusal> {
             for target in targets {
                 css_links(&mut element.links, target);
             }
-            continue;
-        }
-        let namespace = attribute.namespace();
-        if !matches!(namespace, None | Some(SVG_NS | XLINK_NS | XML_NS)) {
             continue;
         }
         match local {
