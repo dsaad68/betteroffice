@@ -18,7 +18,7 @@ use yrs::{
 use crate::comments::{
     baseline_comments, flavor_key, seed_comments, snapshot_comments, snapshot_flavor,
 };
-use crate::inherit::{SlideContext, has_own_transform, inherited_transform, record_inherited};
+use crate::inherit::{SlideContext, inherited_transform, record_inherited};
 use crate::story::{baseline_story, seed_plain_story, seed_story, snapshot_story, validate_story};
 use crate::{
     DeckSession, DeckSnapshot, EditCtx, EditError, EditResult, META, MIGRATE_ORIGIN, PendingMedia,
@@ -925,10 +925,9 @@ impl DeckSession {
             source_part_path.as_deref(),
             layout_part_path.as_deref(),
         );
-        if has_own_transform(&context, source_id) {
-            return Ok(());
-        }
-        let Some(transform) = inherited_transform(placeholder.as_ref(), &context).cloned() else {
+        let Some(transform) =
+            inherited_transform(&context, source_id, placeholder.as_ref()).cloned()
+        else {
             return Ok(());
         };
         shape.insert(txn, "x", transform.x as f64);

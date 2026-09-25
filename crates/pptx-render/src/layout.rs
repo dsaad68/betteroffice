@@ -4521,40 +4521,44 @@ fn style_from_properties(properties: &RunProperties, theme: &Theme) -> TextStyle
     }
 }
 
+/// The transform a shape draws at. Without an extent it takes the inherited
+/// one, keeping its own orientation when its node spells out a transform.
 fn resolved_transform_value(
     shape: &ShapeSnapshot,
     original: Option<&ShapeNode>,
     layout: Option<&ShapeNode>,
     master: Option<&ShapeNode>,
 ) -> ShapeTransform {
+    let own = ShapeTransform {
+        x: shape.x,
+        y: shape.y,
+        width: shape.width,
+        height: shape.height,
+        rotation_deg: shape.rotation_deg,
+        flip_h: shape.flip_h,
+        flip_v: shape.flip_v,
+        ..ShapeTransform::default()
+    };
     if shape.width > 0 && shape.height > 0 {
+        return own;
+    }
+    let Some(inherited) = [original, layout, master]
+        .into_iter()
+        .flatten()
+        .map(|node| &node_base(node).transform)
+        .find(|transform| transform.width > 0 && transform.height > 0)
+    else {
+        return own;
+    };
+    if original.is_some_and(|node| node_base(node).transform != ShapeTransform::default()) {
         ShapeTransform {
-            x: shape.x,
-            y: shape.y,
-            width: shape.width,
-            height: shape.height,
-            rotation_deg: shape.rotation_deg,
-            flip_h: shape.flip_h,
-            flip_v: shape.flip_v,
-            ..ShapeTransform::default()
+            rotation_deg: own.rotation_deg,
+            flip_h: own.flip_h,
+            flip_v: own.flip_v,
+            ..inherited.clone()
         }
     } else {
-        [original, layout, master]
-            .into_iter()
-            .flatten()
-            .map(|node| &node_base(node).transform)
-            .find(|transform| transform.width > 0 && transform.height > 0)
-            .cloned()
-            .unwrap_or_else(|| ShapeTransform {
-                x: shape.x,
-                y: shape.y,
-                width: shape.width,
-                height: shape.height,
-                rotation_deg: shape.rotation_deg,
-                flip_h: shape.flip_h,
-                flip_v: shape.flip_v,
-                ..ShapeTransform::default()
-            })
+        inherited.clone()
     }
 }
 

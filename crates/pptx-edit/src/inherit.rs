@@ -59,11 +59,11 @@ impl<'a> SlideContext<'a> {
     }
 }
 
-/// Records the inherited transform on every shape that has no extent of its own.
+/// Records the inherited transform on every shape that draws at one.
 pub(crate) fn record_inherited(shapes: &mut [ShapeSnapshot], context: &SlideContext<'_>) {
     for shape in shapes {
         shape.inherited = (shape.width <= 0 || shape.height <= 0)
-            .then(|| inherited_transform(shape.placeholder.as_ref(), context))
+            .then(|| inherited_transform(context, shape.source_id, shape.placeholder.as_ref()))
             .flatten()
             .map(|transform| InheritedGeometry {
                 x: transform.x,
@@ -78,23 +78,20 @@ pub(crate) fn record_inherited(shapes: &mut [ShapeSnapshot], context: &SlideCont
     }
 }
 
-/// The transform a placeholder inherits: the layout's matching placeholder,
-/// then the master's. The shape's own parsed node cannot contribute — a
-/// positive extent there would already be in the snapshot.
+/// The transform a placeholder takes from the layout's matching placeholder,
+/// then the master's, while its source node spells out none of its own.
 pub(crate) fn inherited_transform<'a>(
-    placeholder: Option<&Placeholder>,
     context: &SlideContext<'a>,
+    source_id: u32,
+    placeholder: Option<&Placeholder>,
 ) -> Option<&'a ShapeTransform> {
-    let layout = placeholder.and_then(|placeholder| {
-        context
-            .layout
-            .and_then(|layout| find_placeholder(&layout.shapes, placeholder))
-    });
-    let master = placeholder.and_then(|placeholder| {
-        context
-            .master
-            .and_then(|master| find_placeholder(&master.shapes, placeholder))
-    });
+    let placeholder = placeholder.filter(|_| !has_own_transform(context, source_id))?;
+    let layout = context
+        .layout
+        .and_then(|layout| find_placeholder(&layout.shapes, placeholder));
+    let master = context
+        .master
+        .and_then(|master| find_placeholder(&master.shapes, placeholder));
     [layout, master]
         .into_iter()
         .flatten()
@@ -102,11 +99,12 @@ pub(crate) fn inherited_transform<'a>(
         .find(|transform| transform.width > 0 && transform.height > 0)
 }
 
-/// Whether the slide's own node spells out a transform, which an edit keeps
-/// instead of replacing with the inherited one.
-pub(crate) fn has_own_transform(context: &SlideContext<'_>, source_id: u32) -> bool {
-    find_source_node(context.source_shapes, source_id)
-        .is_some_and(|node| node_transform(node) != &ShapeTransform::default())
+/// Whether the slide's own node spells out a transform, even a partial one,
+/// which the shape then draws and edits instead of the inherited one.
+fn has_own_transform(context: &SlideContext<'_>, source_id: u32) -> bool {
+    source_id != 0
+        && find_source_node(context.source_shapes, source_id)
+            .is_some_and(|node| node_transform(node) != &ShapeTransform::default())
 }
 
 fn find_source_node(nodes: &[ShapeNode], source_id: u32) -> Option<&ShapeNode> {
