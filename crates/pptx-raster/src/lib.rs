@@ -11,8 +11,8 @@ mod svg;
 pub use font::GlyphCache;
 pub use svg::{
     MAX_SVG_BYTES, MAX_SVG_DEPTH, MAX_SVG_EXPANDED_BYTES, MAX_SVG_EXPANDED_NODES,
-    MAX_SVG_GRADIENT_STOPS, MAX_SVG_NODES, MAX_SVG_RASTER_DIM, MAX_SVG_STYLE_RULES,
-    MAX_SVG_STYLE_WORK, SvgRefusal,
+    MAX_SVG_GRADIENT_STOPS, MAX_SVG_LAYER_DEPTH, MAX_SVG_NODES, MAX_SVG_OVERDRAW,
+    MAX_SVG_RASTER_DIM, MAX_SVG_RENDER_WORK, MAX_SVG_STYLE_RULES, MAX_SVG_STYLE_WORK, SvgRefusal,
 };
 
 use std::collections::hash_map::DefaultHasher;
@@ -1430,7 +1430,8 @@ impl ImageBudget {
         Some((decoded.into_rgba8().into_raw(), size))
     }
 
-    /// The same, from an SVG the sandbox accepts. A refusal is an undecodable
+    /// The same, from an SVG the sandbox accepts. The charge covers the raster
+    /// and every layer the render stacks on it. A refusal is an undecodable
     /// image like any other, and carries nothing from the document.
     fn rasterize_svg(&mut self, bytes: &[u8]) -> Option<(Vec<u8>, IntSize)> {
         let image = svg::parse(bytes).ok()?;
@@ -2745,6 +2746,7 @@ mod tests {
             "<g>".repeat(MAX_SVG_DEPTH + 1),
             "</g>".repeat(MAX_SVG_DEPTH + 1)
         );
+        let fills = r##"<rect width="96" height="96" fill="#f00"/>"##.repeat(10_000);
         let refused: Vec<Vec<u8>> = vec![
             br##"<!DOCTYPE svg [<!ENTITY a SYSTEM "file:///etc/passwd">]><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 4 4"><desc>&a;</desc></svg>"##.to_vec(),
             br##"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 4 4"><use href="https://example.invalid/p.svg#icon"/></svg>"##.to_vec(),
@@ -2760,6 +2762,8 @@ mod tests {
             svg::tests::use_fan_out(10, 10).into_bytes(),
             svg::tests::use_chain(256).into_bytes(),
             svg::tests::document(r##"<g id="a"><use href="#b"/></g><g id="b"><use href="#a"/></g>"##).into_bytes(),
+            svg::tests::document(&fills).into_bytes(),
+            svg::tests::opacity_nest(MAX_SVG_LAYER_DEPTH + 1).into_bytes(),
             svg::tests::document(r##"<rect width="96" height="96" fill="URL(http://example.invalid/p.svg#g)"/>"##).into_bytes(),
         ];
         for (index, bytes) in refused.iter().enumerate() {
@@ -2835,6 +2839,20 @@ mod tests {
         assert!(
             blend.red() > 64 && blend.blue() > 64 && blend.green() < 16,
             "the gradient spans the right half: {blend:?}"
+        );
+    }
+
+    #[test]
+    fn an_svg_layer_is_charged_before_it_allocates() {
+        let bytes = br##"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 8 8"><g opacity="0.5"><rect width="8" height="8" fill="#0000ff"/></g></svg>"##;
+        let mut budget = ImageBudget::default();
+        ImageCache::default()
+            .decode(image_key("icon.svg", bytes, &[]), bytes, &[], &mut budget)
+            .expect("decode");
+        assert!(
+            (32 * 32 + 36 * 36..=32 * 32 + 38 * 38).contains(&budget.pixels),
+            "the output raster plus the layer its opacity group paints into: {}",
+            budget.pixels
         );
     }
 

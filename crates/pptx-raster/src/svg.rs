@@ -1,14 +1,18 @@
 //! Sandboxed SVG rasterisation into the straight-alpha RGBA buffer the other
-//! image formats produce. The document is audited before `usvg` builds
-//! anything, so what it expands into is bounded by construction.
+//! image formats produce. The sandbox bounds what conversion and rendering cost
+//! by construction: the document is audited before `usvg` builds anything, and
+//! the tree `usvg` builds is priced before `resvg` paints it.
 
 mod audit;
+mod cost;
 mod style;
 
 use std::panic::{AssertUnwindSafe, catch_unwind};
 
 use resvg::usvg;
 use tiny_skia::{IntSize, Pixmap, PremultipliedColorU8, Transform};
+
+use crate::MAX_IMAGE_PIXELS;
 
 /// One SVG document's source bytes.
 pub const MAX_SVG_BYTES: usize = 4_194_304;
@@ -30,6 +34,14 @@ pub const MAX_SVG_GRADIENT_STOPS: usize = 256;
 pub const MAX_SVG_STYLE_RULES: usize = 1_024;
 /// Selector tests and declarations `usvg` applies across the expanded document.
 pub const MAX_SVG_STYLE_WORK: u64 = 16_777_216;
+/// Group layers (opacity, clip, blend, isolation) one render may stack.
+pub const MAX_SVG_LAYER_DEPTH: usize = 8;
+/// Painted pixels, gradient stops weighted in, as a multiple of the output raster.
+pub const MAX_SVG_OVERDRAW: u64 = 64;
+/// Painting work in painted-pixel units: four passes over the largest raster
+/// the image budget admits. Past it the raster supersamples less, and a render
+/// still past it at its intrinsic size is refused.
+pub const MAX_SVG_RENDER_WORK: u64 = 4 * MAX_IMAGE_PIXELS;
 /// One rasterised SVG's longest side.
 pub const MAX_SVG_RASTER_DIM: u32 = 8_192;
 /// How far above its intrinsic size an SVG rasterises, so a picture frame
@@ -55,8 +67,8 @@ pub enum SvgRefusal {
     Unparsable,
     /// Rasterises past [`MAX_SVG_RASTER_DIM`].
     RasterTooLarge,
-    /// An element outside the drawing allowlist, or a reference into content
-    /// the audit skips.
+    /// An element outside the drawing allowlist, a reference into content the
+    /// audit skips, or a mask, filter, pattern, image or text node in the tree.
     UnsupportedElement,
     /// A stylesheet past [`MAX_SVG_STYLE_RULES`] or beyond plain type, class and
     /// id rules, or a `filter` in any form.
@@ -67,6 +79,11 @@ pub enum SvgRefusal {
     /// [`MAX_SVG_STYLE_WORK`] once references are expanded, or a gradient past
     /// [`MAX_SVG_GRADIENT_STOPS`].
     ExpansionTooLarge,
+    /// Group layers past [`MAX_SVG_LAYER_DEPTH`], or a clip path that is
+    /// itself clipped.
+    TooManyLayers,
+    /// Paints past [`MAX_SVG_OVERDRAW`] or [`MAX_SVG_RENDER_WORK`].
+    RenderTooCostly,
     /// `usvg` or `resvg` panicked.
     Panicked,
 }
@@ -75,6 +92,7 @@ pub enum SvgRefusal {
 pub struct SvgImage {
     tree: usvg::Tree,
     size: IntSize,
+    pixels: u64,
 }
 
 /// Whether `bytes` are worth handing to [`parse`]. `image`'s sniffer never
@@ -87,8 +105,8 @@ pub fn looks_like_svg(bytes: &[u8]) -> bool {
         && head.windows(4).any(|window| window == b"<svg")
 }
 
-/// Parses under the sandbox: no DTD, no external reference, an allowlisted
-/// document whose expansion is bounded, and a bounded output raster.
+/// Parses under the sandbox: no DTD, no external reference, an allowlisted and
+/// bounded document, and a render priced before it runs.
 pub fn parse(bytes: &[u8]) -> Result<SvgImage, SvgRefusal> {
     if bytes.len() > MAX_SVG_BYTES {
         return Err(SvgRefusal::DocumentTooLarge);
@@ -113,14 +131,15 @@ pub fn parse(bytes: &[u8]) -> Result<SvgImage, SvgRefusal> {
     audit::audit(&document)?;
     let tree = guarded(|| usvg::Tree::from_xmltree(&document, &sandbox()))?
         .map_err(|_| SvgRefusal::Unparsable)?;
-    let size = raster_size(tree.size())?;
-    Ok(SvgImage { tree, size })
+    let (size, pixels) = raster(&tree)?;
+    Ok(SvgImage { tree, size, pixels })
 }
 
 impl SvgImage {
-    /// Pixels the render will allocate, for the caller's decode budget.
+    /// Pixels the render will allocate, for the caller's decode budget: the
+    /// output raster plus the deepest stack of group layers and clip masks.
     pub fn pixels(&self) -> u64 {
-        u64::from(self.size.width()) * u64::from(self.size.height())
+        self.pixels
     }
 
     /// Straight-alpha RGBA, matching what the raster formats hand back.
@@ -163,11 +182,13 @@ fn guarded<T>(step: impl FnOnce() -> T) -> Result<T, SvgRefusal> {
     catch_unwind(AssertUnwindSafe(step)).map_err(|_| SvgRefusal::Panicked)
 }
 
-/// The raster an intrinsic size renders into, supersampled where the bound
-/// leaves room.
-fn raster_size(size: usvg::Size) -> Result<IntSize, SvgRefusal> {
-    let width = size.width();
-    let height = size.height();
+/// The raster an intrinsic size renders into and the pixels it allocates: the
+/// largest supersample whose output and layers fit [`MAX_IMAGE_PIXELS`] and
+/// whose painting fits [`MAX_SVG_RENDER_WORK`]. At the intrinsic size only the
+/// painting refuses; a raster too large for the budget is the caller's to skip.
+fn raster(tree: &usvg::Tree) -> Result<(IntSize, u64), SvgRefusal> {
+    let width = tree.size().width();
+    let height = tree.size().height();
     if !width.is_finite() || !height.is_finite() || width <= 0.0 || height <= 0.0 {
         return Err(SvgRefusal::Unparsable);
     }
@@ -176,11 +197,28 @@ fn raster_size(size: usvg::Size) -> Result<IntSize, SvgRefusal> {
     if width > limit || height > limit {
         return Err(SvgRefusal::RasterTooLarge);
     }
-    let factor = (1..=SVG_SUPERSAMPLE)
-        .rev()
-        .find(|factor| width * *factor as f32 <= limit && height * *factor as f32 <= limit)
-        .unwrap_or(1);
-    IntSize::from_wh(width as u32 * factor, height as u32 * factor).ok_or(SvgRefusal::Unparsable)
+    let mut factor = SVG_SUPERSAMPLE;
+    loop {
+        let (scaled_width, scaled_height) = (width * factor as f32, height * factor as f32);
+        if factor > 1 && (scaled_width > limit || scaled_height > limit) {
+            factor -= 1;
+            continue;
+        }
+        let size = IntSize::from_wh(scaled_width as u32, scaled_height as u32)
+            .ok_or(SvgRefusal::Unparsable)?;
+        let cost = cost::measure(tree, size)?;
+        let affordable = cost.work <= MAX_SVG_RENDER_WORK;
+        if affordable && cost.pixels <= MAX_IMAGE_PIXELS {
+            return Ok((size, cost.pixels));
+        }
+        if factor == 1 {
+            if !affordable {
+                return Err(SvgRefusal::RenderTooCostly);
+            }
+            return Ok((size, cost.pixels));
+        }
+        factor -= 1;
+    }
 }
 
 /// Whether `haystack` contains `needle`, ASCII case folded.
@@ -670,6 +708,72 @@ pub(crate) mod tests {
             Some(SvgRefusal::ExpansionTooLarge)
         );
         assert!(parse(gradient_fills(MAX_SVG_GRADIENT_STOPS, 1).as_bytes()).is_ok());
+    }
+
+    #[test]
+    fn full_canvas_fills_past_the_overdraw_bound_are_refused() {
+        let fills = r##"<rect width="96" height="96" fill="#f00"/>"##.repeat(10_000);
+        assert_eq!(
+            refusal(document(&fills).as_bytes()),
+            Some(SvgRefusal::RenderTooCostly)
+        );
+        assert_eq!(
+            refusal(gradient_fills(MAX_SVG_GRADIENT_STOPS, 2).as_bytes()),
+            Some(SvgRefusal::RenderTooCostly),
+            "each stop is a test per painted pixel"
+        );
+        let few = r##"<rect width="96" height="96" fill="#f00"/>"##.repeat(32);
+        assert!(parse(document(&few).as_bytes()).is_ok());
+    }
+
+    #[test]
+    fn dashes_count_against_the_render_work() {
+        let dashed =
+            r##"<path d="M0 48H100000" stroke="#000" stroke-dasharray="0.5 0.5"/>"##.repeat(20);
+        assert_eq!(
+            refusal(document(&dashed).as_bytes()),
+            Some(SvgRefusal::RenderTooCostly)
+        );
+        let few = r##"<path d="M0 48H96" stroke="#000" stroke-dasharray="4 4"/>"##;
+        assert!(parse(document(few).as_bytes()).is_ok());
+    }
+
+    pub(crate) fn opacity_nest(depth: usize) -> String {
+        document(&format!(
+            r##"{}<rect width="96" height="96" fill="#0000ff"/>{}"##,
+            r#"<g opacity="0.99">"#.repeat(depth),
+            "</g>".repeat(depth)
+        ))
+    }
+
+    #[test]
+    fn nested_layers_past_the_bound_are_refused_and_within_it_charge_their_rasters() {
+        assert_eq!(
+            refusal(opacity_nest(MAX_SVG_LAYER_DEPTH + 1).as_bytes()),
+            Some(SvgRefusal::TooManyLayers)
+        );
+        let image = parse(opacity_nest(MAX_SVG_LAYER_DEPTH).as_bytes()).expect("parse");
+        let layers = MAX_SVG_LAYER_DEPTH as u64;
+        assert!(
+            (384 * 384 + layers * 388 * 388..=384 * 384 + layers * 390 * 390)
+                .contains(&image.pixels()),
+            "each layer is the canvas grown two pixels a side: {}",
+            image.pixels()
+        );
+        let (data, _) = image.render().expect("render");
+        assert_eq!(data[2], 255, "the nested rect still draws");
+    }
+
+    #[test]
+    fn a_clip_too_large_to_stack_steps_the_supersample_down() {
+        let source = concat!(
+            r##"<svg xmlns="http://www.w3.org/2000/svg" width="1920" height="960" viewBox="0 0 1920 960">"##,
+            r##"<defs><clipPath id="c"><path d="M0 0H1920V960H0Z"/></clipPath></defs>"##,
+            r##"<g clip-path="url(#c)"><rect width="1920" height="960" fill="#00adef"/></g></svg>"##
+        );
+        let image = parse(source.as_bytes()).expect("parse");
+        assert_eq!((image.size.width(), image.size.height()), (3840, 1920));
+        assert!(image.pixels() <= MAX_IMAGE_PIXELS);
     }
 
     #[test]
