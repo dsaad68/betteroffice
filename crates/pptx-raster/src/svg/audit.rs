@@ -11,9 +11,9 @@ use super::geometry::{self, MEASURE_TOLERANCE, OUTLINE_VERB_BYTES, Outline};
 use super::style::{Strokes, StyleSheet};
 use super::{
     ARC_CUBIC_BYTES, MAX_SVG_ATTRIBUTES, MAX_SVG_COLLECT_WORK, MAX_SVG_DEPTH,
-    MAX_SVG_EXPANDED_BYTES, MAX_SVG_EXPANDED_NODES, MAX_SVG_GRADIENT_STOPS, MAX_SVG_PAINT_BYTES,
-    MAX_SVG_PATH_BYTES, MAX_SVG_STROKE_SPAN, MAX_SVG_STROKE_VERBS, MAX_SVG_STYLE_WORK,
-    SVG_TRANSIENT_BYTES, SvgRefusal, reference,
+    MAX_SVG_EXPANDED_BYTES, MAX_SVG_EXPANDED_NODES, MAX_SVG_GRADIENT_STOPS, MAX_SVG_INHERIT_WORK,
+    MAX_SVG_PAINT_BYTES, MAX_SVG_PATH_BYTES, MAX_SVG_STROKE_SPAN, MAX_SVG_STROKE_VERBS,
+    MAX_SVG_STYLE_WORK, SVG_TRANSIENT_BYTES, SvgRefusal, reference,
 };
 
 pub(super) const SVG_NS: &str = "http://www.w3.org/2000/svg";
@@ -49,6 +49,14 @@ const ALLOWED: [&str; 24] = [
     "text",
     "tspan",
 ];
+
+/// Time `usvg` spends on each ancestor it looks through for an element's
+/// inherited properties, and on each attribute of that ancestor: about 17 ns
+/// and 1.6 ns, measured over 60-deep chains of 62 attributes.
+const ANCESTOR_NS: u64 = 20;
+const ANCESTOR_ATTRIBUTE_NS: u64 = 2;
+/// Attributes `usvg` keeps on one element at most, one per name it knows.
+const KEPT_ATTRIBUTES: u64 = 256;
 
 /// Bytes `usvg` spends on one copy of a gradient, besides its stops.
 const PAINT_COPY_BYTES: u64 = 256;
@@ -117,6 +125,11 @@ struct Element<'a> {
     /// Paints with the context element's paint, as `context-fill` does.
     context: bool,
     outline: Outline,
+    parent: Option<usize>,
+    /// Attributes `usvg` may keep on the element, its CSS included.
+    kept: u64,
+    /// What looking through the element's markup ancestors costs.
+    above: u64,
     /// Bytes of the longest dash list the element declares.
     dash: u64,
     strokes: Strokes,
@@ -133,6 +146,9 @@ struct Expanded {
     bytes: u64,
     style: u64,
     verbs: u64,
+    /// Time `usvg` spends looking up inherited properties through ancestors,
+    /// summed over every instance.
+    looks: u64,
     depth: u64,
     /// Consumers inheriting the paint set above.
     open: [u64; 2],
@@ -209,6 +225,12 @@ pub(super) fn audit(document: &Document<'_>) -> Result<(), SvgRefusal> {
             paint: [Paint::default(); 2],
             context: false,
             outline: Outline::default(),
+            parent: match parent {
+                Some(Slot::Element(parent)) => Some(parent),
+                _ => None,
+            },
+            kept: node.attributes().len() as u64,
+            above: 0,
             dash: 0,
             strokes: Strokes::default(),
             verbs: 0,
@@ -264,10 +286,11 @@ pub(super) fn audit(document: &Document<'_>) -> Result<(), SvgRefusal> {
     for element in &mut elements {
         let mut overflow = false;
         let insert = declaration_work(element.node);
-        sheet.each_match(element.node, |declarations, references, context| {
+        sheet.each_match(element.node, |declarations, colons, references, context| {
             element.style = element
                 .style
                 .saturating_add(declarations.saturating_mul(insert));
+            element.kept = element.kept.saturating_add(colons);
             element.context |= context;
             if element.links.len() + 3 * references.len() > room {
                 overflow = true;
@@ -280,6 +303,13 @@ pub(super) fn audit(document: &Document<'_>) -> Result<(), SvgRefusal> {
         links += element.links.len();
         if overflow || links > room {
             return Err(SvgRefusal::ExpansionTooLarge);
+        }
+    }
+    for index in 0..elements.len() {
+        if let Some(parent) = elements[index].parent {
+            elements[index].above = elements[parent]
+                .above
+                .saturating_add(weight(&elements[parent]));
         }
     }
 
@@ -477,6 +507,7 @@ fn audit_attributes(element: &mut Element<'_>, css: &mut u64) -> Result<(), SvgR
             if *css > MAX_SVG_STYLE_WORK {
                 return Err(SvgRefusal::ExpansionTooLarge);
             }
+            element.kept += value.bytes().filter(|byte| *byte == b':').count() as u64;
             let applied = (value.len() as u64).saturating_mul(declaration_work(node));
             element.style = element
                 .style
@@ -610,6 +641,12 @@ fn outline(node: Node<'_, '_>) -> Result<Outline, SvgRefusal> {
     Ok(sum)
 }
 
+/// Time `usvg` spends on `element` as an ancestor of one instance it looks
+/// up inherited properties for.
+fn weight(element: &Element<'_>) -> u64 {
+    ANCESTOR_NS + ANCESTOR_ATTRIBUTE_NS * element.kept.min(KEPT_ATTRIBUTES)
+}
+
 /// Style work per byte of declarations applied to one instance of `node`:
 /// each declaration looks its property up among the element's attributes
 /// and copies its value.
@@ -685,11 +722,12 @@ fn expand(elements: &[Element<'_>], edges: &[Edges], gradients: u64) -> Result<(
             }
             continue;
         }
-        let size = finish(&elements[index], &edges[index], &sizes);
+        let size = finish(elements, index, &edges[index], &sizes);
         if size.nodes > MAX_SVG_EXPANDED_NODES
             || size.bytes > MAX_SVG_EXPANDED_BYTES
             || size.style > MAX_SVG_STYLE_WORK
             || size.verbs > MAX_SVG_STROKE_VERBS
+            || size.looks > MAX_SVG_INHERIT_WORK
             || size.stops.saturating_mul(STOP_BYTES) + size.copies.saturating_mul(PAINT_COPY_BYTES)
                 > MAX_SVG_PAINT_BYTES
             || collection(&size, gradients) > MAX_SVG_COLLECT_WORK
@@ -706,11 +744,14 @@ fn expand(elements: &[Element<'_>], edges: &[Edges], gradients: u64) -> Result<(
     Ok(())
 }
 
-/// One element's instance, from the instances of the elements it expands. A
+/// One element's instance, from the instances of the elements it expands.
+/// Every instance under it looks through it for inherited properties, and
+/// a clip path's content also through the clip path's own ancestors. A
 /// shape's fill and stroke resolve at the nearest element up its instance
 /// that sets them, and a gradient there is copied per shape when its units are
 /// the shape's box, or always when a `use` hands it down as context paint.
-fn finish(own: &Element<'_>, edges: &Edges, sizes: &[Expanded]) -> Expanded {
+fn finish(elements: &[Element<'_>], index: usize, edges: &Edges, sizes: &[Expanded]) -> Expanded {
+    let own = &elements[index];
     let mut size = Expanded {
         nodes: 1,
         bytes: own.bytes,
@@ -724,6 +765,7 @@ fn finish(own: &Element<'_>, edges: &Edges, sizes: &[Expanded]) -> Expanded {
         size.bytes = size.bytes.saturating_add(inner.bytes);
         size.style = size.style.saturating_add(inner.style);
         size.verbs = size.verbs.saturating_add(inner.verbs);
+        size.looks = size.looks.saturating_add(inner.looks);
         size.depth = size.depth.max(inner.depth);
         size.copies = size.copies.saturating_add(inner.copies);
         size.stops = size.stops.saturating_add(inner.stops);
@@ -731,6 +773,15 @@ fn finish(own: &Element<'_>, edges: &Edges, sizes: &[Expanded]) -> Expanded {
         size.clips = size.clips.saturating_add(inner.clips);
     }
     size.depth += 1;
+    size.looks = size
+        .looks
+        .saturating_add(weight(own).saturating_mul(size.nodes));
+    for &target in &edges.targets[edges.render..edges.expand] {
+        let inner = &sizes[target];
+        size.looks = size
+            .looks
+            .saturating_add(inner.nodes.saturating_mul(elements[target].above));
+    }
     let clipped = edges.expand > edges.render;
     let viewport = own.role == Role::Use
         || (own.node.tag_name().name() == "svg" && own.node.parent_element().is_some());

@@ -126,8 +126,12 @@ pub const MAX_SVG_STYLE_WORK: u64 = 3 << 25;
 /// Pieces the stroker may emit while `usvg` strokes every shape instance whole
 /// to measure it, bounded before conversion; and, separately, the pieces it
 /// emits while the render is priced by stroking what `resvg` will stroke,
-/// each stroke started only while its bound still fits. 67 ms each.
-pub const MAX_SVG_STROKE_VERBS: u64 = 1 << 21;
+/// each stroke started only while its bound still fits. 50 ms each.
+pub const MAX_SVG_STROKE_VERBS: u64 = 3 << 19;
+/// What `usvg` spends looking up inherited properties, in nanoseconds: each
+/// instance looks through every ancestor's attributes up to the root. 34 ms
+/// of the time envelope.
+pub const MAX_SVG_INHERIT_WORK: u64 = 1 << 25;
 /// How far from the origin, in multiples of its tolerance, the stroker may
 /// meet a curve or reach with its width. Past `2^17` tolerances an `f32` step
 /// is more than a sixty-fourth of one, and the stroker, splitting until its
@@ -168,6 +172,7 @@ const _: () = assert!(
         + MAX_SVG_STYLE_WORK
         + MAX_SVG_COLLECT_WORK
         + 2 * MAX_SVG_STROKE_VERBS * VERB_NS
+        + MAX_SVG_INHERIT_WORK
         + MAX_SVG_RENDER_WORK * RENDER_NS
         <= SVG_TIME_ENVELOPE
 );
@@ -207,12 +212,12 @@ pub enum SvgRefusal {
     ReferenceCycle,
     /// Past [`MAX_SVG_EXPANDED_NODES`], [`MAX_SVG_EXPANDED_BYTES`],
     /// [`MAX_SVG_STYLE_WORK`], [`MAX_SVG_STYLE_COPIES`], [`MAX_SVG_PAINT_BYTES`],
-    /// [`MAX_SVG_COLLECT_WORK`] or [`MAX_SVG_STROKE_VERBS`] once references are
-    /// expanded; a gradient past [`MAX_SVG_GRADIENT_STOPS`], a shape past
-    /// [`MAX_SVG_PATH_BYTES`] or an arc of more than 64 cubics; a curved shape,
-    /// stroke width or dash list in relative units; or, where anything is
-    /// stroked, a rotation or skew, or a curve or width past
-    /// [`MAX_SVG_STROKE_SPAN`].
+    /// [`MAX_SVG_COLLECT_WORK`], [`MAX_SVG_STROKE_VERBS`] or
+    /// [`MAX_SVG_INHERIT_WORK`] once references are expanded; a gradient past
+    /// [`MAX_SVG_GRADIENT_STOPS`], a shape past [`MAX_SVG_PATH_BYTES`] or an
+    /// arc of more than 64 cubics; a curved shape, stroke width or dash list in
+    /// relative units; or, where anything is stroked, a rotation or skew, or a
+    /// curve or width past [`MAX_SVG_STROKE_SPAN`].
     ExpansionTooLarge,
     /// Group layers past [`MAX_SVG_LAYER_DEPTH`], or a clip path that is
     /// itself clipped.
@@ -1439,6 +1444,109 @@ pub(crate) mod tests {
             Some(SvgRefusal::RenderTooCostly),
             "a dashed hairline far out is measured past the float precision of its tolerance"
         );
+    }
+
+    #[test]
+    fn inherited_lookups_through_deep_attribute_chains_are_charged() {
+        let names = [
+            "fill-opacity",
+            "stroke-opacity",
+            "clip-rule",
+            "fill-rule",
+            "color-rendering",
+            "direction",
+            "dominant-baseline",
+            "flood-color",
+            "flood-opacity",
+            "font-family",
+            "font-size",
+            "font-stretch",
+            "font-style",
+            "font-variant",
+            "font-weight",
+            "image-rendering",
+            "letter-spacing",
+            "lighting-color",
+            "shape-rendering",
+            "stop-color",
+            "stop-opacity",
+            "stroke-dashoffset",
+            "stroke-linecap",
+            "stroke-linejoin",
+            "stroke-miterlimit",
+            "text-anchor",
+            "text-rendering",
+            "word-spacing",
+            "writing-mode",
+            "baseline-shift",
+            "x",
+            "y",
+            "width",
+            "height",
+            "cx",
+            "cy",
+            "r",
+            "rx",
+            "ry",
+            "x1",
+            "y1",
+            "x2",
+            "y2",
+            "dx",
+            "dy",
+            "rotate",
+            "offset",
+            "fx",
+            "fy",
+            "k1",
+            "k2",
+            "k3",
+            "k4",
+            "z",
+            "order",
+            "radius",
+            "scale",
+            "seed",
+            "slope",
+            "specularExponent",
+            "stdDeviation",
+        ];
+        let chain = |depth: usize, attributes: usize, shapes: usize| {
+            let attributes: String = names[..attributes]
+                .iter()
+                .map(|name| format!(r#" {name}="1""#))
+                .collect();
+            document(&format!(
+                "{}{}{}",
+                format!("<g{attributes}>").repeat(depth),
+                r#"<rect width="1" height="1"/>"#.repeat(shapes),
+                "</g>".repeat(depth)
+            ))
+        };
+        let started = std::time::Instant::now();
+        assert_eq!(
+            refusal(chain(60, 60, 30_000).as_bytes()),
+            Some(SvgRefusal::ExpansionTooLarge)
+        );
+        assert!(started.elapsed() < std::time::Duration::from_secs(1));
+        let attributes: String = names.iter().map(|name| format!(r#" {name}="1""#)).collect();
+        let fanned = |uses: usize| {
+            document(&format!(
+                r##"<defs><g id="c"{attributes}>{}{}{}</g></defs>{}"##,
+                format!("<g{attributes}>").repeat(58),
+                r#"<rect width="1" height="1"/>"#.repeat(100),
+                "</g>".repeat(58),
+                r##"<use href="#c"/>"##.repeat(uses)
+            ))
+        };
+        let started = std::time::Instant::now();
+        assert_eq!(
+            refusal(fanned(190).as_bytes()),
+            Some(SvgRefusal::ExpansionTooLarge)
+        );
+        assert!(started.elapsed() < std::time::Duration::from_secs(1));
+        assert!(parse(fanned(2).as_bytes()).is_ok());
+        assert!(parse(chain(8, 10, 5_000).as_bytes()).is_ok());
     }
 
     pub(crate) fn opacity_nest(depth: usize) -> String {
