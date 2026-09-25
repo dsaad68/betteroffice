@@ -1485,12 +1485,15 @@ impl ImageBudget {
         Some((decoded.into_rgba8().into_raw(), size))
     }
 
-    /// The same, from an SVG the sandbox accepts, with its intrinsic size. The
-    /// charge covers the raster and every layer the render stacks on it. A
-    /// refusal is an undecodable image like any other, and carries nothing from
-    /// the document.
+    /// The same, from an SVG the sandbox accepts, with its intrinsic size,
+    /// supersampled only as far as the budget left allows. The charge covers
+    /// the raster and every layer the render stacks on it. A refusal is an
+    /// undecodable image like any other, and carries nothing from the document.
     fn rasterize_svg(&mut self, bytes: &[u8]) -> Option<(Vec<u8>, IntSize, (f32, f32))> {
-        let image = svg::parse(bytes).ok()?;
+        let left = (MAX_SLIDE_IMAGE_PIXELS.saturating_sub(self.pixels))
+            .min(MAX_SLIDE_IMAGE_BYTES.saturating_sub(self.bytes) / 8)
+            .min(MAX_IMAGE_PIXELS);
+        let image = svg::parse_within(bytes, left).ok()?;
         let pixels = image.pixels();
         self.charge(pixels, pixels.saturating_mul(8))?;
         let (data, size) = image.render().ok()?;

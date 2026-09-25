@@ -143,9 +143,10 @@ pub const MAX_SVG_OVERDRAW: u64 = 64;
 /// the time envelope. Past it the raster supersamples less, and a render still
 /// past it at its intrinsic size is refused.
 pub const MAX_SVG_RENDER_WORK: u64 = 4 * MAX_IMAGE_PIXELS;
-/// One rasterised SVG's longest side. The raster is outside the envelope: the
-/// caller charges it, with its layers, to the slide's image budget.
-pub const MAX_SVG_RASTER_DIM: u32 = 8_192;
+/// One rasterised SVG's longest side, and any layer's. The raster is outside
+/// the envelope: the caller charges it, with its layers, to the slide's image
+/// budget. Past 8191 `tiny-skia` draws a pixmap in tiles, every path per tile.
+pub const MAX_SVG_RASTER_DIM: u32 = 8_191;
 /// How far above its intrinsic size an SVG rasterises, so a picture frame
 /// larger than the document still has pixels to stretch.
 const SVG_SUPERSAMPLE: u32 = 4;
@@ -242,7 +243,13 @@ pub fn looks_like_svg(bytes: &[u8]) -> bool {
 
 /// Parses under the sandbox: no DTD, no external reference, an allowlisted and
 /// bounded document, and a render priced before it runs.
+#[cfg(any(test, feature = "fuzzing"))]
 pub fn parse(bytes: &[u8]) -> Result<SvgImage, SvgRefusal> {
+    parse_within(bytes, MAX_IMAGE_PIXELS)
+}
+
+/// [`parse`], supersampling only as far as `pixels` of raster and layers.
+pub(crate) fn parse_within(bytes: &[u8], pixels: u64) -> Result<SvgImage, SvgRefusal> {
     if bytes.len() > MAX_SVG_BYTES {
         return Err(SvgRefusal::DocumentTooLarge);
     }
@@ -266,7 +273,7 @@ pub fn parse(bytes: &[u8]) -> Result<SvgImage, SvgRefusal> {
     audit::audit(&document)?;
     let tree = guarded(|| usvg::Tree::from_xmltree(&document, &sandbox()))?
         .map_err(|_| SvgRefusal::Unparsable)?;
-    let (size, pixels) = raster(&tree)?;
+    let (size, pixels) = guarded(|| raster(&tree, pixels))??;
     Ok(SvgImage { tree, size, pixels })
 }
 
@@ -323,13 +330,13 @@ fn guarded<T>(step: impl FnOnce() -> T) -> Result<T, SvgRefusal> {
 }
 
 /// The raster an intrinsic size renders into and the pixels it allocates: the
-/// largest supersample whose output and layers fit [`MAX_IMAGE_PIXELS`] and
-/// whose painting fits [`MAX_SVG_RENDER_WORK`]. Sizes are priced first without
+/// largest supersample whose output and layers fit `budget` and whose
+/// painting fits [`MAX_SVG_RENDER_WORK`]. Sizes are priced first without
 /// stroking anything; the largest that fits and then the intrinsic one are
 /// priced again with their strokes drawn, out of [`MAX_SVG_STROKE_VERBS`]
 /// pieces split between the two. At the intrinsic size only the painting
 /// refuses; a raster too large for the budget is the caller's to skip.
-fn raster(tree: &usvg::Tree) -> Result<(IntSize, u64), SvgRefusal> {
+fn raster(tree: &usvg::Tree, budget: u64) -> Result<(IntSize, u64), SvgRefusal> {
     let width = tree.size().width();
     let height = tree.size().height();
     if !width.is_finite() || !height.is_finite() || width <= 0.0 || height <= 0.0 {
@@ -350,7 +357,7 @@ fn raster(tree: &usvg::Tree) -> Result<(IntSize, u64), SvgRefusal> {
     }
     let intrinsic = sizes[sizes.len() - 1];
     let fits = |cost: &cost::Cost, size: IntSize| {
-        cost.work <= MAX_SVG_RENDER_WORK && (cost.pixels <= MAX_IMAGE_PIXELS || size == intrinsic)
+        cost.work <= MAX_SVG_RENDER_WORK && (cost.pixels <= budget || size == intrinsic)
     };
     let mut first = intrinsic;
     for &size in &sizes {
@@ -404,7 +411,39 @@ pub(crate) mod tests {
             dim = MAX_SVG_RASTER_DIM
         );
         let size = parse(source.as_bytes()).expect("parse").size;
-        assert_eq!((size.width(), size.height()), (8192, 8192));
+        assert_eq!((size.width(), size.height()), (8191, 8191));
+        let past = source.replace("8191", "8192");
+        assert_eq!(refusal(past.as_bytes()), Some(SvgRefusal::RasterTooLarge));
+    }
+
+    #[test]
+    fn a_layer_wider_than_a_tile_steps_the_supersample_down() {
+        let layer = |width: u32| {
+            format!(
+                r##"<svg xmlns="http://www.w3.org/2000/svg" width="4000" height="10"><g opacity="0.5"><rect x="-{width}" width="{}" height="10" fill="#000"/></g></svg>"##,
+                2 * width + 4000
+            )
+        };
+        let wide = parse(layer(2_000).as_bytes()).expect("parse").size;
+        assert_eq!(wide.width(), 4_000, "an 8000-pixel layer fits one tile");
+        assert_eq!(
+            refusal(layer(4_100).as_bytes()),
+            Some(SvgRefusal::RenderTooCostly),
+            "a 12200-pixel layer would be drawn in tiles"
+        );
+    }
+
+    #[test]
+    fn a_budget_steps_the_supersample_down_before_the_caller_refuses() {
+        let source = document(r##"<rect width="96" height="96" fill="#000"/>"##);
+        let image = parse_within(source.as_bytes(), 96 * 96 * 4).expect("parse");
+        assert_eq!((image.size.width(), image.pixels()), (192, 192 * 192));
+        let image = parse_within(source.as_bytes(), 1).expect("parse");
+        assert_eq!(
+            image.size.width(),
+            96,
+            "the intrinsic size is the caller's to skip"
+        );
     }
 
     #[test]

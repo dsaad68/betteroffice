@@ -6,8 +6,8 @@ use tiny_skia::{IntSize, PathSegment, PathStroker, Point, Rect, Transform};
 
 use super::geometry::{self, OUTLINE_VERB_BYTES, Outline};
 use super::{
-    MAX_SVG_EXPANDED_NODES, MAX_SVG_LAYER_DEPTH, MAX_SVG_OVERDRAW, MAX_SVG_RENDER_WORK,
-    MAX_SVG_STROKE_SPAN, SVG_TRANSIENT_BYTES, SvgRefusal,
+    MAX_SVG_EXPANDED_NODES, MAX_SVG_LAYER_DEPTH, MAX_SVG_OVERDRAW, MAX_SVG_RASTER_DIM,
+    MAX_SVG_RENDER_WORK, MAX_SVG_STROKE_SPAN, SVG_TRANSIENT_BYTES, SvgRefusal,
 };
 
 /// Work units, each about one painted pixel, per drawn path before any pixel.
@@ -198,6 +198,10 @@ pub(super) fn measure(
                         let Some(layer) = layer(bounds, frame.surface, width, height) else {
                             continue;
                         };
+                        let side = f64::from(MAX_SVG_RASTER_DIM);
+                        if layer.right - layer.left > side || layer.bottom - layer.top > side {
+                            tally.exceed();
+                        }
                         let pixels = layer.pixels();
                         let masks = u64::from(group.clip_path().is_some());
                         tally.work += pixels * (1 + 2 * masks) as f64;
