@@ -6,13 +6,13 @@ use ooxml_drawingml::{
     ColorValue, GeometryPathCommand, GradientFill, LineEnd, ResolvedCellStyle, ShapeEffects,
     ShapeFill, ShapeOutline, ShapeStyle, StyleReference, TableCellBorder,
     TableCellBorders as StyleCellBorders, TableCellPosition, TableCellStyle, TableStyle,
-    TableStyleFlags, Theme, ThemeFormatScheme, normalize_table_column_widths,
+    TableStyleFlags, Theme, ThemeFormatScheme, get_theme_color, normalize_table_column_widths,
     preset_geometry_to_path, resolve_color_value_to_hex_with_theme,
     resolve_color_value_to_rgba_hex, resolve_theme_font_ref, style_fill, style_outline,
 };
 use ooxml_text::{
     CompatFlags, FontId, FontStore, ShapeFeature, WORD_SMALL_CAPS_ADVANCE_SCALE,
-    break_opportunities, shape, single_line_box, uppercase_for_language,
+    presentation_break_opportunities, shape, single_line_box, uppercase_for_language,
 };
 use pptx_edit::{
     DeckSnapshot, ShapeKind, ShapeSnapshot, SlideScope, SlideSnapshot, StorySnapshot, TextStyle,
@@ -31,9 +31,9 @@ use crate::chart::{ChartFrame, ChartText, chart_primitive};
 use crate::family_metrics::{FamilyMetrics, family_advance, family_metrics};
 use crate::metafile::{MetafileDrawing, decode as decode_metafile, is_metafile};
 use crate::{
-    CONTRACT_VERSION, CaretStop, GradientStop, GradientType, ImageCrop, ImageEffect, Paint,
-    PositionedGlyph, PositionedTextLine, PositionedTextRun, Primitive, Shadow, Stroke, StrokeEnd,
-    SurfaceDisplayList, TextAlign, TextAnchor, TextParagraph, TextRun, Transform,
+    CONTRACT_VERSION, CaretStop, GradientStop, GradientType, ImageCrop, ImageEffect, ImageTile,
+    Paint, PositionedGlyph, PositionedTextLine, PositionedTextRun, Primitive, Shadow, Stroke,
+    StrokeEnd, SurfaceDisplayList, TextAlign, TextAnchor, TextParagraph, TextRun, Transform,
 };
 
 const EMU_PER_CSS_PIXEL: f32 = 9_525.0;
@@ -341,6 +341,9 @@ impl SlideRenderer {
         if let Some(picture) = background_picture
             && let Some(asset_id) = picture.media_part_path.clone()
         {
+            let background_dpi = builder
+                .media_part(&asset_id)
+                .and_then(|part| image_dpi(&part.bytes));
             builder.primitives.push(Primitive::Image {
                 geometry_fallback: false,
                 object_id: 0,
@@ -353,6 +356,7 @@ impl SlideRenderer {
                 asset_id: Some(asset_id),
                 effects: Vec::new(),
                 crop: picture_fill_crop(picture),
+                tile: picture_fill_tile(picture, background_dpi),
                 path: None,
                 stroke: None,
                 shadow: None,
@@ -801,6 +805,8 @@ impl<'a> LayoutBuilder<'a> {
                 &stable_id,
                 rect,
                 transform,
+                space,
+                geometry_text_inset(original, rect),
                 content,
                 body_cascade,
             )?)
@@ -955,6 +961,8 @@ impl<'a> LayoutBuilder<'a> {
                 stable_id,
                 rect,
                 transform,
+                space,
+                geometry_text_inset(Some(shape), rect),
                 content,
                 BodyCascade {
                     primary: Some(body),
@@ -1041,6 +1049,7 @@ impl<'a> LayoutBuilder<'a> {
             asset_id: media_part_path.map(str::to_owned),
             effects: image_effects(effects, self.theme),
             crop: crop.map(image_crop).unwrap_or_default(),
+            tile: None,
             path: mask.path,
             geometry_fallback: mask.geometry_fallback,
             stroke: outline,
@@ -1173,7 +1182,12 @@ impl<'a> LayoutBuilder<'a> {
                     self.charge_shape()?;
                 }
                 let picture = picture.filter(|_| has_fill);
-                self.primitives.push(picture_filled(primitive, picture));
+                let dpi = picture
+                    .and_then(|fill| fill.media_part_path.as_deref())
+                    .and_then(|path| self.media_part(path))
+                    .and_then(|part| image_dpi(&part.bytes));
+                self.primitives
+                    .push(picture_filled(primitive, picture, dpi));
             }
             return Ok(());
         }
@@ -1202,7 +1216,12 @@ impl<'a> LayoutBuilder<'a> {
                 }
             }
             let picture = picture.filter(|_| !custom.no_fill);
-            self.primitives.push(picture_filled(primitive, picture));
+            let dpi = picture
+                .and_then(|fill| fill.media_part_path.as_deref())
+                .and_then(|path| self.media_part(path))
+                .and_then(|part| image_dpi(&part.bytes));
+            self.primitives
+                .push(picture_filled(primitive, picture, dpi));
         }
         Ok(())
     }
@@ -1284,7 +1303,39 @@ impl<'a> LayoutBuilder<'a> {
             return Ok(());
         }
         if let Some(GraphicFrameData::Table(table)) = graphic {
-            return self.render_table(object_id, shape_id, name, rect, transform, table, stories);
+            return self.render_table(
+                object_id,
+                shape_id,
+                name,
+                rect,
+                transform,
+                frame_space,
+                table,
+                stories,
+            );
+        }
+        if let Some(GraphicFrameData::Diagram {
+            drawing_part_path: Some(part_path),
+            ..
+        }) = graphic
+            && let Some(drawing) = self
+                .package
+                .diagram_drawings
+                .iter()
+                .find(|drawing| drawing.part_path == *part_path)
+        {
+            // The drawing's shapes are written in the frame's own coordinates,
+            // at the slide's scale, so they only need the frame's origin.
+            let space = Space {
+                origin_x: rect.x,
+                origin_y: rect.y,
+                scale_x: frame_space.scale_x,
+                scale_y: frame_space.scale_y,
+            };
+            for (index, shape) in drawing.shapes.iter().enumerate() {
+                self.render_parsed_shape(shape, &format!("{shape_id}:{index}"), space)?;
+            }
+            return Ok(());
         }
         self.primitives.push(Primitive::Placeholder {
             object_id,
@@ -1310,6 +1361,7 @@ impl<'a> LayoutBuilder<'a> {
         name: &str,
         rect: PxRect,
         transform: Transform,
+        space: Space,
         table: &Table,
         stories: &[StorySnapshot],
     ) -> Result<(), RenderError> {
@@ -1459,6 +1511,8 @@ impl<'a> LayoutBuilder<'a> {
                 shape_id,
                 plan.rect(&columns, &rows),
                 Transform::default(),
+                space,
+                (0.0, 0.0),
                 plan.content.clone(),
                 cell_cascade(plan.text, &plan.inherited),
             )?;
@@ -1510,7 +1564,7 @@ impl<'a> LayoutBuilder<'a> {
             w: (width - emu_to_px(left + right)).max(1.0),
             h: 0.0,
         };
-        let text = self.layout_text(&resolved, rect, 1.0, false)?;
+        let text = self.layout_text(&resolved, rect, 1.0, false, true)?;
         Ok(text.total_height + emu_to_px(top + bottom))
     }
 
@@ -1537,12 +1591,15 @@ impl<'a> LayoutBuilder<'a> {
             .map(|part| &part.chart)
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn render_text_box(
         &mut self,
         object_id: u32,
         shape_id: &str,
         rect: PxRect,
         transform: Transform,
+        space: Space,
+        preset_inset: (f32, f32),
         content: TextContent,
         cascade: BodyCascade<'_>,
     ) -> Result<TextHit, RenderError> {
@@ -1557,15 +1614,17 @@ impl<'a> LayoutBuilder<'a> {
         let top = cascade.inset_top().unwrap_or(DEFAULT_INSET_VERTICAL_EMU);
         let bottom = cascade.inset_bottom().unwrap_or(DEFAULT_INSET_VERTICAL_EMU);
         let [left, top, right, bottom] = flow.layout_insets([left, top, right, bottom]);
+        let (preset_x, preset_y) = preset_inset;
         let content_rect = PxRect {
-            x: text_rect.x + emu_to_px(left),
-            y: text_rect.y + emu_to_px(top),
-            w: (text_rect.w - emu_to_px(left + right)).max(1.0),
-            h: (text_rect.h - emu_to_px(top + bottom)).max(1.0),
+            x: text_rect.x + emu_to_px(left) + preset_x,
+            y: text_rect.y + emu_to_px(top) + preset_y,
+            w: (text_rect.w - emu_to_px(left + right) - preset_x * 2.0).max(1.0),
+            h: (text_rect.h - emu_to_px(top + bottom) - preset_y * 2.0).max(1.0),
         };
         let scale = autofit_font_scale(cascade.autofit());
         let stacked = flow == TextFlow::Stacked;
-        let mut laid_out = self.layout_text(&resolved, content_rect, scale, stacked)?;
+        let mut laid_out =
+            self.layout_text(&resolved, content_rect, scale, stacked, cascade.wraps())?;
         self.line_count += laid_out.lines.len();
         if self.line_count > MAX_TEXT_LINES {
             return Err(RenderError::ResourceLimit(format!(
@@ -1616,9 +1675,21 @@ impl<'a> LayoutBuilder<'a> {
             })
             .collect();
         let overflow = laid_out.total_height > content_rect.h && !cascade.clips_overflow();
+        let text_shadow = cascade.text_shadow().and_then(|effects| {
+            shadow(
+                effects,
+                self.theme,
+                space,
+                text_rect,
+                text_transform.rotation_deg,
+                text_transform.flip_h,
+                text_transform.flip_v,
+            )
+        });
         let story_id = content.story_id;
         let lines = laid_out.lines;
         self.primitives.push(Primitive::TextBox {
+            text_shadow,
             object_id,
             shape_id: Some(shape_id.to_owned()),
             story_id: Some(story_id.clone()),
@@ -1648,8 +1719,9 @@ impl<'a> LayoutBuilder<'a> {
         rect: PxRect,
         scale: f32,
         stacked: bool,
+        wraps: bool,
     ) -> Result<LayoutText, RenderError> {
-        let key = text_layout_key(content, rect, scale, stacked);
+        let key = text_layout_key(content, rect, scale, stacked, wraps);
         if let Some(text) = self
             .renderer
             .text_layouts
@@ -1659,7 +1731,7 @@ impl<'a> LayoutBuilder<'a> {
         {
             return Ok(text);
         }
-        let laid_out = layout_content(&self.renderer.fonts, content, rect, scale, stacked)?;
+        let laid_out = layout_content(&self.renderer.fonts, content, rect, scale, stacked, wraps)?;
         if let Ok(mut cache) = self.renderer.text_layouts.lock() {
             cache.insert(key, &laid_out);
         }
@@ -1906,6 +1978,16 @@ struct BodyCascade<'a> {
 }
 
 impl BodyCascade<'_> {
+    /// The shadow the body's text is drawn with. PowerPoint keeps one per run;
+    /// the first any level declares stands for the whole box, because a body
+    /// that shadows one run shadows them all.
+    fn text_shadow(&self) -> Option<&ShapeEffects> {
+        [self.primary, self.layout, self.master]
+            .into_iter()
+            .flatten()
+            .find_map(body_text_effects)
+    }
+
     fn clips_overflow(&self) -> bool {
         let vertical = cascade_value(self.primary, self.layout, self.master, |body| {
             body.vertical_overflow
@@ -1931,6 +2013,19 @@ impl BodyCascade<'_> {
             .and_then(|body| body.vertical.as_deref())
             .or_else(|| self.layout.and_then(|body| body.vertical.as_deref()))
             .or_else(|| self.master.and_then(|body| body.vertical.as_deref()))
+    }
+
+    fn space_first_last_para(&self) -> bool {
+        cascade_value(self.primary, self.layout, self.master, |body| {
+            body.space_first_last_para
+        })
+        .unwrap_or(false)
+    }
+
+    /// `a:bodyPr/@wrap="none"`: every paragraph is one line, however far it
+    /// runs past the shape.
+    fn wraps(&self) -> bool {
+        cascade_value(self.primary, self.layout, self.master, |body| body.wrap).unwrap_or(true)
     }
 
     fn autofit(&self) -> Option<&TextAutofit> {
@@ -2120,6 +2215,8 @@ fn content_from_body(
 
 struct ResolvedContent {
     paragraphs: Vec<ResolvedParagraph>,
+    /// `a:bodyPr/@spcFirstLastPara`: the outer paragraphs keep their spacing.
+    space_first_last_para: bool,
 }
 
 struct ResolvedParagraph {
@@ -2275,7 +2372,10 @@ fn resolve_content(
         });
         story_offset = story_offset.saturating_add(1);
     }
-    Ok(ResolvedContent { paragraphs })
+    Ok(ResolvedContent {
+        paragraphs,
+        space_first_last_para: cascade.space_first_last_para(),
+    })
 }
 
 /// Cases one run for drawing. `a:rPr/@cap` is a display property: the stored
@@ -2649,6 +2749,7 @@ fn chart_text_primitive(
     };
     let width = run.width;
     Ok(Primitive::TextBox {
+        text_shadow: None,
         object_id: text.object_id,
         shape_id: Some(shape_id.to_owned()),
         story_id: None,
@@ -2770,9 +2871,18 @@ fn text_layout_bytes(lines: &[PositionedTextLine]) -> usize {
 }
 
 /// Encodes every argument `layout_content` reads.
-fn text_layout_key(content: &ResolvedContent, rect: PxRect, scale: f32, stacked: bool) -> Vec<u8> {
-    let text_len: usize = content
-        .paragraphs
+fn text_layout_key(
+    content: &ResolvedContent,
+    rect: PxRect,
+    scale: f32,
+    stacked: bool,
+    wraps: bool,
+) -> Vec<u8> {
+    let ResolvedContent {
+        paragraphs,
+        space_first_last_para,
+    } = content;
+    let text_len: usize = paragraphs
         .iter()
         .flat_map(|paragraph| &paragraph.runs)
         .map(|run| run.text.len())
@@ -2783,36 +2893,60 @@ fn text_layout_key(content: &ResolvedContent, rect: PxRect, scale: f32, stacked:
     key_f32(&mut key, rect.w);
     key_f32(&mut key, scale);
     key.push(u8::from(stacked));
-    key_u32(&mut key, content.paragraphs.len() as u32);
-    for paragraph in &content.paragraphs {
-        key.push(match paragraph.align {
+    key.push(u8::from(wraps));
+    key.push(u8::from(*space_first_last_para));
+    key_u32(&mut key, paragraphs.len() as u32);
+    for paragraph in paragraphs {
+        let ResolvedParagraph {
+            align,
+            justify,
+            level,
+            margin_left_px,
+            margin_right_px,
+            line_spacing,
+            space_before,
+            space_after,
+            line_space_reduction,
+            indent_px,
+            tab_stops,
+            default_tab_px,
+            marker,
+            bullet_style,
+            runs,
+        } = paragraph;
+        key.push(match align {
             TextAlign::Left => 0,
             TextAlign::Center => 1,
             TextAlign::Right => 2,
             TextAlign::Justify => 3,
         });
-        key.push(u8::from(paragraph.justify));
-        key_u32(&mut key, paragraph.level);
-        key_f32(&mut key, paragraph.margin_left_px);
-        key_f32(&mut key, paragraph.margin_right_px);
-        key_f32(&mut key, paragraph.indent_px);
-        key_f32(&mut key, paragraph.line_space_reduction);
-        key_spacing(&mut key, &paragraph.line_spacing);
-        key_spacing(&mut key, &paragraph.space_before);
-        key_spacing(&mut key, &paragraph.space_after);
-        key_opt_str(&mut key, &paragraph.marker);
-        match &paragraph.bullet_style {
+        key.push(u8::from(*justify));
+        key_u32(&mut key, *level);
+        key_f32(&mut key, *margin_left_px);
+        key_f32(&mut key, *margin_right_px);
+        key_f32(&mut key, *indent_px);
+        key_f32(&mut key, *line_space_reduction);
+        key_spacing(&mut key, line_spacing);
+        key_spacing(&mut key, space_before);
+        key_spacing(&mut key, space_after);
+        key_u32(&mut key, tab_stops.len() as u32);
+        for stop in tab_stops {
+            key_f32(&mut key, *stop);
+        }
+        key_f32(&mut key, *default_tab_px);
+        key_opt_str(&mut key, marker);
+        match bullet_style {
             Some(style) => {
                 key.push(1);
                 key_style(&mut key, style);
             }
             None => key.push(0),
         }
-        key_u32(&mut key, paragraph.runs.len() as u32);
-        for run in &paragraph.runs {
-            key_u32(&mut key, run.start);
-            key_str(&mut key, &run.text);
-            key_style(&mut key, &run.style);
+        key_u32(&mut key, runs.len() as u32);
+        for ResolvedRun { text, start, style } in runs {
+            key_u32(&mut key, *start);
+            key_str(&mut key, text);
+            key_style(&mut key, style);
         }
     }
     key
@@ -2860,16 +2994,45 @@ fn key_spacing(key: &mut Vec<u8>, spacing: &Option<LineSpacing>) {
 }
 
 fn key_style(key: &mut Vec<u8>, style: &ResolvedStyle) {
-    key_u32(key, style.face.id.to_u32());
-    key_str(key, &style.face.requested_family);
-    key_str(key, &style.family);
-    key_f32(key, style.font_size_pt);
-    key_f32(key, style.spacing_pt);
-    key_f32(key, style.baseline_shift_px);
-    key.push(u8::from(style.bold));
-    key.push(u8::from(style.italic));
-    key.push(u8::from(style.underline));
-    key_str(key, &style.color);
+    let ResolvedStyle {
+        face:
+            FontFace {
+                id,
+                family: face_family,
+                requested_family,
+                widths,
+                line,
+            },
+        family,
+        font_size_pt,
+        line_font_size_pt,
+        spacing_pt,
+        baseline_shift_px,
+        bold,
+        italic,
+        underline,
+        color,
+        caps,
+    } = style;
+    key_u32(key, id.to_u32());
+    key_str(key, face_family);
+    key_str(key, requested_family);
+    key.push(u8::from(widths.is_some()));
+    key.push(u8::from(line.is_some()));
+    key_str(key, family);
+    key_f32(key, *font_size_pt);
+    key_f32(key, *line_font_size_pt);
+    key_f32(key, *spacing_pt);
+    key_f32(key, *baseline_shift_px);
+    key.push(u8::from(*bold));
+    key.push(u8::from(*italic));
+    key.push(u8::from(*underline));
+    key_str(key, color);
+    key.push(match caps {
+        TextCaps::None => 0,
+        TextCaps::Small => 1,
+        TextCaps::All => 2,
+    });
 }
 
 fn layout_content(
@@ -2878,6 +3041,7 @@ fn layout_content(
     rect: PxRect,
     scale: f32,
     stacked: bool,
+    wraps: bool,
 ) -> Result<LayoutText, RenderError> {
     let mut lines = Vec::new();
     let mut y = rect.y;
@@ -2886,6 +3050,8 @@ fn layout_content(
         if let Some(previous) = previous {
             y += spacing_px(previous.space_after, previous, scale)
                 + spacing_px(paragraph.space_before, paragraph, scale);
+        } else if content.space_first_last_para {
+            y += spacing_px(paragraph.space_before, paragraph, scale);
         }
         previous = Some(paragraph);
         let paragraph_x = rect.x + paragraph.margin_left_px.max(0.0);
@@ -2900,11 +3066,17 @@ fn layout_content(
             paragraph_width,
             scale,
             stacked,
+            wraps,
         )?;
         if let Some(last) = paragraph_lines.last() {
             y = last.y + last.height;
         }
         lines.append(&mut paragraph_lines);
+    }
+    if content.space_first_last_para
+        && let Some(last) = previous
+    {
+        y += spacing_px(last.space_after, last, scale);
     }
     Ok(LayoutText {
         total_height: (y - rect.y).max(0.0),
@@ -2948,7 +3120,7 @@ fn resolve_default_tab(size: Option<i64>) -> f32 {
     }
 }
 
-/// Declared stops in pixels, ascending, plus the implicit stop a hanging indent
+/// Declared `a:tabLst` stops, plus the implicit stop a hanging indent
 /// puts at the paragraph's left margin — the one a leading tab lands on.
 fn resolve_tab_stops(stops: Option<&[i64]>, margin_left: i64, indent: i64) -> Vec<f32> {
     let mut resolved = stops
@@ -2968,15 +3140,20 @@ fn resolve_tab_stops(stops: Option<&[i64]>, margin_left: i64, indent: i64) -> Ve
     resolved
 }
 
-/// How far left of the margin PowerPoint starts the paragraph's first line. A
-/// marker owns that space here, so only an unmarked hanging indent has any, and
-/// only the first tab of the first line is measured against it.
-fn hanging_space(paragraph: &ResolvedParagraph) -> f32 {
+/// `a:pPr/@indent` as the first line's own offset from the paragraph's left
+/// margin. A marker takes the indent instead — it is drawn there and the text
+/// still starts at the margin — so only an unmarked paragraph moves, and never
+/// past the left edge of the text box.
+fn first_line_indent(paragraph: &ResolvedParagraph) -> f32 {
     if paragraph.marker.is_some() || !paragraph.indent_px.is_finite() {
         return 0.0;
     }
-    (-paragraph.indent_px).clamp(0.0, paragraph.margin_left_px.max(0.0))
+    paragraph.indent_px.max(-paragraph.margin_left_px.max(0.0))
 }
+
+/// The width a `wrap="none"` body lays its lines against: wide enough that no
+/// paragraph in a slide-sized shape reaches it, so each one stays on one line.
+const NO_WRAP_WIDTH_PX: f32 = 1.0e6;
 
 /// A stop the pen already sits on does not hold the tab.
 const TAB_EPSILON_PX: f32 = 0.01;
@@ -3010,6 +3187,7 @@ fn tab_advance(offset: f32, pen: f32, stops: &[f32], default_px: f32, limit: f32
     (next - pen).clamp(0.0, limit)
 }
 
+#[allow(clippy::too_many_arguments)]
 fn layout_paragraph(
     fonts: &FontStore,
     paragraph: &ResolvedParagraph,
@@ -3018,6 +3196,7 @@ fn layout_paragraph(
     width: f32,
     scale: f32,
     stacked: bool,
+    wraps: bool,
 ) -> Result<Vec<PositionedTextLine>, RenderError> {
     let mut clusters = shape_paragraph(fonts, paragraph, scale)?;
     if clusters.is_empty() {
@@ -3051,9 +3230,9 @@ fn layout_paragraph(
     } else {
         wrap_clusters(
             &mut clusters,
-            width,
+            if wraps { width } else { NO_WRAP_WIDTH_PX },
             paragraph.margin_left_px.max(0.0),
-            hanging_space(paragraph),
+            first_line_indent(paragraph),
             &paragraph.tab_stops,
             paragraph.default_tab_px,
         )
@@ -3063,7 +3242,7 @@ fn layout_paragraph(
     let mut line_y = y;
     for (line_index, (start, end)) in ranges.into_iter().enumerate() {
         let slice = &clusters[start..end];
-        let natural_width = line_advance(slice);
+        let natural_width = line_advance(aligned_slice(slice));
         let stretchable = paragraph.justify
             && line_index + 1 < line_count
             && !slice.last().is_some_and(|cluster| cluster.mandatory);
@@ -3095,10 +3274,17 @@ fn layout_paragraph(
             })
             .collect::<Vec<_>>();
         let line_width = advances.iter().sum::<f32>() - trailing_tracking(&slice[..visible]);
+        let indent = if line_index == 0 {
+            first_line_indent(paragraph)
+        } else {
+            0.0
+        };
+        let line_start = x + indent;
+        let line_room = width - indent;
         let line_x = match paragraph.align {
-            TextAlign::Center => x + ((width - natural_width) / 2.0).max(0.0),
-            TextAlign::Right => x + (width - natural_width).max(0.0),
-            TextAlign::Left | TextAlign::Justify => x,
+            TextAlign::Center => line_start + ((line_room - natural_width) / 2.0).max(0.0),
+            TextAlign::Right => line_start + (line_room - natural_width).max(0.0),
+            TextAlign::Left | TextAlign::Justify => line_start,
         };
         let (natural, extents) = clusters_line_box(fonts, slice, scale)?;
         let line_box = shifted_line_box(
@@ -3237,7 +3423,7 @@ fn shape_paragraph(
         .iter()
         .map(|run| run.text.as_str())
         .collect::<String>();
-    let breaks = break_opportunities(&full_text)
+    let breaks = presentation_break_opportunities(&full_text)
         .into_iter()
         .map(|value| (value.byte_index, value.mandatory))
         .collect::<HashMap<_, _>>();
@@ -3392,6 +3578,17 @@ fn add_shaped_segment(
     Ok(())
 }
 
+/// The part of a line that centring and right alignment measure: a space at
+/// the end of a wrapped line hangs past the margin, so PowerPoint does not
+/// count it when it places the line.
+fn aligned_slice(clusters: &[ShapedCluster]) -> &[ShapedCluster] {
+    let end = clusters
+        .iter()
+        .rposition(|cluster| !cluster.text.chars().all(char::is_whitespace))
+        .map_or(0, |index| index + 1);
+    &clusters[..end]
+}
+
 /// Measures a line without its trailing tracking gap.
 fn line_advance(clusters: &[ShapedCluster]) -> f32 {
     clusters.iter().map(|cluster| cluster.width).sum::<f32>() - trailing_tracking(clusters)
@@ -3412,7 +3609,7 @@ fn wrap_clusters(
     clusters: &mut [ShapedCluster],
     width: f32,
     left_offset: f32,
-    hanging: f32,
+    first_line_indent: f32,
     stops: &[f32],
     default_tab_px: f32,
 ) -> Vec<(usize, usize)> {
@@ -3420,25 +3617,30 @@ fn wrap_clusters(
     let mut start = 0;
     let mut line_index = 0;
     while start < clusters.len() {
+        let indent = if line_index == 0 {
+            first_line_indent
+        } else {
+            0.0
+        };
+        let width = (width - indent).max(1.0);
+        let left_offset = left_offset + indent;
         let mut cursor = start;
         let mut line_width = 0.0;
-        let mut tabs_taken = 0_usize;
         let mut last_break = None;
         let mut end = clusters.len();
         while cursor < clusters.len() {
             if clusters[cursor].tab {
                 let pen = left_offset + line_width;
-                let measured = if line_index == 0 && tabs_taken == 0 {
-                    pen - hanging
-                } else {
-                    pen
-                };
                 clusters[cursor].width =
-                    tab_advance(measured, pen, stops, default_tab_px, width - line_width);
-                tabs_taken += 1;
+                    tab_advance(pen, pen, stops, default_tab_px, width - line_width);
             }
             let cluster = &clusters[cursor];
+            // A space that lands at the end of a line hangs past the edge
+            // instead of pushing the word before it down, which is what lets
+            // PowerPoint fit a word we were breaking one early (#797).
             if cluster.text != "\n"
+                && !cluster.tab
+                && !cluster.text.chars().all(char::is_whitespace)
                 && line_width + cluster.width - cluster.tracking > width
                 && cursor > start
             {
@@ -3466,6 +3668,16 @@ fn wrap_clusters(
         ranges.push((start, end));
         start = end;
         line_index += 1;
+    }
+    // A paragraph ending in `a:br` keeps the empty line the break opened, the
+    // way PowerPoint does; a centred or bottom-anchored body is half a line
+    // out without it (#797).
+    if clusters.last().is_some_and(|cluster| cluster.text == "\n")
+        && let Some(last) = ranges.last_mut()
+        && last.1 - last.0 > 1
+    {
+        last.1 -= 1;
+        ranges.push((clusters.len() - 1, clusters.len()));
     }
     ranges
 }
@@ -3938,13 +4150,20 @@ fn find_placeholder<'a>(nodes: &'a [ShapeNode], target: &Placeholder) -> Option<
     None
 }
 
+/// A slide holds one of each of these, so they inherit by type: PowerPoint
+/// writes a slide number as `idx="12"` over a master's `idx="4"` and still
+/// draws it where the master put it (#797).
+const SINGLETON_PLACEHOLDERS: [&str; 5] = ["title", "sldNum", "dt", "ftr", "hdr"];
+
 fn placeholders_match(left: &Placeholder, right: &Placeholder) -> bool {
+    let left_type = normalize_placeholder_type(left.placeholder_type.as_deref());
+    let right_type = normalize_placeholder_type(right.placeholder_type.as_deref());
+    if SINGLETON_PLACEHOLDERS.contains(&left_type) || SINGLETON_PLACEHOLDERS.contains(&right_type) {
+        return left_type == right_type;
+    }
     match (left.index, right.index) {
         (Some(left), Some(right)) => left == right,
-        _ => {
-            normalize_placeholder_type(left.placeholder_type.as_deref())
-                == normalize_placeholder_type(right.placeholder_type.as_deref())
-        }
+        _ => left_type == right_type,
     }
 }
 
@@ -4156,6 +4375,26 @@ fn node_group_transform(node: &ShapeNode) -> Option<&ShapeTransform> {
     }
 }
 
+/// The first `a:effectLst` any of a body's runs or level defaults declares.
+fn body_text_effects(body: &TextBody) -> Option<&ShapeEffects> {
+    let paragraph_runs = body.paragraphs.iter().flat_map(|paragraph| {
+        paragraph
+            .runs
+            .iter()
+            .map(|run| &run.properties)
+            .chain(paragraph.properties.default_run.as_ref())
+    });
+    let level_defaults = body
+        .list_style
+        .iter()
+        .chain(body.default_list_style.as_deref())
+        .filter_map(|properties| properties.default_run.as_ref());
+    paragraph_runs
+        .chain(level_defaults)
+        .find_map(|properties| properties.effects.as_ref())
+        .filter(|effects| effects.outer_shadow.is_some())
+}
+
 fn master_style<'a>(
     master: &'a SlideMaster,
     placeholder: Option<&Placeholder>,
@@ -4255,14 +4494,21 @@ fn merge_run_properties(target: &mut RunProperties, source: &RunProperties) {
     }
 }
 
+/// A run that carries an `a:hlinkClick` is drawn in the theme's `hlink` colour
+/// and underlined, over whatever the placeholder would otherwise give it.
 fn style_from_properties(properties: &RunProperties, theme: &Theme) -> TextStyle {
+    let linked = properties.hyperlink_relationship_id.is_some();
     TextStyle {
         bold: properties.bold,
         italic: properties.italic,
         font_size_pt: properties.font_size_pt,
-        color: resolve_color_value_to_hex_with_theme(properties.color.as_ref(), Some(theme)),
+        color: resolve_color_value_to_hex_with_theme(properties.color.as_ref(), Some(theme))
+            .or_else(|| linked.then(|| format!("#{}", get_theme_color(Some(theme), "hlink")))),
         font_family: properties.font_family.clone(),
-        underline: properties.underline.clone(),
+        underline: properties
+            .underline
+            .clone()
+            .or_else(|| linked.then(|| "sng".to_owned())),
         spacing_pt: properties.spacing_pt,
         baseline_pct: properties.baseline_pct,
         caps: properties.caps,
@@ -4316,6 +4562,9 @@ fn image_effects(effects: &[BlipEffect], theme: &Theme) -> Vec<ImageEffect> {
                 threshold: (*threshold as f32).clamp(0.0, 1.0),
             }),
             BlipEffect::Grayscale => Some(ImageEffect::Grayscale),
+            BlipEffect::Alpha { amount } => Some(ImageEffect::Alpha {
+                amount: *amount as f32,
+            }),
             BlipEffect::Luminance {
                 brightness,
                 contrast,
@@ -4593,7 +4842,11 @@ fn picture_fill<'a>(nodes: &[Option<&'a ShapeNode>]) -> Option<&'a PictureFill> 
 }
 
 /// Redraws a picture-filled shape as an image masked by the shape's own outline.
-fn picture_filled(primitive: Primitive, picture: Option<&PictureFill>) -> Primitive {
+fn picture_filled(
+    primitive: Primitive,
+    picture: Option<&PictureFill>,
+    dpi: Option<f32>,
+) -> Primitive {
     let Some(picture) = picture else {
         return primitive;
     };
@@ -4624,6 +4877,7 @@ fn picture_filled(primitive: Primitive, picture: Option<&PictureFill>) -> Primit
             asset_id: picture.media_part_path.clone(),
             effects: Vec::new(),
             crop: picture_fill_crop(picture),
+            tile: picture_fill_tile(picture, dpi),
             path: (geometry != "rect").then_some(path),
             geometry_fallback,
             stroke,
@@ -4695,6 +4949,101 @@ fn graphic_label(graphic: Option<&GraphicFrameData>) -> Option<String> {
         Some(GraphicFrameData::Chart { .. }) => Some("Chart".to_owned()),
         Some(GraphicFrameData::Diagram { .. }) => Some("Diagram".to_owned()),
         Some(GraphicFrameData::Unknown { .. }) | None => None,
+    }
+}
+
+/// A tile repeats at the picture's own printed size, which is its pixels over
+/// its own resolution — PowerPoint reads the density the file declares, so a
+/// 75 dpi bitmap tiles 28% larger than the 96 dpi the canvas assumes.
+fn picture_fill_tile(picture: &PictureFill, dpi: Option<f32>) -> Option<ImageTile> {
+    let density = dpi
+        .filter(|value| value.is_finite() && *value > 1.0)
+        .map_or(1.0, |value| 96.0 / value);
+    picture.tile.map(|tile| ImageTile {
+        scale_x: tile.scale_x as f32 * density,
+        scale_y: tile.scale_y as f32 * density,
+    })
+}
+
+/// The resolution a PNG or JPEG declares, in dots per inch. `None` where the
+/// file names none, which reads as the 96 dpi a canvas assumes.
+fn image_dpi(bytes: &[u8]) -> Option<f32> {
+    if bytes.starts_with(&[0x89, b'P', b'N', b'G']) {
+        let mut offset = 8;
+        while offset + 8 <= bytes.len() {
+            let length = u32::from_be_bytes(bytes[offset..offset + 4].try_into().ok()?) as usize;
+            let kind = &bytes[offset + 4..offset + 8];
+            if kind == b"pHYs" && length >= 9 && offset + 8 + 9 <= bytes.len() {
+                let body = &bytes[offset + 8..offset + 17];
+                if body[8] != 1 {
+                    return None;
+                }
+                let per_metre = u32::from_be_bytes(body[0..4].try_into().ok()?);
+                return (per_metre > 0).then_some(per_metre as f32 * 0.0254);
+            }
+            offset = offset.checked_add(length)?.checked_add(12)?;
+        }
+        return None;
+    }
+    if !bytes.starts_with(&[0xFF, 0xD8]) {
+        return None;
+    }
+    let mut offset = 2;
+    while offset + 4 <= bytes.len() {
+        if bytes[offset] != 0xFF {
+            return None;
+        }
+        let marker = bytes[offset + 1];
+        let length = u16::from_be_bytes(bytes[offset + 2..offset + 4].try_into().ok()?) as usize;
+        if marker == 0xE0 && length >= 14 && offset + 2 + length <= bytes.len() {
+            let body = &bytes[offset + 4..offset + 2 + length];
+            let units = body[7];
+            let x = u16::from_be_bytes(body[8..10].try_into().ok()?);
+            return match (units, x) {
+                (1, density) if density > 0 => Some(f32::from(density)),
+                (2, density) if density > 0 => Some(f32::from(density) * 2.54),
+                _ => None,
+            };
+        }
+        offset = offset.checked_add(2)?.checked_add(length)?;
+    }
+    None
+}
+
+/// The rectangle a preset holds its text in. Most presets use the whole frame,
+/// but a rounded box and an ellipse inset theirs so the text clears the curve —
+/// the `a:rect` each preset declares, for the two the corpus writes text into.
+fn geometry_text_inset(shape: Option<&ShapeNode>, rect: PxRect) -> (f32, f32) {
+    let Some(ShapeNode::Shape(shape)) = shape else {
+        return (0.0, 0.0);
+    };
+    preset_text_inset(
+        &shape.geometry,
+        shape.adjust_values.get("adj").copied(),
+        rect.w,
+        rect.h,
+    )
+    .unwrap_or((0.0, 0.0))
+}
+
+fn preset_text_inset(
+    geometry: &str,
+    adjust: Option<f64>,
+    width: f32,
+    height: f32,
+) -> Option<(f32, f32)> {
+    const DIAGONAL: f32 = std::f32::consts::FRAC_1_SQRT_2;
+    match geometry {
+        "roundRect" | "round1Rect" | "round2SameRect" | "round2DiagRect" => {
+            let adjust = adjust.unwrap_or(16_667.0).clamp(0.0, 50_000.0) as f32 / 100_000.0;
+            let inset = width.min(height) * adjust * (1.0 - DIAGONAL);
+            Some((inset, inset))
+        }
+        "ellipse" => Some((
+            width * (1.0 - DIAGONAL) / 2.0,
+            height * (1.0 - DIAGONAL) / 2.0,
+        )),
+        _ => None,
     }
 }
 
@@ -5359,11 +5708,107 @@ mod tests {
     }
 
     #[test]
+    fn an_unmarked_hanging_indent_starts_its_first_line_at_the_indent() {
+        let renderer = renderer();
+        let mut paragraph = paragraph(&renderer, "l", "one two three four five six seven");
+        paragraph.margin_left_px = 30.0;
+        paragraph.indent_px = -30.0;
+        let lines = layout_paragraph(
+            &renderer.fonts,
+            &paragraph,
+            30.0,
+            0.0,
+            120.0,
+            1.0,
+            false,
+            true,
+        )
+        .unwrap();
+        assert!((lines[0].x - 0.0).abs() < 0.01, "{:?}", lines[0].x);
+        assert!((lines[1].x - 30.0).abs() < 0.01, "{:?}", lines[1].x);
+        assert!(lines[0].width > lines[1].width, "the first line is wider");
+    }
+
+    #[test]
+    fn a_body_that_does_not_wrap_keeps_its_paragraph_on_one_line() {
+        let renderer = renderer();
+        let paragraph = paragraph(&renderer, "l", "one two three four five six seven eight");
+        let wrapped = layout_paragraph(
+            &renderer.fonts,
+            &paragraph,
+            0.0,
+            0.0,
+            120.0,
+            1.0,
+            false,
+            true,
+        )
+        .unwrap();
+        let flat = layout_paragraph(
+            &renderer.fonts,
+            &paragraph,
+            0.0,
+            0.0,
+            120.0,
+            1.0,
+            false,
+            false,
+        )
+        .unwrap();
+        assert!(wrapped.len() > 1, "{}", wrapped.len());
+        assert_eq!(flat.len(), 1);
+        assert!(flat[0].width > 120.0, "the line runs past the shape");
+    }
+
+    #[test]
+    fn a_bitmap_reports_the_resolution_it_declares() {
+        let mut jpeg = vec![0xFF, 0xD8, 0xFF, 0xE0, 0x00, 0x10];
+        jpeg.extend(b"JFIF\0");
+        jpeg.extend([0x01, 0x02, 0x01, 0x00, 0x4B, 0x00, 0x4B, 0x00, 0x00]);
+        assert_eq!(image_dpi(&jpeg), Some(75.0));
+        let mut png = vec![0x89, b'P', b'N', b'G', 0x0D, 0x0A, 0x1A, 0x0A];
+        png.extend(9_u32.to_be_bytes());
+        png.extend(b"pHYs");
+        png.extend(2835_u32.to_be_bytes());
+        png.extend(2835_u32.to_be_bytes());
+        png.push(1);
+        png.extend([0, 0, 0, 0]);
+        assert_eq!(image_dpi(&png).map(|dpi| dpi.round()), Some(72.0));
+        assert_eq!(image_dpi(b"not an image"), None);
+    }
+
+    #[test]
+    fn a_rounded_box_and_an_ellipse_hold_their_text_inside_the_curve() {
+        let frame = PxRect {
+            x: 10.0,
+            y: 20.0,
+            w: 400.0,
+            h: 200.0,
+        };
+        assert_eq!(preset_text_inset("rect", None, frame.w, frame.h), None);
+        let (x, y) = preset_text_inset("roundRect", None, frame.w, frame.h).unwrap();
+        assert!((x - 9.76).abs() < 0.05, "{x}");
+        assert!((x - y).abs() < 1e-3);
+        let (x, y) = preset_text_inset("ellipse", None, frame.w, frame.h).unwrap();
+        assert!((x - 58.58).abs() < 0.05, "{x}");
+        assert!((y - 29.29).abs() < 0.05, "{y}");
+    }
+
+    #[test]
     fn a_tab_advances_to_the_next_default_stop_without_painting_a_glyph() {
         let renderer = renderer();
         let paragraph = tabbed(&renderer, "A\tB", Vec::new(), 96.0);
-        let lines =
-            layout_paragraph(&renderer.fonts, &paragraph, 0.0, 0.0, 1_000.0, 1.0, false).unwrap();
+        let lines = layout_paragraph(
+            &renderer.fonts,
+            &paragraph,
+            0.0,
+            0.0,
+            1_000.0,
+            1.0,
+            false,
+            true,
+        )
+        .unwrap();
         let positions = glyph_positions(&lines);
         assert_eq!(positions.len(), 2, "the tab paints nothing");
         assert!(positions[0].abs() < 0.01, "{positions:?}");
@@ -5374,8 +5819,17 @@ mod tests {
     fn a_declared_stop_wins_over_the_default_pitch() {
         let renderer = renderer();
         let paragraph = tabbed(&renderer, "A\tB", vec![40.0, 300.0], 96.0);
-        let lines =
-            layout_paragraph(&renderer.fonts, &paragraph, 0.0, 0.0, 1_000.0, 1.0, false).unwrap();
+        let lines = layout_paragraph(
+            &renderer.fonts,
+            &paragraph,
+            0.0,
+            0.0,
+            1_000.0,
+            1.0,
+            false,
+            true,
+        )
+        .unwrap();
         let positions = glyph_positions(&lines);
         assert!((positions[1] - 40.0).abs() < 0.01, "{positions:?}");
     }
@@ -5385,8 +5839,17 @@ mod tests {
         let renderer = renderer();
         let mut paragraph = tabbed(&renderer, "A\tB", vec![40.0, 200.0], 96.0);
         paragraph.margin_left_px = 50.0;
-        let lines =
-            layout_paragraph(&renderer.fonts, &paragraph, 50.0, 0.0, 950.0, 1.0, false).unwrap();
+        let lines = layout_paragraph(
+            &renderer.fonts,
+            &paragraph,
+            50.0,
+            0.0,
+            950.0,
+            1.0,
+            false,
+            true,
+        )
+        .unwrap();
         let positions = glyph_positions(&lines);
         assert!((positions[1] - 200.0).abs() < 0.01, "{positions:?}");
     }
@@ -5395,8 +5858,17 @@ mod tests {
     fn a_tab_never_reaches_past_the_line() {
         let renderer = renderer();
         let paragraph = tabbed(&renderer, "A\tB", Vec::new(), 96.0);
-        let lines =
-            layout_paragraph(&renderer.fonts, &paragraph, 0.0, 0.0, 40.0, 1.0, false).unwrap();
+        let lines = layout_paragraph(
+            &renderer.fonts,
+            &paragraph,
+            0.0,
+            0.0,
+            40.0,
+            1.0,
+            false,
+            true,
+        )
+        .unwrap();
         for line in &lines {
             assert!(line.width <= 40.01, "{}", line.width);
         }
@@ -5409,8 +5881,17 @@ mod tests {
         paragraph.margin_left_px = 30.0;
         paragraph.indent_px = -30.0;
         paragraph.tab_stops = resolve_tab_stops(None, 285_750, -285_750);
-        let lines =
-            layout_paragraph(&renderer.fonts, &paragraph, 30.0, 0.0, 300.0, 1.0, false).unwrap();
+        let lines = layout_paragraph(
+            &renderer.fonts,
+            &paragraph,
+            30.0,
+            0.0,
+            300.0,
+            1.0,
+            false,
+            true,
+        )
+        .unwrap();
         let positions = glyph_positions(&lines);
         assert!((positions[0] - 30.0).abs() < 0.01, "{positions:?}");
     }
@@ -5422,8 +5903,17 @@ mod tests {
         paragraph.margin_left_px = 30.0;
         paragraph.indent_px = -30.0;
         paragraph.tab_stops = resolve_tab_stops(None, 285_750, -285_750);
-        let lines =
-            layout_paragraph(&renderer.fonts, &paragraph, 30.0, 0.0, 400.0, 1.0, false).unwrap();
+        let lines = layout_paragraph(
+            &renderer.fonts,
+            &paragraph,
+            30.0,
+            0.0,
+            400.0,
+            1.0,
+            false,
+            true,
+        )
+        .unwrap();
         let positions = glyph_positions(&lines);
         assert!((positions[0] - 30.0).abs() < 0.01, "{positions:?}");
         assert!((positions[4] - 96.0).abs() < 0.01, "{positions:?}");
@@ -5437,8 +5927,17 @@ mod tests {
         paragraph.indent_px = -30.0;
         paragraph.marker = Some("\u{2022}".to_owned());
         paragraph.tab_stops = resolve_tab_stops(None, 285_750, -285_750);
-        let lines =
-            layout_paragraph(&renderer.fonts, &paragraph, 30.0, 0.0, 300.0, 1.0, false).unwrap();
+        let lines = layout_paragraph(
+            &renderer.fonts,
+            &paragraph,
+            30.0,
+            0.0,
+            300.0,
+            1.0,
+            false,
+            true,
+        )
+        .unwrap();
         let text = lines[0]
             .runs
             .iter()
@@ -5474,6 +5973,33 @@ mod tests {
                 blank: *blank,
             })
             .collect()
+    }
+
+    #[test]
+    fn the_layout_cache_key_changes_with_every_input_layout_reads() {
+        let renderer = renderer();
+        let rect = PxRect {
+            x: 0.0,
+            y: 0.0,
+            w: 200.0,
+            h: 100.0,
+        };
+        let content = |space_first_last_para| ResolvedContent {
+            paragraphs: vec![paragraph(&renderer, "l", "Text")],
+            space_first_last_para,
+        };
+        let key = |content: &ResolvedContent| text_layout_key(content, rect, 1.0, false, true);
+        let base = key(&content(false));
+        assert_ne!(base, key(&content(true)));
+        let mut changed = content(false);
+        changed.paragraphs[0].tab_stops = vec![40.0];
+        assert_ne!(base, key(&changed));
+        let mut changed = content(false);
+        changed.paragraphs[0].default_tab_px = 48.0;
+        assert_ne!(base, key(&changed));
+        let mut changed = content(false);
+        changed.paragraphs[0].runs[0].style.line_font_size_pt = 24.0;
+        assert_ne!(base, key(&changed));
     }
 
     fn paragraph(renderer: &SlideRenderer, alignment: &str, text: &str) -> ResolvedParagraph {
@@ -5595,8 +6121,17 @@ mod tests {
             .take_while(|cluster| cluster_is_blank(cluster))
             .count();
         let width = prefix_width + clusters[second_break].width / 2.0;
-        let lines =
-            layout_paragraph(&renderer.fonts, &justified, 20.0, 30.0, width, 1.0, false).unwrap();
+        let lines = layout_paragraph(
+            &renderer.fonts,
+            &justified,
+            20.0,
+            30.0,
+            width,
+            1.0,
+            false,
+            true,
+        )
+        .unwrap();
         let natural = layout_paragraph(
             &renderer.fonts,
             &paragraph(&renderer, "justLow", text),
@@ -5605,6 +6140,7 @@ mod tests {
             width,
             1.0,
             false,
+            true,
         )
         .unwrap();
 
@@ -5778,6 +6314,7 @@ mod tests {
                     10_000.0,
                     scale,
                     false,
+                    true,
                 )
                 .unwrap();
                 assert_eq!(lines.len(), 1);
@@ -5855,7 +6392,17 @@ mod tests {
         let joined = paragraph(&["alpha beta gamma delta"]);
         for width in [100.0, 10_000.0] {
             let render = |paragraph| {
-                layout_paragraph(&renderer.fonts, paragraph, 10.0, 20.0, width, 1.0, false).unwrap()
+                layout_paragraph(
+                    &renderer.fonts,
+                    paragraph,
+                    10.0,
+                    20.0,
+                    width,
+                    1.0,
+                    false,
+                    true,
+                )
+                .unwrap()
             };
             assert_eq!(render(&split), render(&joined));
         }
@@ -5907,16 +6454,25 @@ mod tests {
                     style: style.clone(),
                 }],
             };
-            layout_paragraph(&renderer.fonts, &paragraph, 0.0, 0.0, 1000.0, 1.0, true)
-                .unwrap()
-                .iter()
-                .map(|line| {
-                    line.runs
-                        .iter()
-                        .map(|run| run.text.clone())
-                        .collect::<String>()
-                })
-                .collect::<Vec<_>>()
+            layout_paragraph(
+                &renderer.fonts,
+                &paragraph,
+                0.0,
+                0.0,
+                1000.0,
+                1.0,
+                true,
+                true,
+            )
+            .unwrap()
+            .iter()
+            .map(|line| {
+                line.runs
+                    .iter()
+                    .map(|run| run.text.clone())
+                    .collect::<String>()
+            })
+            .collect::<Vec<_>>()
         };
 
         assert_eq!(stack("A\nB"), ["A", "B"]);
@@ -6562,6 +7118,7 @@ mod tests {
         let picture = PictureFill {
             relationship_id: None,
             media_part_path: Some("ppt/media/image1.png".to_owned()),
+            tile: None,
             crop: PictureCrop::default(),
             fill_rect: PictureCrop {
                 top: -6_000,
@@ -7146,9 +7703,11 @@ mod tests {
                 text: Some(TextBody {
                     vertical_overflow: None,
                     horizontal_overflow: None,
+                    wrap: None,
                     anchor: Some("ctr".to_owned()),
                     vertical: vertical.map(str::to_owned),
                     compat_line_spacing: None,
+                    space_first_last_para: None,
                     autofit: None,
                     inset_left: None,
                     inset_top: None,
@@ -7626,8 +8185,17 @@ mod tests {
         };
         second.style.spacing_pt = 6.0;
         paragraph.runs.push(second);
-        let lines =
-            layout_paragraph(&renderer.fonts, &paragraph, 0.0, 0.0, 1000.0, 1.0, false).unwrap();
+        let lines = layout_paragraph(
+            &renderer.fonts,
+            &paragraph,
+            0.0,
+            0.0,
+            1000.0,
+            1.0,
+            false,
+            true,
+        )
+        .unwrap();
         assert_eq!(lines[0].runs.len(), 2);
         assert_eq!(lines[0].runs[0].letter_spacing_px, 0.0);
         assert_eq!(lines[0].runs[1].letter_spacing_px, 8.0);
@@ -7663,8 +8231,17 @@ mod tests {
         let renderer = renderer();
         let mut paragraph = paragraph(&renderer, "just", "AA BB CC AA BB CC");
         paragraph.runs[0].style.spacing_pt = 6.0;
-        let lines =
-            layout_paragraph(&renderer.fonts, &paragraph, 0.0, 0.0, 160.0, 1.0, false).unwrap();
+        let lines = layout_paragraph(
+            &renderer.fonts,
+            &paragraph,
+            0.0,
+            0.0,
+            160.0,
+            1.0,
+            false,
+            true,
+        )
+        .unwrap();
         assert!(lines.len() > 1);
         assert!((lines[0].width - 160.0).abs() < 0.001, "{}", lines[0].width);
     }
@@ -7674,8 +8251,17 @@ mod tests {
         let renderer = renderer();
         let mut paragraph = paragraph(&renderer, "ctr", "AA\nAA");
         paragraph.runs[0].style.spacing_pt = 6.0;
-        let lines =
-            layout_paragraph(&renderer.fonts, &paragraph, 0.0, 0.0, 1000.0, 1.0, false).unwrap();
+        let lines = layout_paragraph(
+            &renderer.fonts,
+            &paragraph,
+            0.0,
+            0.0,
+            1000.0,
+            1.0,
+            false,
+            true,
+        )
+        .unwrap();
         assert_eq!(lines.len(), 2);
         assert!((lines[0].width - lines[1].width).abs() < 0.001);
         assert!((lines[0].x - lines[1].x).abs() < 0.001);
@@ -7687,6 +8273,7 @@ mod tests {
             lines[1].width + 0.001,
             1.0,
             false,
+            true,
         )
         .unwrap();
         assert_eq!(tight.len(), 2);
@@ -8645,8 +9232,16 @@ mod tests {
             orientation: None,
             size: None,
         };
-        assert!(placeholders_match(&indexed, &same_index));
+        assert!(!placeholders_match(&indexed, &same_index));
         assert!(placeholders_match(&centered_title, &title));
+        let slide_number = |index| Placeholder {
+            placeholder_type: Some("sldNum".to_owned()),
+            index: Some(index),
+            orientation: None,
+            size: None,
+        };
+        assert!(placeholders_match(&slide_number(12), &slide_number(4)));
+        assert!(!placeholders_match(&slide_number(12), &indexed));
 
         let snapshot = ShapeSnapshot {
             id: "placeholder".to_owned(),

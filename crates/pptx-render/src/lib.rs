@@ -243,6 +243,7 @@ fn compile(slide: ComposedSlide) -> Result<SurfaceDisplayList, String> {
                     asset_id: image_part_path,
                     effects,
                     crop,
+                    tile: None,
                     path,
                     stroke: stroke.map(Into::into),
                     shadow: None,
@@ -320,6 +321,7 @@ fn composed_chart(base: ShapeBase, chart: &ChartSpace) -> Primitive {
     };
     let plotted = chart_primitive(frame, chart, "", MAX_CHART_PRIMITIVES, &mut |text| {
         Ok(Primitive::TextBox {
+            text_shadow: None,
             object_id: text.object_id,
             shape_id: None,
             story_id: None,
@@ -374,6 +376,7 @@ fn text_primitive(
     text: ComposedText,
 ) -> Primitive {
     Primitive::TextBox {
+        text_shadow: None,
         object_id,
         shape_id: None,
         story_id: None,

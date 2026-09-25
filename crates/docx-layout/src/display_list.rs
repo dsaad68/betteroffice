@@ -8251,6 +8251,7 @@ fn plot_chart_from(chart: &ChartIn) -> PlotChart<'_> {
             ),
         },
         fill: None,
+        plot_layout: None,
     }
 }
 
@@ -8354,6 +8355,7 @@ fn plot_series_from(series: &ChartSeriesIn) -> PlotSeries<'_> {
                 color: point.color.as_deref(),
                 marker: plot_marker_from(point.marker.as_ref()),
                 label: point.label.as_deref(),
+                label_runs: None,
                 explosion: point.explosion,
                 labels: None,
             })

@@ -273,6 +273,8 @@ pub struct PlotChart<'a> {
     pub axes: Vec<PlotAxis<'a>>,
     /// `c:chartSpace/c:spPr`: the chart's own ground.
     pub fill: Option<PlotFill<'a>>,
+    /// `c:plotArea/c:layout/c:manualLayout`, as fractions of the frame.
+    pub plot_layout: Option<PlotRect>,
 }
 
 /// The paint of a `c:spPr`.
@@ -409,6 +411,8 @@ pub struct PlotPoint<'a> {
     /// Literal label text, which wins over anything [`PlotDataLabels`] would
     /// compose.
     pub label: Option<&'a str>,
+    /// The same `c:tx` split at its fields, when it holds any.
+    pub label_runs: Option<&'a [super::model::ChartLabelRun]>,
     /// `c:explosion`, a percentage of the pie radius.
     pub explosion: Option<f64>,
     /// This point's cascade-resolved `c:dLbl`.
@@ -509,10 +513,18 @@ impl<'a> From<&'a ChartSpace> for PlotChart<'a> {
         Self {
             chart_type: &space.chart_type,
             title: space.title.as_deref(),
-            legend: space.legend.as_ref().map(|legend| PlotLegend {
-                position: legend.position.as_deref(),
-                visible: Some(legend.visible),
-            }),
+            // A chart draws a legend only where it carries a `c:legend`;
+            // without one PowerPoint gives the plot the whole frame.
+            legend: Some(space.legend.as_ref().map_or(
+                PlotLegend {
+                    position: None,
+                    visible: Some(false),
+                },
+                |legend| PlotLegend {
+                    position: legend.position.as_deref(),
+                    visible: Some(legend.visible),
+                },
+            )),
             value_axis: space
                 .axes
                 .as_ref()
@@ -582,6 +594,12 @@ impl<'a> From<&'a ChartSpace> for PlotChart<'a> {
                 ),
             },
             fill: space.fill.as_ref().map(plot_fill_from_model),
+            plot_layout: space.plot_layout.map(|layout| PlotRect {
+                x: layout.x,
+                y: layout.y,
+                w: layout.w,
+                h: layout.h,
+            }),
         }
     }
 }
@@ -645,7 +663,15 @@ fn plot_series_from_model<'a>(
     series: &'a super::model::ChartSeries,
     group_labels: Option<&'a super::model::ChartDataLabels>,
 ) -> PlotSeries<'a> {
-    let labels = plot_labels_from_model(None, series.data_labels.as_ref(), None, group_labels);
+    let mut labels = plot_labels_from_model(None, series.data_labels.as_ref(), None, group_labels);
+    // A label that names no format is source-linked, so it reads the one the
+    // values were cached with — that is what makes 0.86 read as 86% (#797).
+    let cached = series.value_format.as_deref();
+    if let Some(spec) = labels.as_mut()
+        && spec.number_format.is_none()
+    {
+        spec.number_format = cached;
+    }
     let mut points: Vec<PlotPoint<'a>> = series
         .points
         .iter()
@@ -664,6 +690,13 @@ fn plot_series_from_model<'a>(
         })
         .collect();
     merge_point_labels(&mut points, group_labels, series.data_labels.as_ref());
+    for point in &mut points {
+        if let Some(spec) = point.labels.as_mut()
+            && spec.number_format.is_none()
+        {
+            spec.number_format = cached;
+        }
+    }
     PlotSeries {
         name: series.name.as_deref(),
         categories: &series.categories,
@@ -795,6 +828,11 @@ fn merge_point_label<'a>(
             .and_then(|point| point.text.as_deref())
             .or_else(|| group_point.and_then(|point| point.text.as_deref()))
     });
+    let label_runs = resolved.and_then(|_| {
+        series_point
+            .and_then(|point| point.runs.as_deref())
+            .or_else(|| group_point.and_then(|point| point.runs.as_deref()))
+    });
     let labels = Some(resolved.unwrap_or_default());
     if let Some(slot) = points
         .iter()
@@ -802,12 +840,14 @@ fn merge_point_label<'a>(
         .filter(|slot| wildcard.is_none_or(|wildcard| *slot <= wildcard))
     {
         points[slot].label = label;
+        points[slot].label_runs = label_runs;
         points[slot].labels = labels;
         return;
     }
     let mut point = PlotPoint {
         index: Some(index),
         label,
+        label_runs,
         labels,
         ..PlotPoint::default()
     };
@@ -958,12 +998,23 @@ pub fn plot_chart_into<S: PlotSink + ?Sized>(chart: &PlotChart<'_>, rect: PlotRe
     };
     let region_y = y + title_h + band_top;
     let region_h = height - title_h - legend_h;
-    let plot = PlotArea {
-        x: plot_x,
-        y: region_y + axis_header,
-        w: (width - gutter - legend_w - 10.0 - secondary_w).max(24.0),
-        h: (height - title_h - 34.0 - legend_h - axis_header).max(24.0),
-        gutter,
+    let plot = match chart.plot_layout {
+        // The deck placed the inner plot itself; honouring it is what keeps
+        // manually sized charts where PowerPoint draws them (#797).
+        Some(manual) => PlotArea {
+            x: x + manual.x * width,
+            y: y + manual.y * height,
+            w: (manual.w * width).max(24.0),
+            h: (manual.h * height).max(24.0),
+            gutter,
+        },
+        None => PlotArea {
+            x: plot_x,
+            y: region_y + axis_header,
+            w: (width - gutter - legend_w - 10.0 - secondary_w).max(24.0),
+            h: (height - title_h - 34.0 - legend_h - axis_header).max(24.0),
+            gutter,
+        },
     };
 
     if chart.plot_groups.is_empty() {
@@ -1791,12 +1842,14 @@ fn series_color(series: Option<&PlotSeries<'_>>, index: usize) -> String {
         .unwrap_or_else(|| CHART_SERIES_COLORS[index % CHART_SERIES_COLORS.len()].to_owned())
 }
 
+/// How many points the series plots. `c:dPt` and `c:dLbl` overrides are
+/// deliberately not counted: PowerPoint keeps an entry for a point the sheet
+/// no longer has, and counting those drew empty categories past the data.
 fn series_length(series: &PlotSeries<'_>) -> usize {
     series
         .categories
         .len()
         .max(series.values.len())
-        .max(series.points.len())
         .max(series.x_values.len())
         .max(series.bubble_sizes.len())
 }
@@ -1975,6 +2028,26 @@ fn nice_unit(rough: f64) -> f64 {
     }
 }
 
+/// Excel's automatic major unit, which PowerPoint inherits and which does not
+/// depend on how large the chart is drawn: the decade below the range, stepped
+/// up to 2 or 5 decades once it would otherwise draw ten or twenty gridlines.
+/// Measured against PowerPoint: a stacked column topping out at 60 is drawn
+/// 0..70 in tens, never 0..60 in fives (#797).
+fn excel_unit(range: f64) -> f64 {
+    if !range.is_finite() || range <= 0.0 {
+        return 1.0;
+    }
+    let major = 10.0_f64.powf(range.log10().round() - 1.0);
+    let steps = range / major;
+    if steps >= 20.0 {
+        major * 5.0
+    } else if steps >= 10.0 {
+        major * 2.0
+    } else {
+        major
+    }
+}
+
 /// Major intervals to aim for along `extent` px: one label per 20px, clamped to `2..=12`.
 fn target_intervals(extent: f64) -> f64 {
     const LABEL_PITCH_PX: f64 = 20.0;
@@ -2006,18 +2079,18 @@ fn round_to_unit(value: f64, unit: f64, up: bool) -> f64 {
 
 #[cfg(test)]
 fn value_range(family: PlotFamily<'_>) -> (f64, f64) {
-    let plot = PlotArea {
+    let _plot = PlotArea {
         x: 0.0,
         y: 0.0,
         w: 200.0,
         h: 156.0,
         gutter: AXIS_GUTTER,
     };
-    let scale = value_scale(family, plot);
+    let scale = value_scale(family);
     (scale.min, scale.max)
 }
 
-fn value_scale(family: PlotFamily<'_>, plot: PlotArea) -> ValueScale {
+fn value_scale(family: PlotFamily<'_>) -> ValueScale {
     let stacking = family.stacking();
     let (mut min, mut max) = match stacking {
         Stacking::Percent => percent_range(family),
@@ -2047,13 +2120,23 @@ fn value_scale(family: PlotFamily<'_>, plot: PlotArea) -> ValueScale {
         .axis
         .and_then(|axis| axis.log_base)
         .filter(|base| *base > 1.0 && base.is_finite() && min > 0.0);
-    let transposed = family.transposed();
-    let extent = if transposed { plot.w } else { plot.h };
+    // Excel pads an automatic bound by a twentieth of the data's own span
+    // before rounding it out, which is what lifts a chart whose tallest bar
+    // lands exactly on a gridline clear of the plot's top edge.
+    let padding = (max - min) * 0.05;
+    if log_base.is_none() {
+        if pinned_max.is_none() && max > 0.0 {
+            max += padding;
+        }
+        if pinned_min.is_none() && min < 0.0 {
+            min -= padding;
+        }
+    }
     let unit = family
         .axis
         .and_then(|axis| axis.major_unit)
         .filter(|unit| unit.is_finite() && *unit > 0.0)
-        .unwrap_or_else(|| nice_unit((max - min) / target_intervals(extent)));
+        .unwrap_or_else(|| excel_unit(max - min));
     if log_base.is_none() {
         if pinned_min.is_none() {
             min = round_to_unit(min, unit, false);
@@ -2062,6 +2145,7 @@ fn value_scale(family: PlotFamily<'_>, plot: PlotArea) -> ValueScale {
             max = round_to_unit(max, unit, true);
         }
     }
+
     ValueScale {
         min,
         max,
@@ -2172,7 +2256,7 @@ fn emit_axes<S: PlotSink + ?Sized>(
     plot: PlotArea,
 ) {
     let transposed = family.transposed();
-    let scale = value_scale(family, plot);
+    let scale = value_scale(family);
     let axis = family.axis;
     let hidden = axis.is_some_and(|axis| axis.hidden);
     let major_grid = axis.is_none_or(|axis| axis.major_gridlines);
@@ -2354,10 +2438,26 @@ fn point_label(
     percent_total: f64,
 ) -> Option<String> {
     let point = series.point(index);
+    // A cell the sheet left blank is not plotted and takes no label.
+    series.data_value(index)?;
+    let spec_for_runs = point_label_spec(series, index);
+    if let Some(runs) = point.and_then(|point| point.label_runs) {
+        let number_format = spec_for_runs.and_then(|spec| spec.number_format);
+        return Some(
+            runs.iter()
+                .map(|run| match run {
+                    super::model::ChartLabelRun::Text(text) => text.clone(),
+                    super::model::ChartLabelRun::Field(field) => {
+                        label_field(field, family, series, index, percent_total, number_format)
+                    }
+                })
+                .collect(),
+        );
+    }
     if let Some(text) = point.and_then(|point| point.label) {
         return Some(text.to_owned());
     }
-    let spec = point_label_spec(series, index)?;
+    let spec = spec_for_runs?;
     if !spec.shows_anything() {
         return None;
     }
@@ -2390,6 +2490,38 @@ fn point_label(
         parts.push(format_number(series.bubble_size(index)));
     }
     (!parts.is_empty()).then(|| parts.join(separator))
+}
+
+/// What an `a:fld` inside a `c:tx` stands for, drawn from the point it labels.
+fn label_field(
+    field: &str,
+    family: PlotFamily<'_>,
+    series: &SeriesView<'_>,
+    index: usize,
+    percent_total: f64,
+    number_format: Option<&str>,
+) -> String {
+    let formatted = |value: f64| {
+        number_format
+            .and_then(|code| format_with_code(value, code))
+            .unwrap_or_else(|| format_number(value))
+    };
+    match field {
+        "SERIESNAME" => series.series.name.unwrap_or_default().to_owned(),
+        "CATEGORYNAME" => category_label(family.series, index),
+        "VALUE" => formatted(series.value(index)),
+        "PERCENTAGE" => {
+            let share = if percent_total > 0.0 {
+                series.value(index) / percent_total
+            } else {
+                0.0
+            };
+            number_format
+                .and_then(|code| format_with_code(share, code))
+                .unwrap_or_else(|| format_percent(share))
+        }
+        _ => String::new(),
+    }
 }
 
 fn point_label_spec<'a>(series: &SeriesView<'a>, index: usize) -> Option<PlotDataLabels<'a>> {
@@ -2452,7 +2584,15 @@ fn push_point_label<S: PlotSink + ?Sized>(
         .map(|labels| labels.text)
         .unwrap_or_default();
     push_legend_key(ops, series, series_index, index, x, baseline_y);
-    push_text(ops, &text, x, baseline_y, width, &family.scoped(scope));
+    // A `c:tx` label carries its own line breaks, and PowerPoint stacks the
+    // lines on the point rather than running them together.
+    let style = family.scoped(scope);
+    let lines: Vec<&str> = text.split('\n').collect();
+    let step = style.font.size_px * 1.2;
+    let top = baseline_y - step * (lines.len() as f64 - 1.0) / 2.0;
+    for (line, text) in lines.iter().enumerate() {
+        push_text(ops, text.trim(), x, top + step * line as f64, width, &style);
+    }
 }
 
 /// Where `c:dLblPos` puts a bar label, as a fraction of the bar's own span
@@ -2581,7 +2721,7 @@ fn emit_bar<S: PlotSink + ?Sized>(
     }
     let horizontal = family.transposed();
     emit_axes(ops, family, plot);
-    let scale = value_scale(family, plot);
+    let scale = value_scale(family);
     let bands = bar_bands(family, cat_count, if horizontal { plot.h } else { plot.w });
     let category_style = &family.category_text();
     let spans = &mut Vec::with_capacity(family.series.len());
@@ -2707,7 +2847,7 @@ fn emit_line<S: PlotSink + ?Sized>(
         return;
     }
     emit_axes(ops, family, plot);
-    let scale = value_scale(family, plot);
+    let scale = value_scale(family);
     let stacking = family.stacking();
     emit_category_labels(ops, family, plot, cat_count);
     let spans = &mut Vec::with_capacity(family.series.len());
@@ -2768,7 +2908,7 @@ fn emit_area<S: PlotSink + ?Sized>(
         return;
     }
     emit_axes(ops, family, plot);
-    let scale = value_scale(family, plot);
+    let scale = value_scale(family);
     let stacking = family.stacking();
     emit_category_labels(ops, family, plot, cat_count);
     let vertices = cat_count.min(MAX_PLOT_POLYGON_POINTS);
@@ -2944,7 +3084,7 @@ fn emit_scatter<S: PlotSink + ?Sized>(
         return;
     }
     emit_axes(ops, family, plot);
-    let y_scale = value_scale(family, plot);
+    let y_scale = value_scale(family);
     let x_scale = scatter_x_scale(family, plot);
     emit_scatter_x_labels(ops, family, plot, x_scale);
     let (lines, markers) = scatter_parts(family.group.and_then(|group| group.scatter_style));
@@ -3001,7 +3141,7 @@ fn emit_bubble<S: PlotSink + ?Sized>(
         return;
     }
     emit_axes(ops, family, plot);
-    let y_scale = value_scale(family, plot);
+    let y_scale = value_scale(family);
     let x_scale = scatter_x_scale(family, plot);
     emit_scatter_x_labels(ops, family, plot, x_scale);
     let group = family.group;
@@ -3077,7 +3217,7 @@ fn emit_radar<S: PlotSink + ?Sized>(
     if cat_count == 0 || family.series.is_empty() {
         return;
     }
-    let scale = value_scale(family, plot);
+    let scale = value_scale(family);
     let spokes = cat_count.min(MAX_PLOT_POLYGON_POINTS);
     let radius = (width.min(height) * 0.34).max(6.0);
     let (cx, cy) = (x + width * 0.38, y + height * 0.5);
@@ -3210,7 +3350,7 @@ fn emit_stock<S: PlotSink + ?Sized>(
         return;
     }
     emit_axes(ops, family, plot);
-    let scale = value_scale(family, plot);
+    let scale = value_scale(family);
     let bands = bar_bands(family, cat_count, plot.w);
     let hi_lo = family.group.is_none_or(|group| group.hi_low_lines) || open.is_none();
     let up_down = open.is_some() && family.group.is_none_or(|group| group.up_down_bars);
@@ -3341,7 +3481,7 @@ fn emit_surface<S: PlotSink + ?Sized>(
         CHART_AXIS_COLOR,
         1.0,
     );
-    let scale = value_scale(family, plot);
+    let scale = value_scale(family);
     let columns = cat_count.min(MAX_PLOT_SURFACE_CELLS / rows.max(1));
     let cell_w = plot.w / columns.max(1) as f64;
     let cell_h = plot.h / rows as f64;
@@ -3569,9 +3709,11 @@ fn emit_pie<S: PlotSink + ?Sized>(
     if total <= 0.0 {
         return;
     }
-    let r = (width.min(height) * 0.34).max(10.0);
-    let cx = x + width * 0.38;
-    let cy = y + height * 0.46;
+    // The plot rect already excludes the legend and the title, so the pie is
+    // centred in what is left and drawn as large as the labels allow.
+    let r = (width.min(height) * 0.45).max(10.0);
+    let cx = x + width / 2.0;
+    let cy = y + height / 2.0;
     let group = family.group;
     let inner_r = if family.chart_type == "doughnut" {
         r * group
@@ -4064,11 +4206,12 @@ mod tests {
         assert!(matches!(&ops[0], PlotOp::Rect { fill, .. } if fill == CHART_BACKGROUND_COLOR));
         assert!(matches!(&ops[1], PlotOp::Text { text, font, .. }
             if text == "Revenue" && *font == chart_title_font()));
+        // 10 and 20 scale to Excel's 0..25 in fives: five gridlines, two axes.
         assert_eq!(
             ops.iter()
                 .filter(|op| matches!(op, PlotOp::Line { .. }))
                 .count(),
-            7
+            8
         );
         assert!(
             ops.iter()
@@ -4698,11 +4841,19 @@ mod tests {
             "area fills one region"
         );
         let surface = grouped("surface", group("surface", vec![series("North", &data)]));
+        let bands: Vec<String> = plot_chart(&surface, rect())
+            .iter()
+            .filter_map(|op| match op {
+                PlotOp::Rect { fill, .. } if fill != CHART_BACKGROUND_COLOR => Some(fill.clone()),
+                _ => None,
+            })
+            .collect();
         assert!(
-            plot_chart(&surface, rect())
-                .iter()
-                .any(|op| matches!(op, PlotOp::Rect { fill, .. } if fill == "#9E480E")),
-            "a contour band takes its colour from the value ramp"
+            bands.len() > 1
+                && bands
+                    .iter()
+                    .all(|fill| CHART_SERIES_COLORS.contains(&fill.as_str())),
+            "a contour band takes its colour from the value ramp, got {bands:?}"
         );
     }
 
@@ -6389,6 +6540,7 @@ mod tests {
                 show_value: Some(true),
                 show_legend_key: Some(true),
                 points: Some(vec![ChartPointLabel {
+                    runs: None,
                     index: Some(1.0),
                     text: Some("pinned".to_owned()),
                     labels: ChartDataLabels::default(),
@@ -6415,6 +6567,7 @@ mod tests {
                 show_value: Some(true),
                 show_category_name: Some(true),
                 points: Some(vec![ChartPointLabel {
+                    runs: None,
                     index: Some(1.0),
                     text: None,
                     labels: ChartDataLabels {
@@ -6441,6 +6594,7 @@ mod tests {
             Some(ChartDataLabels {
                 show_value: Some(true),
                 points: Some(vec![ChartPointLabel {
+                    runs: None,
                     index: Some(1.0),
                     text: None,
                     labels: ChartDataLabels {
@@ -6577,6 +6731,7 @@ mod tests {
             Some(ChartDataLabels {
                 show_value: Some(true),
                 points: Some(vec![ChartPointLabel {
+                    runs: None,
                     index: Some(1.0),
                     text: None,
                     labels: ChartDataLabels {
@@ -6612,6 +6767,7 @@ mod tests {
         point_restored.data_labels = Some(ChartDataLabels {
             delete: Some(true),
             points: Some(vec![ChartPointLabel {
+                runs: None,
                 index: Some(1.0),
                 text: None,
                 labels: ChartDataLabels {
@@ -6663,6 +6819,7 @@ mod tests {
         shown.data_labels = Some(ChartDataLabels {
             show_value: Some(true),
             points: Some(vec![ChartPointLabel {
+                runs: None,
                 index: Some(1.0),
                 text: None,
                 labels: ChartDataLabels {

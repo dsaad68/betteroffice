@@ -1,8 +1,9 @@
 //! `c:chartSpace` parsing, generic over the host's XML element type.
 
 use super::model::{
-    ChartAxes, ChartAxis, ChartDataLabels, ChartFill, ChartLegend, ChartLine, ChartMarker,
-    ChartPlotGroup, ChartPoint, ChartPointLabel, ChartSeries, ChartSpace, ChartTextProperties,
+    ChartAxes, ChartAxis, ChartDataLabels, ChartFill, ChartLabelRun, ChartLegend, ChartLine,
+    ChartManualLayout, ChartMarker, ChartPlotGroup, ChartPoint, ChartPointLabel, ChartSeries,
+    ChartSpace, ChartTextProperties,
 };
 
 pub const DEFAULT_SERIES_COLORS: [&str; 8] = [
@@ -68,6 +69,11 @@ pub trait ChartXml: Sized {
     /// `#RRGGBB` for an `a:solidFill` element, resolved through the host's own
     /// theme and color modifiers.
     fn solid_fill_hex(&self) -> Option<String>;
+    /// `#RRGGBB` for a theme slot such as `accent1`. `None` where the host has
+    /// no theme, which falls the series palette back to Office's defaults.
+    fn theme_color_hex(&self, _slot: &str) -> Option<String> {
+        None
+    }
 }
 
 /// Parse a `c:chartSpace` root. `None` when it carries no recognized plot.
@@ -81,6 +87,7 @@ pub fn parse_chart_space<E: ChartXml>(chart_space: &E) -> Option<ChartSpace> {
     if chart_elements.is_empty() {
         return None;
     }
+    let plot_layout = parse_plot_layout(plot_area);
     let budget = &mut Budget::new();
     let plot_groups = chart_elements
         .into_iter()
@@ -106,6 +113,7 @@ pub fn parse_chart_space<E: ChartXml>(chart_space: &E) -> Option<ChartSpace> {
             order: None,
             category_formula: None,
             value_formula: None,
+            value_format: None,
             axis_ids: None,
             points: None,
             grouping: None,
@@ -136,7 +144,31 @@ pub fn parse_chart_space<E: ChartXml>(chart_space: &E) -> Option<ChartSpace> {
         text: parse_text_properties(child(chart_space, "txPr")),
         title_text: title.and_then(parse_title_text),
         fill: parse_fill(child(chart_space, "spPr")),
+        plot_layout,
     })
+}
+
+/// `c:plotArea/c:layout/c:manualLayout`, read only when it places the inner
+/// plot from the frame edges — the mode PowerPoint writes and the one this
+/// layout can honour without re-deriving the axis gutters.
+fn parse_plot_layout<E: ChartXml>(plot_area: &E) -> Option<ChartManualLayout> {
+    let manual = child(child(plot_area, "layout")?, "manualLayout")?;
+    if val_attr(child(manual, "layoutTarget")) != Some("inner") {
+        return None;
+    }
+    for mode in ["xMode", "yMode"] {
+        if val_attr(child(manual, mode)) != Some("edge") {
+            return None;
+        }
+    }
+    let read = |name: &str| {
+        val_attr(child(manual, name))
+            .and_then(|value| value.parse::<f64>().ok())
+            .filter(|value| value.is_finite())
+    };
+    let (x, y, w, h) = (read("x")?, read("y")?, read("w")?, read("h")?);
+    (w > 0.0 && h > 0.0 && (0.0..=1.0).contains(&x) && (0.0..=1.0).contains(&y))
+        .then_some(ChartManualLayout { x, y, w, h })
 }
 
 fn child<'a, E: ChartXml>(parent: &'a E, local: &str) -> Option<&'a E> {
@@ -204,6 +236,33 @@ fn text_from_rich_text<E: ChartXml>(parent: Option<&E>) -> Option<String> {
     nonempty_trimmed(&text)
 }
 
+/// `c:tx` as the runs it is made of, once it holds an `a:fld`: PowerPoint
+/// recomputes a field from the point it labels and only caches the text it
+/// last drew, so `[VALUE]` in the file is a stale snapshot, not the label.
+fn label_runs<E: ChartXml>(parent: Option<&E>) -> Option<Vec<ChartLabelRun>> {
+    let rich = first_deep(parent?, "rich", 0)?;
+    let mut runs = Vec::new();
+    let mut fields = false;
+    for paragraph in children(rich, "p") {
+        if !runs.is_empty() {
+            runs.push(ChartLabelRun::Text("\n".to_owned()));
+        }
+        for node in paragraph.child_elements() {
+            match node.local_name() {
+                "fld" => {
+                    fields = true;
+                    runs.push(ChartLabelRun::Field(
+                        node.attribute(None, "type").unwrap_or_default().to_owned(),
+                    ));
+                }
+                "r" => runs.push(ChartLabelRun::Text(node.descendant_text())),
+                _ => {}
+            }
+        }
+    }
+    fields.then_some(runs)
+}
+
 fn parse_number(raw: Option<&str>) -> Option<f64> {
     let value = raw?.trim();
     if value.is_empty() {
@@ -245,6 +304,30 @@ fn parse_index(raw: Option<&str>) -> Option<f64> {
 
 /// Reads at most the remaining point budget from `elements`, charging every
 /// child it examines so malformed ones cost as much as parsed ones.
+/// Places cache points at their `c:pt/@idx`. A cache is sparse — the sheet's
+/// empty cells simply have no `c:pt` — so reading them in document order slid
+/// every later category up against the wrong value.
+fn place_points<T: Clone>(entries: Vec<(usize, T)>, blank: &T) -> Vec<T> {
+    let Some(last) = entries.iter().map(|(index, _)| *index).max() else {
+        return Vec::new();
+    };
+    let mut placed = vec![blank.clone(); last.saturating_add(1).min(MAX_POINTS)];
+    for (index, value) in entries {
+        if let Some(slot) = placed.get_mut(index) {
+            *slot = value;
+        }
+    }
+    placed
+}
+
+/// `c:pt/@idx`, falling back to the point's position when the deck omits it.
+fn point_index_attr<E: ChartXml>(point: &E, position: usize) -> usize {
+    point
+        .attribute(None, "idx")
+        .and_then(|value| value.trim().parse::<usize>().ok())
+        .unwrap_or(position)
+}
+
 fn take_points<'a, E: ChartXml + 'a, T>(
     elements: impl Iterator<Item = &'a E>,
     budget: &mut Budget,
@@ -274,15 +357,18 @@ fn parse_string_cache<E: ChartXml>(parent: Option<&E>, budget: &mut Budget) -> V
     else {
         return Vec::new();
     };
-    take_points(children(cache, "pt"), budget, |point| {
-        Some(
-            child(point, "v")
-                .map(E::descendant_text)
-                .unwrap_or_default()
-                .trim()
-                .to_owned(),
-        )
-    })
+    let mut next = 0;
+    let entries = take_points(children(cache, "pt"), budget, |point| {
+        let text = child(point, "v")
+            .map(E::descendant_text)
+            .unwrap_or_default()
+            .trim()
+            .to_owned();
+        let index = point_index_attr(point, next);
+        next = index.saturating_add(1);
+        Some((index, text))
+    });
+    place_points(entries, &String::new())
 }
 
 fn parse_num_cache<E: ChartXml>(parent: Option<&E>, budget: &mut Budget) -> Vec<f64> {
@@ -293,10 +379,15 @@ fn parse_num_cache<E: ChartXml>(parent: Option<&E>, budget: &mut Budget) -> Vec<
     else {
         return Vec::new();
     };
-    take_points(children(cache, "pt"), budget, |point| {
+    let mut next = 0;
+    let entries = take_points(children(cache, "pt"), budget, |point| {
         let text = child(point, "v")?.descendant_text();
-        parse_number(Some(text.trim()))
-    })
+        let value = parse_number(Some(text.trim()))?;
+        let index = point_index_attr(point, next);
+        next = index.saturating_add(1);
+        Some((index, value))
+    });
+    place_points(entries, &f64::NAN)
 }
 
 fn parse_num_cache_with_strings<E: ChartXml>(
@@ -310,20 +401,24 @@ fn parse_num_cache_with_strings<E: ChartXml>(
     else {
         return (Vec::new(), Vec::new());
     };
+    let mut next = 0;
     let entries = take_points(children(cache, "pt"), budget, |point| {
         let text = child(point, "v")
             .map(E::descendant_text)
             .unwrap_or_default()
             .trim()
             .to_owned();
-        let number = parse_number(Some(&text));
-        Some((text, number))
+        let number = parse_number(Some(&text)).unwrap_or(f64::NAN);
+        let index = point_index_attr(point, next);
+        next = index.saturating_add(1);
+        Some((index, (text, number)))
     });
-    let mut strings = Vec::with_capacity(entries.len());
-    let mut numbers = Vec::with_capacity(entries.len());
-    for (string, number) in entries {
+    let placed = place_points(entries, &(String::new(), f64::NAN));
+    let mut strings = Vec::with_capacity(placed.len());
+    let mut numbers = Vec::with_capacity(placed.len());
+    for (string, number) in placed {
         strings.push(string);
-        numbers.extend(number);
+        numbers.push(number);
     }
     (strings, numbers)
 }
@@ -332,11 +427,14 @@ fn parse_series_name<E: ChartXml>(series: &E) -> Option<String> {
     text_from_rich_text(child(series, "tx"))
 }
 
+/// A series the deck gives no `c:spPr` is drawn in the theme's accents, cycled
+/// in order — the deck's own palette, not Office's current default one.
 fn parse_series_color<E: ChartXml>(series: &E, index: usize) -> String {
-    let parsed = child(series, "spPr")
+    child(series, "spPr")
         .and_then(|properties| first_deep(properties, "solidFill", 0))
-        .and_then(E::solid_fill_hex);
-    parsed.unwrap_or_else(|| DEFAULT_SERIES_COLORS[index % DEFAULT_SERIES_COLORS.len()].to_owned())
+        .and_then(E::solid_fill_hex)
+        .or_else(|| series.theme_color_hex(&format!("accent{}", index % 6 + 1)))
+        .unwrap_or_else(|| DEFAULT_SERIES_COLORS[index % DEFAULT_SERIES_COLORS.len()].to_owned())
 }
 
 fn parse_series<E: ChartXml>(
@@ -391,6 +489,14 @@ fn parse_series<E: ChartXml>(
                 order: parse_index(val_attr(child(series, "order"))),
                 category_formula: child_formula(category.or(x_value)),
                 value_formula: child_formula(value),
+                value_format: value
+                    .and_then(|element| {
+                        first_deep(element, "numCache", 0)
+                            .or_else(|| first_deep(element, "numLit", 0))
+                    })
+                    .and_then(|cache| child(cache, "formatCode"))
+                    .map(|code| code.descendant_text())
+                    .filter(|code| !code.is_empty()),
                 axis_ids: (!axis_ids.is_empty()).then(|| axis_ids.to_vec()),
                 points: (!points.is_empty()).then_some(points),
                 grouping: grouping.map(str::to_owned),
@@ -438,6 +544,7 @@ fn parse_data_labels<E: ChartXml>(
         Some(ChartPointLabel {
             index,
             text: text_from_rich_text(child(point, "tx")),
+            runs: label_runs(child(point, "tx")),
             labels: label_switches(point),
         })
     });
@@ -1044,6 +1151,43 @@ mod tests {
         let points = space.plot_groups[0].series[0].points.as_ref().unwrap();
         assert_eq!(points[0].index, None);
         assert_eq!(red_wedges(&space), 2);
+    }
+
+    #[test]
+    fn a_cache_places_its_points_at_the_index_they_name() {
+        let cache = Node::el(
+            "c:numCache",
+            vec![
+                Node::el("c:pt", vec![Node::text("c:v", "7")]).attr("idx", "1"),
+                Node::el("c:pt", vec![Node::text("c:v", "9")]).attr("idx", "3"),
+            ],
+        );
+        let mut budget = Budget::new();
+        let values = parse_num_cache(Some(&cache), &mut budget);
+        assert_eq!(values.len(), 4);
+        assert!(values[0].is_nan() && values[2].is_nan());
+        assert_eq!([values[1], values[3]], [7.0, 9.0]);
+    }
+
+    #[test]
+    fn a_point_index_at_the_top_of_its_range_does_not_overflow() {
+        let top = usize::MAX.to_string();
+        let cache = Node::el(
+            "c:numCache",
+            vec![
+                Node::el("c:pt", vec![Node::text("c:v", "7")]).attr("idx", "1"),
+                Node::el("c:pt", vec![Node::text("c:v", "8")]).attr("idx", &top),
+                Node::el("c:pt", vec![Node::text("c:v", "9")]),
+            ],
+        );
+        let numbers = parse_num_cache(Some(&cache), &mut Budget::new());
+        let strings = parse_string_cache(Some(&cache), &mut Budget::new());
+        let (_, paired) = parse_num_cache_with_strings(Some(&cache), &mut Budget::new());
+        assert_eq!(
+            [numbers.len(), strings.len(), paired.len()],
+            [MAX_POINTS; 3]
+        );
+        assert_eq!((numbers[1], strings[1].as_str()), (7.0, "7"));
     }
 
     #[test]

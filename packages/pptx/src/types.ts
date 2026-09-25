@@ -384,6 +384,7 @@ export interface ShapePrimitive extends PrimitiveBase {
 export type ImageEffect =
   | { kind: 'biLevel'; threshold: number }
   | { kind: 'grayscale' }
+  | { kind: 'alpha'; amount: number }
   | { kind: 'luminance'; brightness: number; contrast: number }
   | { kind: 'duotone'; shadow: string; highlight: string }
   | { kind: 'colorChange'; from: string; to: string; useAlpha?: boolean };
@@ -402,6 +403,8 @@ export interface ImagePrimitive extends PrimitiveBase {
   effects?: ImageEffect[];
   /** Fraction of the source discarded per edge, from `a:srcRect`. */
   crop?: ImageCrop;
+  /** `a:tile`: repeat the picture at its own size, scaled by these fractions. */
+  tile?: { scaleX: number; scaleY: number };
   /** Outline the picture is masked to, when its `spPr` gives it one. */
   path?: GeometryPathCommand[];
   /** The authored mask is unsupported and uses a rectangle fallback. */
@@ -473,6 +476,8 @@ export interface TextBoxPrimitive extends PrimitiveBase {
   }>;
   lines: PositionedTextLine[];
   overflow?: boolean;
+  /** `a:rPr/a:effectLst`: the shadow the box's glyphs are drawn with. */
+  textShadow?: Shadow;
 }
 
 export interface PlaceholderPrimitive extends PrimitiveBase {
