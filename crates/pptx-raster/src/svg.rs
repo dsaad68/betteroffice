@@ -806,7 +806,7 @@ pub(crate) mod tests {
         for (attribute, outcome) in [
             ("fill", Some(SvgRefusal::ExternalReference)),
             ("clip-path", Some(SvgRefusal::ExternalReference)),
-            ("style", Some(SvgRefusal::UnsupportedStyle)),
+            ("style", Some(SvgRefusal::ExpansionTooLarge)),
             ("data-x", Some(SvgRefusal::ExpansionTooLarge)),
         ] {
             let value = if attribute == "style" {
@@ -1310,6 +1310,44 @@ pub(crate) mod tests {
             refusal(group("1em 1em", 1).as_bytes()),
             Some(SvgRefusal::ExpansionTooLarge)
         );
+    }
+
+    #[test]
+    fn css_declarations_are_read_as_simplecss_reads_them() {
+        let wide = |style: &str| {
+            document(&format!(
+                r##"<path d="M10 10C60 90 20 -50 80 40" fill="none" stroke="#000" style="{style}"/>"##
+            ))
+        };
+        for style in [
+            "stroke-width:1e5 !important",
+            "*stroke-width:1e5",
+            "stroke-width/* x */:/* y */1e5",
+        ] {
+            assert_eq!(
+                refusal(wide(style).as_bytes()),
+                Some(SvgRefusal::ExpansionTooLarge),
+                "{style}"
+            );
+        }
+        let dashes = format!(
+            r##"<g stroke="#000" style="*stroke-dasharray:{}">{}</g>"##,
+            "1 1 ".repeat(2_000),
+            r##"<rect width="1" height="1"/>"##.repeat(5_000)
+        );
+        assert_eq!(
+            refusal(document(&dashes).as_bytes()),
+            Some(SvgRefusal::ExpansionTooLarge)
+        );
+        assert!(parse(wide("stroke-width:2 !important").as_bytes()).is_ok());
+        let long = format!("stroke-width:1;{}", "fill:red;".repeat(8_000));
+        let started = std::time::Instant::now();
+        assert_eq!(
+            refusal(wide(&long).as_bytes()),
+            Some(SvgRefusal::ExpansionTooLarge),
+            "charged before the tokenizer rescans it"
+        );
+        assert!(started.elapsed() < std::time::Duration::from_secs(1));
     }
 
     #[test]

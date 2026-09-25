@@ -168,6 +168,7 @@ pub(super) fn audit(document: &Document<'_>) -> Result<(), SvgRefusal> {
     let mut slots: Vec<Option<Slot>> = vec![None; subtrees.len()];
     let mut ids: HashMap<&str, Vec<usize>> = HashMap::new();
     let mut elements: Vec<Element<'_>> = Vec::new();
+    let mut css = 0u64;
     for node in root.descendants().filter(|node| node.is_element()) {
         for attribute in node
             .attributes()
@@ -212,7 +213,7 @@ pub(super) fn audit(document: &Document<'_>) -> Result<(), SvgRefusal> {
             strokes: Strokes::default(),
             verbs: 0,
         };
-        audit_attributes(&mut element)?;
+        audit_attributes(&mut element, &mut css)?;
         element.bytes += node.children().count() as u64;
         elements.push(element);
         if let Some(Slot::Element(parent)) = parent {
@@ -451,7 +452,7 @@ fn css_links<'a>(links: &mut Vec<(Link, &'a str)>, target: &'a str) {
 /// namespaces as well as from none, so a prefixed copy could shadow or stand
 /// in for the one audited. Only `xlink:href`, whose precedence `usvg` settles,
 /// and the inert `xlink:title`, `xml:space` and `xml:lang` may carry one.
-fn audit_attributes(element: &mut Element<'_>) -> Result<(), SvgRefusal> {
+fn audit_attributes(element: &mut Element<'_>, css: &mut u64) -> Result<(), SvgRefusal> {
     let node = element.node;
     let name = node.tag_name().name();
     element.bytes = name.len() as u64;
@@ -469,14 +470,20 @@ fn audit_attributes(element: &mut Element<'_>) -> Result<(), SvgRefusal> {
             return Err(SvgRefusal::UnsupportedStyle);
         }
         if local == "style" {
+            let rescans = super::style::rescans(value.len());
+            *css = css
+                .saturating_add(rescans)
+                .saturating_add(super::style::tokenized(value));
+            if *css > MAX_SVG_STYLE_WORK {
+                return Err(SvgRefusal::ExpansionTooLarge);
+            }
             let applied = (value.len() as u64).saturating_mul(declaration_work(node));
             element.style = element
                 .style
-                .saturating_add(super::style::rescans(value.len()))
+                .saturating_add(rescans)
                 .saturating_add(applied);
             super::style::screen(value)?;
-            element.dash = element.dash.max(super::style::dash(value)?);
-            element.strokes.read(value)?;
+            element.dash = element.dash.max(element.strokes.read(value)?);
             element.context |= value.contains("context-");
             let mut targets = Vec::new();
             reference::css(value, &mut targets)?;

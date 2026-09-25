@@ -43,15 +43,32 @@ pub(super) struct Strokes {
 }
 
 impl Strokes {
-    /// Reads CSS text.
-    pub(super) fn read(&mut self, text: &str) -> Result<(), SvgRefusal> {
+    /// Reads CSS text, returning the bytes of the longest dash list it
+    /// declares. Declarations are read with the `simplecss` tokenizer `usvg`
+    /// reads them with, comments, a leading `*` and `!important` included, in
+    /// one pass and only where a stroke width or dash list may be declared:
+    /// the caller has charged that pass as [`tokenized`].
+    pub(super) fn read(&mut self, text: &str) -> Result<u64, SvgRefusal> {
         let has = |word: &[u8]| super::reference::contains_ignore_case(text, word);
         self.stroked |= has(b"stroke");
         self.turned |= has(b"transform");
-        for value in values(text, "stroke-width") {
-            self.width = self.width.max(super::geometry::stroke_width(value)?);
+        let mut dash = 0;
+        if tokenized(text) == 0 {
+            return Ok(dash);
         }
-        Ok(())
+        for declaration in simplecss::DeclarationTokenizer::from(text) {
+            match declaration.name {
+                "stroke-width" => {
+                    let width = super::geometry::stroke_width(declaration.value)?;
+                    self.width = self.width.max(width);
+                }
+                "stroke-dasharray" => {
+                    dash = dash.max(super::geometry::dash_list(declaration.value)?);
+                }
+                _ => {}
+            }
+        }
+        Ok(dash)
     }
 
     pub(super) fn join(&mut self, other: Strokes) {
@@ -183,8 +200,11 @@ impl<'a> StyleSheet<'a> {
                 return Err(SvgRefusal::UnsupportedStyle);
             }
             screen(declarations)?;
-            self.dash = self.dash.max(dash(declarations)?);
-            self.strokes.read(declarations)?;
+            self.work = self.work.saturating_add(tokenized(declarations));
+            if self.work > MAX_SVG_STYLE_WORK {
+                return Err(SvgRefusal::ExpansionTooLarge);
+            }
+            self.dash = self.dash.max(self.strokes.read(declarations)?);
             let mut references = Vec::new();
             super::reference::css(declarations, &mut references)?;
             let block = self.blocks.len();
@@ -223,22 +243,14 @@ pub(super) fn rescans(len: usize) -> u64 {
     (len as u64).saturating_mul(len as u64) / 4
 }
 
-/// Bytes of the longest `stroke-dasharray` CSS text declares.
-pub(super) fn dash(text: &str) -> Result<u64, SvgRefusal> {
-    values(text, "stroke-dasharray").try_fold(0, |longest, value| {
-        super::geometry::dash_list(value).map(|bytes| bytes.max(longest))
-    })
-}
-
-/// Every value `text` declares for `property`, split as `simplecss` splits
-/// declarations.
-pub(super) fn values<'a>(text: &'a str, property: &'a str) -> impl Iterator<Item = &'a str> {
-    text.split(';').filter_map(move |declaration| {
-        let (name, value) = declaration.split_once(':')?;
-        name.trim()
-            .eq_ignore_ascii_case(property)
-            .then_some(value.trim())
-    })
+/// Style work the audit spends reading `text` with the same tokenizer, which
+/// it does only for text that may declare a stroke width or dash list.
+pub(super) fn tokenized(text: &str) -> u64 {
+    if super::reference::contains_ignore_case(text, b"stroke-") {
+        rescans(text.len())
+    } else {
+        0
+    }
 }
 
 /// Refuses CSS text that could apply a filter or inherit a value: a copy's
