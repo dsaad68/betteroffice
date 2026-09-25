@@ -297,8 +297,8 @@ function hasCaretNear(textBox: TextBoxPrimitive, y: number): boolean {
   return nearest.caretStops.length > 0;
 }
 
-/** The whole rectangle a drag commits, so a shape that still inherits its
- *  geometry materializes an extent along with the new position. */
+/** The rectangle the shape is drawn at, shifted by a drag. The editor commits
+ *  only its position, through `moveShape`, and the core supplies the rest. */
 export function movedShapeRect(
   deck: DeckSnapshot,
   frame: SlideDisplayList,
