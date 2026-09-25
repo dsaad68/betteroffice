@@ -2434,13 +2434,15 @@ fn resolve_content(
             .or(properties.alignment.as_deref());
         // A blank paragraph between list items is spacing, not an item:
         // PowerPoint neither marks it nor counts it towards the next number.
-        let marker = paragraph
+        let written_marker = paragraph
             .runs
             .iter()
             .any(|run| !run.text.is_empty())
             .then(|| resolve_marker(properties.bullet.as_ref(), paragraph.level, &mut numbering))
-            .flatten()
-            .map(|marker| symbol_bullet(&marker, properties.bullet_font.as_ref(), theme));
+            .flatten();
+        let marker = written_marker
+            .as_deref()
+            .map(|marker| symbol_bullet(marker, properties.bullet_font.as_ref(), theme));
         paragraphs.push(ResolvedParagraph {
             align: parse_align(alignment),
             justify: is_full_justification(alignment),
@@ -2458,14 +2460,15 @@ fn resolve_content(
                 properties.indent.unwrap_or_default(),
             ),
             default_tab_px: resolve_default_tab(properties.default_tab_size),
-            bullet_style: marker
-                .is_some()
-                .then(|| {
+            bullet_style: written_marker
+                .as_deref()
+                .map(|written| {
                     resolve_bullet_style(
                         renderer,
                         theme,
                         &properties,
                         &runs[0].style,
+                        written,
                         substitutions,
                     )
                 })
@@ -2568,6 +2571,7 @@ fn resolve_bullet_style(
     theme: &Theme,
     properties: &ParagraphProperties,
     text: &ResolvedStyle,
+    written_marker: &str,
     substitutions: &mut SubstitutionLog,
 ) -> Result<ResolvedStyle, RenderError> {
     let mut style = text.clone();
@@ -2577,9 +2581,14 @@ fn resolve_bullet_style(
         } else {
             family.clone()
         };
-        let mut emulated = SubstitutionLog::default();
-        let log = if ooxml_text::SymbolFont::named(&family).is_some() {
-            &mut emulated
+        let emulated = ooxml_text::SymbolFont::named(&family).is_some_and(|font| {
+            written_marker
+                .chars()
+                .all(|character| font.substitute(character).is_some())
+        });
+        let mut ignored = SubstitutionLog::default();
+        let log = if emulated {
+            &mut ignored
         } else {
             substitutions
         };
@@ -9786,6 +9795,24 @@ mod tests {
         assert_eq!(log.entries.len(), 1);
         assert_eq!(log.entries[0].requested_family, "Arial");
         assert_eq!(log.entries[0].selected_family, "Liberation Sans");
+    }
+
+    #[test]
+    fn a_symbol_bullet_is_reported_unless_every_character_is_emulated() {
+        let mut renderer = SlideRenderer::new();
+        renderer.register_font("Arial", false, false, FONT).unwrap();
+        let text = paragraph(&renderer, "l", "Item").runs[0].style.clone();
+        let properties = ParagraphProperties {
+            bullet_font: Some(BulletFont::Typeface("Wingdings".to_owned())),
+            ..ParagraphProperties::default()
+        };
+        let theme = Theme::default();
+        let mut log = SubstitutionLog::default();
+        resolve_bullet_style(&renderer, &theme, &properties, &text, "\u{a7}", &mut log).unwrap();
+        assert!(log.entries.is_empty());
+        resolve_bullet_style(&renderer, &theme, &properties, &text, "\u{2192}", &mut log).unwrap();
+        assert_eq!(log.entries.len(), 1);
+        assert_eq!(log.entries[0].requested_family, "Wingdings");
     }
 
     #[test]
