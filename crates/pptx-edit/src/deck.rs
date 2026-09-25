@@ -18,7 +18,7 @@ use yrs::{
 use crate::comments::{
     baseline_comments, flavor_key, seed_comments, snapshot_comments, snapshot_flavor,
 };
-use crate::inherit::{SlideContext, inherited_transform, record_inherited};
+use crate::inherit::{SlideContext, inherited_transform, layout_transform, record_inherited};
 use crate::story::{baseline_story, seed_plain_story, seed_story, snapshot_story, validate_story};
 use crate::{
     DeckSession, DeckSnapshot, EditCtx, EditError, EditResult, META, MIGRATE_ORIGIN, PendingMedia,
@@ -903,8 +903,9 @@ impl DeckSession {
         })
     }
 
-    /// Writes the whole inherited transform onto a placeholder that still has
-    /// none of its own, so a geometry edit never leaves half of one behind.
+    /// Gives a placeholder without an extent the whole inherited transform, or,
+    /// beside a partial transform of its own, just the layout's extent, so a
+    /// geometry edit never leaves a zero extent behind.
     fn materialize_inherited(
         &self,
         txn: &mut TransactionMut<'_>,
@@ -925,18 +926,21 @@ impl DeckSession {
             source_part_path.as_deref(),
             layout_part_path.as_deref(),
         );
-        let Some(transform) =
-            inherited_transform(&context, source_id, placeholder.as_ref()).cloned()
-        else {
-            return Ok(());
-        };
-        shape.insert(txn, "x", transform.x as f64);
-        shape.insert(txn, "y", transform.y as f64);
-        shape.insert(txn, "width", transform.width as f64);
-        shape.insert(txn, "height", transform.height as f64);
-        shape.insert(txn, "rotationDeg", transform.rotation_deg);
-        shape.insert(txn, "flipH", transform.flip_h);
-        shape.insert(txn, "flipV", transform.flip_v);
+        if let Some(transform) = inherited_transform(&context, source_id, placeholder.as_ref()) {
+            shape.insert(txn, "x", transform.x as f64);
+            shape.insert(txn, "y", transform.y as f64);
+            shape.insert(txn, "width", transform.width as f64);
+            shape.insert(txn, "height", transform.height as f64);
+            shape.insert(txn, "rotationDeg", transform.rotation_deg);
+            shape.insert(txn, "flipH", transform.flip_h);
+            shape.insert(txn, "flipV", transform.flip_v);
+        } else if let Some(transform) = placeholder
+            .as_ref()
+            .and_then(|placeholder| layout_transform(&context, placeholder))
+        {
+            shape.insert(txn, "width", transform.width as f64);
+            shape.insert(txn, "height", transform.height as f64);
+        }
         Ok(())
     }
 }

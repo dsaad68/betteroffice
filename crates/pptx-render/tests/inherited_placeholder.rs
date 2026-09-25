@@ -246,7 +246,7 @@ fn an_offset_only_transform_is_not_inherited_and_draws_with_its_own_orientation(
 }
 
 #[test]
-fn an_api_move_of_an_offset_only_transform_draws_the_same_live_and_reopened() {
+fn an_api_move_of_an_offset_only_transform_moves_the_rect_it_draws_at() {
     let session = DeckSession::open(
         &body_deck(r#"<p:spPr><a:xfrm><a:off x="123825" y="657225"/></a:xfrm></p:spPr>"#),
         1,
@@ -265,7 +265,13 @@ fn an_api_move_of_an_offset_only_transform_draws_the_same_live_and_reopened() {
         .unwrap();
 
     let live = drawn(&session, &body.id);
-    assert_eq!(live, (LAYOUT_BODY, Transform::default()));
+    assert_eq!(
+        live,
+        (
+            (1_905_000, 2_857_500, LAYOUT_BODY.2, LAYOUT_BODY.3),
+            Transform::default()
+        )
+    );
     assert_eq!(drawn(&reopened(&session), &body.id), live);
 }
 

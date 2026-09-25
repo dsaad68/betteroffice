@@ -86,6 +86,15 @@ pub(crate) fn inherited_transform<'a>(
     placeholder: Option<&Placeholder>,
 ) -> Option<&'a ShapeTransform> {
     let placeholder = placeholder.filter(|_| !has_own_transform(context, source_id))?;
+    layout_transform(context, placeholder)
+}
+
+/// The layout's or master's transform for `placeholder`, whatever the slide
+/// node spells out itself.
+pub(crate) fn layout_transform<'a>(
+    context: &SlideContext<'a>,
+    placeholder: &Placeholder,
+) -> Option<&'a ShapeTransform> {
     let layout = context
         .layout
         .and_then(|layout| find_placeholder(&layout.shapes, placeholder));
