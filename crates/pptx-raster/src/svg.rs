@@ -33,8 +33,17 @@ pub const MAX_SVG_EXPANDED_BYTES: u64 = 8_388_608;
 pub const MAX_SVG_GRADIENT_STOPS: usize = 256;
 /// `<style>` elements plus the rules they declare.
 pub const MAX_SVG_STYLE_RULES: usize = 1_024;
-/// Selector tests and declarations `usvg` applies across the expanded document.
-pub const MAX_SVG_STYLE_WORK: u64 = 16_777_216;
+/// Simple selectors (a type, `.class` or `#id`) one rule may compound.
+pub const MAX_SVG_SELECTOR_PARTS: usize = 16;
+/// Bytes of one selector.
+pub const MAX_SVG_SELECTOR_BYTES: usize = 256;
+/// Selectors times the bytes of the block they share: `simplecss` copies a
+/// block's declarations once per selector of its list.
+pub const MAX_SVG_STYLE_COPIES: u64 = 1_048_576;
+/// What `simplecss` and `usvg` spend on CSS, in units of about a nanosecond:
+/// rescans of every stylesheet and `style` attribute, selector tests, and
+/// declarations applied, across the expanded document.
+pub const MAX_SVG_STYLE_WORK: u64 = 1 << 28;
 /// Group layers (opacity, clip, blend, isolation) one render may stack.
 pub const MAX_SVG_LAYER_DEPTH: usize = 8;
 /// Painted pixels, gradient stops weighted in, as a multiple of the output raster.
@@ -736,7 +745,7 @@ pub(crate) mod tests {
         let rules: String = (0..1_000)
             .map(|index| format!(".c{index}{{fill:red}}"))
             .collect();
-        let rects = r##"<rect width="9" height="9"/>"##.repeat(20_000);
+        let rects = r##"<rect width="9" height="9"/>"##.repeat(40_000);
         let wide = document(&format!("<style>{rules}</style>{rects}"));
         assert_eq!(
             refusal(wide.as_bytes()),
@@ -748,6 +757,78 @@ pub(crate) mod tests {
         assert_eq!(
             refusal(document(&format!("<style>{many}</style>")).as_bytes()),
             Some(SvgRefusal::UnsupportedStyle)
+        );
+    }
+
+    #[test]
+    fn a_selector_bomb_is_refused_before_anything_matches_it() {
+        let bomb = |parts: usize| {
+            document(&format!(
+                "<style>{}{{fill:red}}</style>{}",
+                ".a".repeat(parts),
+                r##"<g class="a"/>"##.repeat(90_000)
+            ))
+        };
+        for (parts, outcome) in [
+            (1_000_000, SvgRefusal::ExpansionTooLarge),
+            (5_000, SvgRefusal::UnsupportedStyle),
+        ] {
+            let source = bomb(parts);
+            assert!(source.len() < MAX_SVG_BYTES);
+            let started = std::time::Instant::now();
+            assert_eq!(refusal(source.as_bytes()), Some(outcome), "{parts}");
+            assert!(started.elapsed() < std::time::Duration::from_secs(5));
+        }
+    }
+
+    #[test]
+    fn rules_times_elements_times_parts_is_charged_before_usvg_matches_them() {
+        let styled = |elements: usize| {
+            let rules: String = (0..300)
+                .map(|index| format!(".x{index}{}{{fill:red}}", ".a".repeat(15)))
+                .collect();
+            document(&format!(
+                "<style>{rules}</style>{}",
+                r##"<g class="a"/>"##.repeat(elements)
+            ))
+        };
+        assert!(parse(styled(100).as_bytes()).is_ok());
+        assert_eq!(
+            refusal(styled(10_000).as_bytes()),
+            Some(SvgRefusal::ExpansionTooLarge)
+        );
+    }
+
+    #[test]
+    fn css_text_is_charged_the_rescans_simplecss_makes_of_it() {
+        let style = |declarations: usize| {
+            document(&format!(
+                r##"<rect width="9" height="9" style="{}"/>"##,
+                "fill:red;".repeat(declarations)
+            ))
+        };
+        assert!(parse(style(100).as_bytes()).is_ok());
+        assert_eq!(
+            refusal(style(8_000).as_bytes()),
+            Some(SvgRefusal::ExpansionTooLarge)
+        );
+        let sheet = document(&format!(
+            "<style>.a{{{}}}</style>",
+            "fill:red;".repeat(8_000)
+        ));
+        assert_eq!(
+            refusal(sheet.as_bytes()),
+            Some(SvgRefusal::ExpansionTooLarge)
+        );
+        let copied = document(&format!(
+            "<defs><rect id=\"r\" width=\"9\" height=\"9\" style=\"{}\"/></defs>{}",
+            "fill:red;".repeat(400),
+            r##"<use href="#r"/>"##.repeat(2_000)
+        ));
+        assert_eq!(
+            refusal(copied.as_bytes()),
+            Some(SvgRefusal::ExpansionTooLarge),
+            "each copy re-reads its style attribute"
         );
     }
 

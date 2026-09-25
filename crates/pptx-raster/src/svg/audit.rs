@@ -124,14 +124,14 @@ pub(super) fn audit(document: &Document<'_>) -> Result<(), SvgRefusal> {
         }
         let index = elements.len();
         let mut links = Vec::new();
-        let bytes = audit_attributes(node, &mut links)?;
+        let (bytes, style) = audit_attributes(node, &mut links)?;
         elements.push(Element {
             node,
             opaque: name == "metadata",
             children: Vec::new(),
             links,
             bytes,
-            style: 0,
+            style,
         });
         if let Some(Slot::Element(parent)) = parent {
             elements[parent].children.push(index);
@@ -152,21 +152,24 @@ pub(super) fn audit(document: &Document<'_>) -> Result<(), SvgRefusal> {
     }
 
     let sheet = StyleSheet::collect(document)?;
-    let mut work = 0u64;
+    let mut work = sheet.work();
     for element in &mut elements {
-        let class = element.node.attribute("class").map_or(0, str::len) as u64;
-        element.style = sheet.rules().saturating_mul(1 + class / 16);
+        element.style = element.style.saturating_add(sheet.tests(element.node));
         work = work.saturating_add(element.style);
     }
     if work > MAX_SVG_STYLE_WORK {
         return Err(SvgRefusal::ExpansionTooLarge);
     }
+    elements[0].style = elements[0].style.saturating_add(sheet.work());
     let room = MAX_SVG_EXPANDED_NODES as usize;
     let mut links = 0usize;
     for element in &mut elements {
         let mut overflow = false;
+        let insert = declaration_work(element.node);
         sheet.each_match(element.node, |declarations, references| {
-            element.style = element.style.saturating_add(1 + declarations);
+            element.style = element
+                .style
+                .saturating_add(declarations.saturating_mul(insert));
             if element.links.len() + 2 * references.len() > room {
                 overflow = true;
                 return;
@@ -227,16 +230,18 @@ fn follows(link: Link, target: Node<'_, '_>) -> bool {
     }
 }
 
-/// Markup bytes the element contributes, collecting the references `usvg`
-/// follows from it, each read by the parser `usvg` reads it with. An `href`
-/// is followed only on `use` and on gradients: on `a` and `image` it is
-/// inert, since nothing follows a link and both image resolvers return `None`.
+/// Markup bytes the element contributes and the style work a `style`
+/// attribute costs per instance, collecting the references `usvg` follows
+/// from it, each read by the parser `usvg` reads it with. An `href` is
+/// followed only on `use` and on gradients: on `a` and `image` it is inert,
+/// since nothing follows a link and both image resolvers return `None`.
 fn audit_attributes<'a>(
     node: Node<'a, 'a>,
     links: &mut Vec<(Link, &'a str)>,
-) -> Result<u64, SvgRefusal> {
+) -> Result<(u64, u64), SvgRefusal> {
     let name = node.tag_name().name();
     let mut bytes = name.len() as u64;
+    let mut style = 0u64;
     let (mut href, mut xlink_href) = (None, None);
     for attribute in node.attributes() {
         let (local, value) = (attribute.name(), attribute.value());
@@ -245,6 +250,10 @@ fn audit_attributes<'a>(
             return Err(SvgRefusal::UnsupportedStyle);
         }
         if local == "style" {
+            let applied = (value.len() as u64).saturating_mul(declaration_work(node));
+            style = style
+                .saturating_add(super::style::rescans(value.len()))
+                .saturating_add(applied);
             style_references(value, links)?;
             continue;
         }
@@ -285,7 +294,14 @@ fn audit_attributes<'a>(
     for text in node.children().filter(|child| child.is_text()) {
         bytes += text.text().map_or(0, str::len) as u64;
     }
-    Ok(bytes)
+    Ok((bytes, style))
+}
+
+/// Style work per byte of declarations applied to one instance of `node`:
+/// each declaration looks its property up among the element's attributes
+/// and copies its value.
+fn declaration_work(node: Node<'_, '_>) -> u64 {
+    32 + node.attributes().len() as u64
 }
 
 /// The references a `style` attribute can make. Its declarations are not

@@ -1,17 +1,29 @@
-//! The stylesheet subset the sandbox accepts: rules whose selectors are a lone
-//! type, class or id compound. `simplecss` backtracks through combinators, so a
-//! selector like `g g g … .x` over deep nesting is exponential before any budget
-//! sees it; compounds match in constant time and name the elements they touch.
+//! The stylesheet subset the sandbox accepts, and what `simplecss` spends on
+//! it. Rules are lone type, class and id compounds: `simplecss` backtracks
+//! through combinators, so `g g g … .x` over deep nesting is exponential before
+//! any budget sees it. Its cost is then charged in style work, about a
+//! nanosecond each: it rescans the text from the start at every token it
+//! rejects, and tests every rule against every element instance.
 
 use resvg::usvg::roxmltree::{Document, Node};
 
-use super::{MAX_SVG_STYLE_RULES, SvgRefusal};
+use super::{
+    MAX_SVG_SELECTOR_BYTES, MAX_SVG_SELECTOR_PARTS, MAX_SVG_STYLE_COPIES, MAX_SVG_STYLE_RULES,
+    MAX_SVG_STYLE_WORK, SvgRefusal,
+};
 
 /// Every rule the document's `<style>` elements declare, one per selector.
 #[derive(Default)]
 pub(super) struct StyleSheet<'a> {
     rules: Vec<Rule<'a>>,
     blocks: Vec<Block<'a>>,
+    /// Simple selectors across every rule; each is tested per element instance.
+    parts: u64,
+    /// What parsing the sheets costs `simplecss` once, in style work.
+    work: u64,
+    /// Selectors times the bytes of their block: `simplecss` copies a block's
+    /// declarations once per selector of its list.
+    copies: u64,
 }
 
 struct Rule<'a> {
@@ -42,7 +54,12 @@ impl<'a> StyleSheet<'a> {
             }
             sheets += 1;
             for text in node.children().filter(|child| child.is_text()) {
-                sheet.parse(text.text().unwrap_or_default())?;
+                let text = text.text().unwrap_or_default();
+                sheet.work = sheet.work.saturating_add(rescans(text.len()));
+                if sheet.work > MAX_SVG_STYLE_WORK {
+                    return Err(SvgRefusal::ExpansionTooLarge);
+                }
+                sheet.parse(text)?;
             }
             if sheets + sheet.rules.len() > MAX_SVG_STYLE_RULES {
                 return Err(SvgRefusal::UnsupportedStyle);
@@ -51,8 +68,26 @@ impl<'a> StyleSheet<'a> {
         Ok(sheet)
     }
 
-    pub(super) fn rules(&self) -> u64 {
-        self.rules.len() as u64
+    /// Style work parsing the sheets costs, once per document.
+    pub(super) fn work(&self) -> u64 {
+        self.work
+    }
+
+    /// Style work testing every rule against one instance of `node`: a
+    /// simple selector looks its attribute up among `node`'s and scans the
+    /// value, and the first to fail ends the rule.
+    pub(super) fn tests(&self, node: Node<'_, '_>) -> u64 {
+        if self.rules.is_empty() {
+            return 0;
+        }
+        let attributes = node.attributes().len() as u64;
+        let values = ["class", "id"]
+            .iter()
+            .filter_map(|name| node.attribute(*name))
+            .map(str::len)
+            .sum::<usize>() as u64;
+        (self.rules.len() as u64 * 4)
+            .saturating_add(self.parts.saturating_mul(4 + 2 * attributes + values / 2))
     }
 
     /// Calls `matched` with the block length and same-document references of
@@ -111,12 +146,25 @@ impl<'a> StyleSheet<'a> {
                 if self.rules.len() >= MAX_SVG_STYLE_RULES {
                     return Err(SvgRefusal::UnsupportedStyle);
                 }
+                self.parts += (rule.tag.is_some() as usize + rule.classes.len() + rule.ids.len())
+                    .max(1) as u64;
+                self.copies = self.copies.saturating_add(declarations.len() as u64);
                 self.rules.push(rule);
+            }
+            if self.copies > MAX_SVG_STYLE_COPIES {
+                return Err(SvgRefusal::ExpansionTooLarge);
             }
             rest = rest[close + 1..].trim_start_matches(|c: char| c.is_ascii_whitespace());
         }
         Ok(())
     }
+}
+
+/// Style work `simplecss` spends rescanning CSS text of `len` bytes: at
+/// worst a rejected token every other byte, each rescanning the text before
+/// it, measured at about 0.17 ns per byte squared.
+pub(super) fn rescans(len: usize) -> u64 {
+    (len as u64).saturating_mul(len as u64) / 4
 }
 
 /// Refuses CSS text that could apply a filter, or a clip path inherited from
@@ -153,7 +201,8 @@ fn closed(block: &str) -> bool {
     true
 }
 
-/// `*`, or an optional type followed by `.class` and `#id` parts, nothing else.
+/// `*`, or an optional type followed by `.class` and `#id` parts, nothing
+/// else, within [`MAX_SVG_SELECTOR_PARTS`] and [`MAX_SVG_SELECTOR_BYTES`].
 fn compound(selector: &str, block: usize) -> Option<Rule<'_>> {
     let mut rule = Rule {
         tag: None,
@@ -161,6 +210,9 @@ fn compound(selector: &str, block: usize) -> Option<Rule<'_>> {
         ids: Vec::new(),
         block,
     };
+    if selector.len() > MAX_SVG_SELECTOR_BYTES {
+        return None;
+    }
     if selector == "*" {
         return Some(rule);
     }
@@ -168,7 +220,7 @@ fn compound(selector: &str, block: usize) -> Option<Rule<'_>> {
     rule.tag = (!tag.is_empty()).then_some(tag);
     while let Some(sigil) = rest.chars().next().filter(|c| matches!(c, '.' | '#')) {
         let (name, after) = ident(&rest[1..]);
-        if name.is_empty() {
+        if name.is_empty() || rule.classes.len() + rule.ids.len() >= MAX_SVG_SELECTOR_PARTS {
             return None;
         }
         match sigil {
@@ -202,8 +254,8 @@ mod tests {
 
     #[test]
     fn office_and_illustrator_rules_parse() {
-        let css = "\n.MsftOfcThm_Accent1_Fill_v2 {\n fill:#4472C4; \n}\n.st0,.st1{fill:url(#SVGID_1_);}\nrect#a.b{stroke:none}\n*{opacity:1}";
-        assert_eq!(sheet(css), Ok(5));
+        let css = "\n.MsftOfcThm_Accent1_Fill_v2 {\n fill:#4472C4; \n}\n.st0,.st1{fill:url(#SVGID_1_);}\nrect#a.b{stroke:none}\n*{opacity:1}\n.st2{font-family:'Myriad Pro';fill:rgb(1,2,3)}";
+        assert_eq!(sheet(css), Ok(6));
     }
 
     #[test]
@@ -222,6 +274,9 @@ mod tests {
             "*.a{fill:red}",
             "aé{fill:red}",
             ".a\u{e9}{fill:red}",
+            ".a{font-family:'}';fill:url(#g)}",
+            ".a{fill:f(}.b{fill:red)}",
+            ".a{font-family:\"x\\\"}\"}",
         ] {
             assert_eq!(sheet(css), Err(SvgRefusal::UnsupportedStyle), "{css}");
         }
@@ -229,5 +284,24 @@ mod tests {
             sheet(".a{fill:URL(https://example.invalid/p.svg#g)}"),
             Err(SvgRefusal::ExternalReference)
         );
+    }
+
+    #[test]
+    fn a_selector_is_held_to_its_parts_and_bytes() {
+        let parts = |count: usize| format!("{}{{fill:red}}", ".a".repeat(count));
+        assert_eq!(sheet(&parts(MAX_SVG_SELECTOR_PARTS)), Ok(1));
+        assert_eq!(
+            sheet(&parts(MAX_SVG_SELECTOR_PARTS + 1)),
+            Err(SvgRefusal::UnsupportedStyle)
+        );
+        let long = format!(".{}{{fill:red}}", "a".repeat(MAX_SVG_SELECTOR_BYTES));
+        assert_eq!(sheet(&long), Err(SvgRefusal::UnsupportedStyle));
+    }
+
+    #[test]
+    fn a_block_copied_per_selector_counts_every_copy() {
+        let selectors: Vec<String> = (0..1_000).map(|index| format!(".s{index}")).collect();
+        let css = format!("{}{{{}}}", selectors.join(","), "a:b;".repeat(1_000));
+        assert_eq!(sheet(&css), Err(SvgRefusal::ExpansionTooLarge));
     }
 }
