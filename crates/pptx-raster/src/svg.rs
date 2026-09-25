@@ -142,6 +142,11 @@ impl SvgImage {
         self.pixels
     }
 
+    /// The document's own size in CSS px, which a tiled fill repeats at.
+    pub fn intrinsic(&self) -> (f32, f32) {
+        (self.tree.size().width(), self.tree.size().height())
+    }
+
     /// Straight-alpha RGBA, matching what the raster formats hand back.
     pub fn render(&self) -> Result<(Vec<u8>, IntSize), SvgRefusal> {
         let mut pixmap =
