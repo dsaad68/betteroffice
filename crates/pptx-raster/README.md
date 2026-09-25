@@ -43,12 +43,33 @@ which drives the canvas replayer and `canvas.toBlob()` instead.
 
 ## SVG pictures
 
-A picture whose bytes are SVG is rasterized with resvg/usvg instead of the
-`image` crate, under a sandbox with no DTD, no external reference and bounded
-document bytes, nesting, node count and output raster. Text is not drawn —
-`usvg`'s text feature is off, and nothing here shapes it — and images embedded
-inside the document are not resolved. A refused document is a skipped image
-like any other.
+A picture whose bytes are SVG is rasterized natively with resvg/usvg instead of
+the `image` crate. It draws shapes, paths, fills, strokes, linear and radial
+gradients, clip paths, `<use>` and `<symbol>` instances, and stylesheets of
+plain type, class and id rules. It does not draw text (`usvg`'s text feature is
+off), embedded raster images (both href resolvers return `None`), markers,
+filters, masks or patterns. A hyperlink or an embedded image leaves the rest of
+the picture drawn; any other element outside that set declines the document.
+
+The sandbox bounds what conversion and rendering cost by construction:
+
+- **Before `usvg`.** No DTD, no reference outside the document, no reference
+  cycle. The tree every `<use>`, clip path and paint reference expands into is
+  sized first: `MAX_SVG_EXPANDED_NODES` elements, `MAX_SVG_EXPANDED_BYTES` of
+  markup, `MAX_SVG_DEPTH` levels, `MAX_SVG_GRADIENT_STOPS` stops per gradient,
+  and `MAX_SVG_STYLE_WORK` of selector matching over at most
+  `MAX_SVG_STYLE_RULES` rules.
+- **Before `resvg`.** The converted tree is priced: group layers stack at most
+  `MAX_SVG_LAYER_DEPTH` deep and are charged to the slide's image budget with
+  the output raster, painted area stays within `MAX_SVG_OVERDRAW` times that
+  raster, and painting work within `MAX_SVG_RENDER_WORK`. The raster renders at
+  up to four times the document's intrinsic size and steps down when it would
+  not fit.
+- **During both.** A panic in either library becomes a refusal.
+
+A refused document is a skipped image like any other and carries nothing from
+the document. A tiled SVG repeats at its intrinsic size, as a raster repeats at
+its pixel size.
 
 ## What the display list does not carry
 
