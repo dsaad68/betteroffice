@@ -80,6 +80,9 @@ pub const MAX_SVG_EXPANDED_BYTES: u64 = 1 << 21;
 /// Path data one shape may carry, which `usvg` strokes whole to measure it:
 /// 16 MiB of outline, the envelope's share for any one path's transients.
 pub const MAX_SVG_PATH_BYTES: usize = 1 << 16;
+/// That share: what the edges, outline and dashes of any one path may take
+/// while `usvg` measures it or `resvg` paints it.
+const SVG_TRANSIENT_BYTES: u64 = MAX_SVG_PATH_BYTES as u64 * STROKE_BYTES;
 /// Stops one gradient may carry. `usvg` drops equal offsets by shifting the
 /// list, quadratic in its length, and `tiny-skia` tests every stop per pixel.
 pub const MAX_SVG_GRADIENT_STOPS: usize = 256;
@@ -744,7 +747,7 @@ pub(crate) mod tests {
     fn a_shape_is_held_to_the_path_data_usvg_strokes_whole() {
         let path = |segments: usize| {
             document(&format!(
-                r##"<path d="M0 0{}" stroke="#000"/><polygon points="{}"/>"##,
+                r##"<path d="M0 0{}" stroke="#000" stroke-width="0.1"/><polygon points="{}"/>"##,
                 "h1".repeat(segments),
                 "1 1 ".repeat(segments / 2)
             ))
@@ -753,6 +756,34 @@ pub(crate) mod tests {
         assert_eq!(
             refusal(path(MAX_SVG_PATH_BYTES / 2).as_bytes()),
             Some(SvgRefusal::ExpansionTooLarge)
+        );
+    }
+
+    #[test]
+    fn a_path_is_priced_for_the_edges_and_outline_it_draws() {
+        let zigzag = |segments: usize, stroke: &str| {
+            document(&format!(
+                r##"<path d="M40 40{}" fill="none" stroke="#000" {stroke}/>"##,
+                "l9 9l-9-9".repeat(segments / 2)
+            ))
+        };
+        assert!(parse(zigzag(200, r#"stroke-width="4""#).as_bytes()).is_ok());
+        for stroke in [
+            r#"stroke-width="4""#,
+            r#"stroke-width="4" stroke-linejoin="round""#,
+            r#"stroke-width="4" stroke-dasharray="0.1 0.1""#,
+        ] {
+            let started = std::time::Instant::now();
+            assert_eq!(
+                refusal(zigzag(12_000, stroke).as_bytes()),
+                Some(SvgRefusal::RenderTooCostly),
+                "{stroke}"
+            );
+            assert!(started.elapsed() < std::time::Duration::from_secs(5));
+        }
+        assert!(
+            parse(zigzag(12_000, r#"stroke-width="0.1""#).as_bytes()).is_ok(),
+            "a hairline is drawn without an outline"
         );
     }
 
