@@ -183,8 +183,8 @@ pub enum SvgRefusal {
     UnsupportedElement,
     /// A stylesheet past [`MAX_SVG_STYLE_RULES`] or beyond plain type, class and
     /// id rules within [`MAX_SVG_SELECTOR_PARTS`] and [`MAX_SVG_SELECTOR_BYTES`],
-    /// a `filter` in any form, or a clip path inherited from whatever element a
-    /// copy lands under.
+    /// a `filter` in any form, `inherit` in any CSS, or a clip path inherited
+    /// from whatever element a copy lands under.
     UnsupportedStyle,
     /// A reference that leads back to itself.
     ReferenceCycle,
@@ -1099,6 +1099,34 @@ pub(crate) mod tests {
             "every copy is compared against every other when usvg collects them"
         );
         assert!(parse(inherited("", 2, "fill", 2_000).as_bytes()).is_ok());
+    }
+
+    #[test]
+    fn css_cannot_hand_a_shape_the_paint_its_attribute_set_aside() {
+        let stops: String = (0..MAX_SVG_GRADIENT_STOPS)
+            .map(|index| format!(r##"<stop offset="{index}" stop-color="#f00"/>"##))
+            .collect();
+        let shapes = r##"<rect width="1" height="1" fill="red"/>"##.repeat(3_000);
+        for css in [
+            "<style>rect { fill:inherit }</style>",
+            "<style>rect { stroke: INHERIT }</style>",
+        ] {
+            let body = format!(
+                r##"{css}<linearGradient id="g">{stops}</linearGradient><g fill="url(#g)" stroke="url(#g)">{shapes}</g>"##
+            );
+            assert_eq!(
+                refusal(document(&body).as_bytes()),
+                Some(SvgRefusal::UnsupportedStyle),
+                "{css}"
+            );
+        }
+        let attribute =
+            r##"<g fill="url(#g)"><rect width="1" height="1" style="fill: inherit"/></g>"##;
+        assert_eq!(
+            refusal(document(attribute).as_bytes()),
+            Some(SvgRefusal::UnsupportedStyle)
+        );
+        assert!(parse(inherited("", 16, "fill", 16).as_bytes()).is_ok());
     }
 
     #[test]

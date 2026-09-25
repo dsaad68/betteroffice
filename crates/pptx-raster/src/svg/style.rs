@@ -176,11 +176,12 @@ pub(super) fn rescans(len: usize) -> u64 {
     (len as u64).saturating_mul(len as u64) / 4
 }
 
-/// Refuses CSS text that could apply a filter, or a clip path inherited from
-/// whatever element a copy lands under.
+/// Refuses CSS text that could apply a filter or inherit a value: a copy's
+/// clip path from whatever element it lands under, or a paint over the
+/// presentation attribute the audit read as setting it aside.
 pub(super) fn screen(text: &str) -> Result<(), SvgRefusal> {
     if super::reference::contains_ignore_case(text, b"filter")
-        || (text.contains("clip-path") && text.contains("inherit"))
+        || super::reference::contains_ignore_case(text, b"inherit")
     {
         return Err(SvgRefusal::UnsupportedStyle);
     }
