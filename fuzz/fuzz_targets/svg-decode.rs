@@ -15,11 +15,14 @@ const STACK: usize = 512 * 1024;
 const PEAK: usize = SVG_MEMORY_ENVELOPE as usize + PIXELS as usize * 4;
 
 /// Counts live heap bytes, a malloc header's worth over each request, so the
-/// target measures the decode rather than libFuzzer's corpus.
+/// target measures the decode rather than libFuzzer's corpus. An allocation
+/// that would take a decode past [`PEAK`] fails, which aborts the run there
+/// and then, before the machine ever holds more.
 struct Counting;
 
 static LIVE: AtomicUsize = AtomicUsize::new(0);
 static HIGH: AtomicUsize = AtomicUsize::new(0);
+static BASE: AtomicUsize = AtomicUsize::new(0);
 
 fn charged(layout: Layout) -> usize {
     layout.size().next_multiple_of(16) + 16
@@ -27,9 +30,15 @@ fn charged(layout: Layout) -> usize {
 
 unsafe impl GlobalAlloc for Counting {
     unsafe fn alloc(&self, layout: Layout) -> *mut u8 {
+        let live = LIVE.fetch_add(charged(layout), Ordering::Relaxed) + charged(layout);
+        if live.saturating_sub(BASE.load(Ordering::Relaxed)) > PEAK {
+            LIVE.fetch_sub(charged(layout), Ordering::Relaxed);
+            return std::ptr::null_mut();
+        }
         let pointer = unsafe { System.alloc(layout) };
-        if !pointer.is_null() {
-            let live = LIVE.fetch_add(charged(layout), Ordering::Relaxed) + charged(layout);
+        if pointer.is_null() {
+            LIVE.fetch_sub(charged(layout), Ordering::Relaxed);
+        } else {
             HIGH.fetch_max(live, Ordering::Relaxed);
         }
         pointer
@@ -47,6 +56,7 @@ static ALLOCATOR: Counting = Counting;
 fuzz_target!(|data: &[u8]| {
     let data = data.to_vec();
     let before = LIVE.load(Ordering::Relaxed);
+    BASE.store(before, Ordering::Relaxed);
     HIGH.store(before, Ordering::Relaxed);
     std::thread::Builder::new()
         .stack_size(STACK)
