@@ -246,7 +246,7 @@ fn parse_picture(
     let blip_fill = element.child("blipFill");
     let relationship_id = blip_fill
         .and_then(|value| value.child("blip"))
-        .and_then(blip_relationship_id)
+        .and_then(|blip| blip_relationship_id(blip, relationships))
         .map(str::to_owned);
     let media_part_path = relationship_id
         .as_deref()
@@ -272,8 +272,18 @@ const SVG_BLIP_EXTENSION_URI: &str = "{96DAC541-7B7A-43D3-8B79-37D633B846F1}";
 
 /// The image one `a:blip` embeds: its own relationship, else the one its SVG
 /// extension carries.
-fn blip_relationship_id(blip: &XmlElement) -> Option<&str> {
-    embed_relationship_id(blip).or_else(|| svg_blip(blip).and_then(embed_relationship_id))
+fn blip_relationship_id<'a>(
+    blip: &'a XmlElement,
+    relationships: &[Relationship],
+) -> Option<&'a str> {
+    let own = embed_relationship_id(blip);
+    let svg = svg_blip(blip).and_then(embed_relationship_id);
+    [own, svg]
+        .into_iter()
+        .flatten()
+        .find(|id| relationship_target(relationships, id).is_some())
+        .or(own)
+        .or(svg)
 }
 
 fn embed_relationship_id(element: &XmlElement) -> Option<&str> {
@@ -921,7 +931,7 @@ pub(crate) fn picture_fill_element(
     }
     let relationship_id = fill
         .child("blip")
-        .and_then(blip_relationship_id)
+        .and_then(|blip| blip_relationship_id(blip, relationships))
         .map(str::to_owned)?;
     Some(PictureFill {
         media_part_path: relationship_target(relationships, &relationship_id),
@@ -2566,15 +2576,18 @@ mod tests {
     }
 
     #[test]
-    fn an_empty_blip_relationship_resolves_through_the_svg_extension() {
-        let picture = svg_extension_picture(
-            br#"<a:blip r:embed=""><a:extLst><a:ext uri="{96DAC541-7B7A-43D3-8B79-37D633B846F1}"><asvg:svgBlip xmlns:asvg="http://schemas.microsoft.com/office/drawing/2016/SVG/main" r:embed="rId4"/></a:ext></a:extLst></a:blip>"#,
-        );
-        assert_eq!(picture.relationship_id.as_deref(), Some("rId4"));
-        assert_eq!(
-            picture.media_part_path.as_deref(),
-            Some("ppt/media/vector.svg")
-        );
+    fn an_unusable_blip_relationship_resolves_through_the_svg_extension() {
+        for blip in [
+            br#"<a:blip r:embed=""><a:extLst><a:ext uri="{96DAC541-7B7A-43D3-8B79-37D633B846F1}"><asvg:svgBlip xmlns:asvg="http://schemas.microsoft.com/office/drawing/2016/SVG/main" r:embed="rId4"/></a:ext></a:extLst></a:blip>"#.as_slice(),
+            br#"<a:blip r:embed="rId99"><a:extLst><a:ext uri="{96DAC541-7B7A-43D3-8B79-37D633B846F1}"><asvg:svgBlip xmlns:asvg="http://schemas.microsoft.com/office/drawing/2016/SVG/main" r:embed="rId4"/></a:ext></a:extLst></a:blip>"#,
+        ] {
+            let picture = svg_extension_picture(blip);
+            assert_eq!(picture.relationship_id.as_deref(), Some("rId4"));
+            assert_eq!(
+                picture.media_part_path.as_deref(),
+                Some("ppt/media/vector.svg")
+            );
+        }
     }
 
     #[test]
