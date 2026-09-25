@@ -113,7 +113,7 @@ impl SubstitutionLog {
     }
 
     fn record(&mut self, requested: &str, normalized: &str, selected: &str) {
-        if self.seen.contains(normalized) {
+        if normalized.is_empty() || self.seen.contains(normalized) {
             return;
         }
         self.seen.insert(normalized.to_owned());
@@ -2575,7 +2575,13 @@ fn resolve_bullet_style(
         } else {
             family.clone()
         };
-        style.face = renderer.resolve_face(&family, style.bold, style.italic, substitutions)?;
+        let mut emulated = SubstitutionLog::default();
+        let log = if ooxml_text::SymbolFont::named(&family).is_some() {
+            &mut emulated
+        } else {
+            substitutions
+        };
+        style.face = renderer.resolve_face(&family, style.bold, style.italic, log)?;
         style.family = style.face.family.clone();
     }
     if let Some(BulletColor::Color(color)) = &properties.bullet_color
@@ -9740,6 +9746,20 @@ mod tests {
                 .unwrap();
             assert!(unknown.widths.is_none() && unknown.line.is_none());
         }
+    }
+
+    #[test]
+    fn an_empty_family_draws_the_fallback_without_reporting_it() {
+        let mut renderer = SlideRenderer::new();
+        renderer.register_font("Arial", false, false, FONT).unwrap();
+        let mut log = SubstitutionLog::default();
+        renderer.resolve_face("", false, false, &mut log).unwrap();
+        renderer.resolve_face("  ", false, false, &mut log).unwrap();
+        assert!(log.entries.is_empty());
+        renderer
+            .resolve_face("Missing", false, false, &mut log)
+            .unwrap();
+        assert_eq!(log.entries.len(), 1);
     }
 
     #[test]
