@@ -28,6 +28,7 @@ use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
 use crate::chart::{ChartFrame, ChartText, chart_primitive};
+use crate::family_metrics::{FamilyMetrics, family_advance, family_metrics};
 use crate::metafile::{MetafileDrawing, decode as decode_metafile, is_metafile};
 use crate::{
     CONTRACT_VERSION, CaretStop, GradientStop, GradientType, ImageCrop, ImageEffect, Paint,
@@ -79,6 +80,12 @@ pub enum RenderError {
 struct FontFace {
     id: FontId,
     family: String,
+    requested_family: String,
+    /// The named family's own advance widths, where this face stands in for a
+    /// family that does not already run at them.
+    widths: Option<&'static FamilyMetrics>,
+    /// The same family's `hhea` metrics, which decide where the line box sits.
+    line: Option<&'static FamilyMetrics>,
 }
 
 pub struct SlideRenderer {
@@ -135,12 +142,16 @@ impl SlideRenderer {
             .fonts
             .register(bytes.to_vec())
             .map_err(|error| RenderError::Font(error.to_string()))?;
+        let requested = normalize_family(family);
+        let metrics = family_metrics(&requested, bold, italic);
         let face = FontFace {
             id,
             family: family.to_owned(),
+            requested_family: requested.clone(),
+            widths: metrics.filter(|metrics| !runs_at_own_widths(&self.fonts, id, metrics)),
+            line: metrics.filter(|metrics| !sits_on_own_baseline(&self.fonts, id, metrics)),
         };
-        self.faces
-            .insert((normalize_family(family), bold, italic), face.clone());
+        self.faces.insert((requested, bold, italic), face.clone());
         self.fallback.get_or_insert(face);
         self.fallback_family
             .get_or_insert_with(|| normalize_family(family));
@@ -402,9 +413,13 @@ impl SlideRenderer {
             (false, italic),
             (false, false),
         ];
-        for (bold, italic) in styles {
-            if let Some(face) = self.faces.get(&(requested.clone(), bold, italic)) {
-                return Ok(face.clone());
+        for (face_bold, face_italic) in styles {
+            if let Some(face) = self.faces.get(&(requested.clone(), face_bold, face_italic)) {
+                return Ok(if (face_bold, face_italic) == (bold, italic) {
+                    face.clone()
+                } else {
+                    self.with_requested_metrics(face, &requested, bold, italic)
+                });
             }
         }
         self.faces
@@ -417,8 +432,24 @@ impl SlideRenderer {
                     *face_italic,
                 )
             })
-            .map(|(_, face)| face.clone())
+            .map(|(_, face)| self.with_requested_metrics(face, &requested, bold, italic))
             .ok_or(RenderError::NoFont)
+    }
+
+    fn with_requested_metrics(
+        &self,
+        face: &FontFace,
+        requested: &str,
+        bold: bool,
+        italic: bool,
+    ) -> FontFace {
+        let metrics = family_metrics(requested, bold, italic);
+        FontFace {
+            requested_family: requested.to_owned(),
+            widths: metrics.filter(|metrics| !runs_at_own_widths(&self.fonts, face.id, metrics)),
+            line: metrics.filter(|metrics| !sits_on_own_baseline(&self.fonts, face.id, metrics)),
+            ..face.clone()
+        }
     }
 }
 
@@ -2450,6 +2481,71 @@ fn resolve_style(
     })
 }
 
+/// Characters used to check whether a registered face matches a metric table.
+const ADVANCE_SAMPLE: &str = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789 .,";
+
+/// Preserve the face's kerning when its individual advances already match.
+fn runs_at_own_widths(fonts: &FontStore, id: FontId, metrics: &FamilyMetrics) -> bool {
+    let Ok(own) = fonts.metrics(id) else {
+        return true;
+    };
+    let units = f32::from(own.units_per_em);
+    if units <= 0.0 {
+        return true;
+    }
+    for character in ADVANCE_SAMPLE.chars() {
+        let Some(wanted) = family_advance(metrics, character) else {
+            continue;
+        };
+        let Ok(Some(advance)) = fonts.advance_width(id, character) else {
+            return false;
+        };
+        if (wanted - advance / units).abs() > 0.002 {
+            return false;
+        }
+    }
+    true
+}
+
+/// Whether `id` already stacks its lines the way `metrics` does.
+fn sits_on_own_baseline(fonts: &FontStore, id: FontId, metrics: &FamilyMetrics) -> bool {
+    let Ok(own) = fonts.metrics(id) else {
+        return true;
+    };
+    let units = f32::from(own.units_per_em);
+    if units <= 0.0 {
+        return true;
+    }
+    let same =
+        |theirs: i32, ours: i16| (theirs as f32 / 1000.0 - f32::from(ours) / units).abs() <= 0.002;
+    same(metrics.ascent, own.hhea_ascender)
+        && same(metrics.descent, own.hhea_descender)
+        && same(metrics.line_gap, own.hhea_line_gap)
+}
+
+/// The line box the named family measures at `size_px`, in the shape
+/// [`single_line_box`] gives a registered face.
+fn family_line_box(metrics: &FamilyMetrics, size_px: f32) -> ooxml_text::LineBox {
+    let em = size_px / 1000.0;
+    ooxml_text::LineBox {
+        ascent: (metrics.ascent + metrics.line_gap).max(0) as f32 * em,
+        descent: (-metrics.descent).max(0) as f32 * em,
+        leading: 0.0,
+    }
+}
+
+/// How wide the family a run names draws `text`, when that family is one we
+/// have widths but no face for. `None` for anything the table cannot measure,
+/// which keeps the substitute's own advance.
+fn named_cluster_width(style: &ResolvedStyle, text: &str, size_px: f32) -> Option<f32> {
+    let metrics = style.face.widths?;
+    let mut total = 0.0;
+    for character in text.chars() {
+        total += family_advance(metrics, character)?;
+    }
+    Some(total * size_px)
+}
+
 /// Optional ligatures are off once glyphs are tracked apart.
 fn tracking_features(tracking: f32) -> &'static [ShapeFeature] {
     const OFF: [ShapeFeature; 2] = [
@@ -2765,6 +2861,7 @@ fn key_spacing(key: &mut Vec<u8>, spacing: &Option<LineSpacing>) {
 
 fn key_style(key: &mut Vec<u8>, style: &ResolvedStyle) {
     key_u32(key, style.face.id.to_u32());
+    key_str(key, &style.face.requested_family);
     key_str(key, &style.family);
     key_f32(key, style.font_size_pt);
     key_f32(key, style.spacing_pt);
@@ -3271,13 +3368,18 @@ fn add_shaped_segment(
             });
             glyph_x += glyph.x_advance;
         }
+        let text_slice = &text[start_byte..end_byte];
+        // The glyphs keep the advances of the face that draws them, so a
+        // backend laying the run out itself still sees where each one ends and
+        // places the next cluster at the x this width put it.
+        let cluster_width = named_cluster_width(&run.style, text_slice, size_px).unwrap_or(glyph_x);
         let global_end = global_run_byte + run_byte_start + end_byte;
-        let tracking = tracking.max(-glyph_x);
+        let tracking = tracking.max(-cluster_width);
         output.push(ShapedCluster {
-            text: text[start_byte..end_byte].to_owned(),
+            text: text_slice.to_owned(),
             start: source_start,
             end: source_end,
-            width: glyph_x + tracking,
+            width: cluster_width + tracking,
             tracking,
             run_index,
             style: run.style.clone(),
@@ -3569,14 +3671,14 @@ fn style_line_box(
     style: &ResolvedStyle,
     scale: f32,
 ) -> Result<ooxml_text::LineBox, RenderError> {
+    let size_px = points_to_px(style.line_font_size_pt * scale);
+    if let Some(named) = style.face.line {
+        return Ok(family_line_box(named, size_px));
+    }
     let metrics = fonts
         .metrics(style.face.id)
         .map_err(|error| RenderError::Font(error.to_string()))?;
-    Ok(single_line_box(
-        metrics,
-        points_to_px(style.line_font_size_pt * scale),
-        &CompatFlags::default(),
-    ))
+    Ok(single_line_box(metrics, size_px, &CompatFlags::default()))
 }
 
 /// Largest font size on this line.
@@ -8829,5 +8931,102 @@ mod tests {
         let end = line_end(Some(&end("oval", Some("sm"), Some("lg"))), 1.0).unwrap();
         assert!((end.width - 5.291_339).abs() < 1e-6);
         assert!((end.length - 13.228_347).abs() < 1e-6);
+    }
+
+    #[test]
+    fn a_family_we_cannot_ship_lends_its_own_metrics_to_the_substitute() {
+        let mut renderer = SlideRenderer::new();
+        renderer
+            .register_font("Trebuchet MS", false, false, FONT)
+            .unwrap();
+        renderer.register_font("Arial", false, false, FONT).unwrap();
+        let substituted = renderer.resolve_face("Trebuchet MS", false, false).unwrap();
+        let plain = renderer.resolve_face("Arial", false, false).unwrap();
+        assert!(plain.widths.is_none() && plain.line.is_none());
+
+        let metrics = substituted.widths.expect("trebuchet ms widths");
+        assert!((family_advance(metrics, 'M').unwrap() - 0.709).abs() < 1e-6);
+        assert!((family_advance(metrics, ' ').unwrap() - 0.301).abs() < 1e-6);
+        assert!((family_advance(metrics, '\u{2019}').unwrap() - 0.367).abs() < 1e-6);
+        assert_eq!(family_advance(metrics, '\u{4e00}'), None);
+        assert!(family_metrics("trebuchet ms", true, false).is_some());
+        assert!(family_metrics("Trebuchet MS", false, false).is_none());
+        assert!(family_metrics("calibri", false, false).is_none());
+
+        let line = family_line_box(substituted.line.expect("trebuchet ms lines"), 1000.0);
+        assert!((line.ascent - 939.0).abs() < 1e-3);
+        assert!((line.descent - 222.0).abs() < 1e-3);
+    }
+
+    #[test]
+    fn missing_faces_keep_the_requested_family_and_style_metrics() {
+        for registered in ["Arial", "Trebuchet MS"] {
+            let mut renderer = SlideRenderer::new();
+            renderer
+                .register_font(registered, false, false, FONT)
+                .unwrap();
+            for (bold, italic) in [(false, false), (true, false), (false, true), (true, true)] {
+                let face = renderer.resolve_face("Trebuchet MS", bold, italic).unwrap();
+                let expected = family_metrics("trebuchet ms", bold, italic).unwrap();
+                assert_eq!(renderer.fonts.font_bytes(face.id).unwrap(), FONT);
+                assert!(std::ptr::eq(face.widths.unwrap(), expected));
+                assert!(std::ptr::eq(face.line.unwrap(), expected));
+            }
+            let unknown = renderer
+                .resolve_face("Unknown family", false, false)
+                .unwrap();
+            assert!(unknown.widths.is_none() && unknown.line.is_none());
+        }
+    }
+
+    #[test]
+    fn different_requested_metrics_do_not_share_cached_fallback_layouts() {
+        let session = DeckSession::open(
+            include_bytes!("../tests/fixtures/paragraph-spacing.pptx"),
+            8_020,
+        )
+        .unwrap();
+        let new_renderer = || {
+            let mut renderer = SlideRenderer::new();
+            renderer.register_font("Arial", false, false, FONT).unwrap();
+            renderer
+        };
+        let render = |renderer: &SlideRenderer, family: &str| {
+            let mut snapshot = session.snapshot().unwrap();
+            let story = &mut snapshot.slides[0]
+                .shapes
+                .iter_mut()
+                .find(|shape| shape.source_id == 2)
+                .unwrap()
+                .text_stories[0];
+            for paragraph in &mut story.paragraphs {
+                for run in &mut paragraph.runs {
+                    run.style.font_family = Some(family.to_owned());
+                    run.style.font_size_pt = Some(24.0);
+                    run.text = "MMMMMMMM".to_owned();
+                }
+            }
+            renderer
+                .layout_slide(session.package(), &snapshot, 0)
+                .unwrap()
+                .display_list
+                .primitives
+                .into_iter()
+                .find_map(|primitive| match primitive {
+                    Primitive::TextBox {
+                        object_id: 2,
+                        lines,
+                        ..
+                    } => Some(lines),
+                    _ => None,
+                })
+                .unwrap()
+        };
+        let renderer = new_renderer();
+        let trebuchet = render(&renderer, "Trebuchet MS");
+        let consolas = render(&renderer, "Consolas");
+        assert!((trebuchet[0].width - consolas[0].width).abs() > 1.0);
+        assert_eq!(consolas, render(&new_renderer(), "Consolas"));
+        assert_eq!(trebuchet, render(&renderer, "Trebuchet MS"));
     }
 }
