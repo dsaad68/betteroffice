@@ -1,10 +1,13 @@
 //! Sandboxed SVG rasterisation into the straight-alpha RGBA buffer the other
 //! image formats produce. The sandbox bounds what conversion and rendering cost
-//! by construction: the document is audited before `usvg` builds anything, and
-//! the tree `usvg` builds is priced before `resvg` paints it.
+//! by construction: the bytes are scanned before `roxmltree` parses them, the
+//! document is audited before `usvg` builds anything, and the tree `usvg` builds
+//! is priced before `resvg` paints it. Every bound below is a share of one
+//! envelope, and a document past any of them is refused.
 
 mod audit;
 mod cost;
+mod markup;
 mod reference;
 mod style;
 
@@ -15,56 +18,130 @@ use tiny_skia::{IntSize, Pixmap, PremultipliedColorU8, Transform};
 
 use crate::MAX_IMAGE_PIXELS;
 
-/// One SVG document's source bytes.
-pub const MAX_SVG_BYTES: usize = 4_194_304;
-/// Elements one SVG document may nest, in its markup or once its references are
-/// expanded. The parsers, `usvg`'s converter and `resvg` all recurse over it.
+/// Peak memory one SVG decode may use beyond its output raster and group
+/// layers, which the caller charges to the slide's image budget.
+pub const SVG_MEMORY_ENVELOPE: u64 = 100 << 20;
+/// Single-core time one SVG decode may take, in nanoseconds of a release
+/// build; the work units below are each about a nanosecond.
+pub const SVG_TIME_ENVELOPE: u64 = 1_000_000_000;
+
+/// Bytes `roxmltree` keeps per node or attribute, its final shrink included.
+const XML_ITEM_BYTES: u64 = 80;
+/// Bytes of `usvg`'s element and tree node per expanded element; a `use` of a
+/// `symbol` with its viewport clip, the costliest, measures about 970.
+const NODE_BYTES: u64 = 1_024;
+/// Bytes per expanded markup byte: `usvg` stores each attribute instance in
+/// 32 bytes and each byte of path data as up to 4.5 bytes of points.
+const BYTE_BYTES: u64 = 8;
+/// Bytes of the declaration lists `simplecss` copies per selector and byte of
+/// a block: 40 per declaration of at least four bytes.
+const STYLE_COPY_BYTES: u64 = 10;
+/// Bytes of outline per byte of path data, which `usvg` strokes whole to
+/// measure a shape: about 190 per segment with round joins, and at most one
+/// segment per byte.
+const STROKE_BYTES: u64 = 256;
+/// Time the byte scan, `roxmltree` and the audit take per source byte.
+const SOURCE_NS: u64 = 16;
+/// Time `usvg` takes to build one expanded element.
+const NODE_NS: u64 = 1_024;
+/// Time `usvg` takes per expanded markup byte: path data parses and strokes
+/// its outline for bounds at about 30 ns a byte.
+const BYTE_NS: u64 = 32;
+/// Time `resvg` takes per unit of [`MAX_SVG_RENDER_WORK`]: an anti-aliased,
+/// alpha-blended pixel.
+const RENDER_NS: u64 = 4;
+
+/// One document's bytes, which expand at least once: held to
+/// [`MAX_SVG_EXPANDED_BYTES`], they take the byte scan, `roxmltree` and the
+/// audit about 34 ms.
+pub const MAX_SVG_BYTES: usize = MAX_SVG_EXPANDED_BYTES as usize;
+/// Elements one document may nest, in its markup or once its references are
+/// expanded. The parsers, `usvg`'s converter and `resvg` recurse over it at
+/// about 3 KiB of stack a level: 64 levels fit a 512 KiB thread stack twice.
 pub const MAX_SVG_DEPTH: usize = 64;
-/// Nodes the XML parser will materialise for one document.
-pub const MAX_SVG_NODES: u32 = 1_048_576;
-/// Elements a document expands into once every `<use>`, `clip-path` and paint
-/// reference instantiates its target, and nodes in the tree `usvg` builds.
-pub const MAX_SVG_EXPANDED_NODES: u64 = 100_000;
-/// Markup bytes that expansion hands `usvg`, which re-reads a target's path
-/// data and embedded payloads once per instance.
-pub const MAX_SVG_EXPANDED_BYTES: u64 = 8_388_608;
+/// Nodes `roxmltree` will build: 10 MiB of the memory envelope.
+pub const MAX_SVG_NODES: u32 = 1 << 17;
+/// Attributes across the markup: 10 MiB of the memory envelope.
+pub const MAX_SVG_ATTRIBUTES: usize = 1 << 17;
+/// Attributes on one element. `roxmltree` compares each with every earlier
+/// one, so the markup costs at most 64 comparisons an attribute.
+pub const MAX_SVG_ELEMENT_ATTRIBUTES: usize = 64;
+/// Namespace declarations in scope at one element, and distinct ones in the
+/// document: `roxmltree` looks each element and prefixed attribute up across
+/// those in scope, and inserts each distinct one into a sorted list.
+pub const MAX_SVG_NAMESPACES: usize = 64;
+/// Elements a document expands into once every `use` and clip path
+/// instantiates its target: 32 MiB of the memory envelope and 34 ms.
+pub const MAX_SVG_EXPANDED_NODES: u64 = 1 << 15;
+/// Markup bytes expansion hands `usvg`, which re-reads a target's attributes
+/// and path data once per instance, and walks its markup once per `use`:
+/// 16 MiB of the memory envelope and 67 ms.
+pub const MAX_SVG_EXPANDED_BYTES: u64 = 1 << 21;
+/// Path data one shape may carry, which `usvg` strokes whole to measure it:
+/// 16 MiB of outline, the envelope's share for any one path's transients.
+pub const MAX_SVG_PATH_BYTES: usize = 1 << 16;
 /// Stops one gradient may carry. `usvg` drops equal offsets by shifting the
 /// list, quadratic in its length, and `tiny-skia` tests every stop per pixel.
 pub const MAX_SVG_GRADIENT_STOPS: usize = 256;
 /// Bytes of the gradient copies `usvg` makes per shape: one for every shape
 /// that paints with a gradient in its own box's units or with a `use`'s
-/// context paint, each ~256 bytes plus 12 a stop.
-pub const MAX_SVG_PAINT_BYTES: u64 = 1 << 24;
-/// What `usvg` spends collecting distinct gradients, in units of about a
-/// nanosecond: it compares every gradient paint against every gradient
-/// collected so far, about a quarter nanosecond each.
-pub const MAX_SVG_PAINT_WORK: u64 = 1 << 26;
-/// `<style>` elements plus the rules they declare.
+/// context paint, each ~256 bytes plus 12 a stop. 8 MiB of the envelope.
+pub const MAX_SVG_PAINT_BYTES: u64 = 1 << 23;
+/// What `usvg` spends collecting distinct gradients and clip paths, which it
+/// compares each reference against every one collected so far at about a
+/// quarter nanosecond each: 67 ms of the time envelope.
+pub const MAX_SVG_COLLECT_WORK: u64 = 1 << 26;
+/// `<style>` elements plus the rules they declare. `simplecss` re-sorts every
+/// rule after each sheet, so the sorts stay under ten million comparisons.
 pub const MAX_SVG_STYLE_RULES: usize = 1_024;
-/// Simple selectors (a type, `.class` or `#id`) one rule may compound.
+/// Simple selectors (a type, `.class` or `#id`) one rule may compound, each
+/// an attribute lookup when `simplecss` tests the rule.
 pub const MAX_SVG_SELECTOR_PARTS: usize = 16;
-/// Bytes of one selector.
+/// Bytes of one selector, which bounds the names each lookup compares.
 pub const MAX_SVG_SELECTOR_BYTES: usize = 256;
 /// Selectors times the bytes of the block they share: `simplecss` copies a
-/// block's declarations once per selector of its list.
-pub const MAX_SVG_STYLE_COPIES: u64 = 1_048_576;
+/// block's declarations once per selector of its list. 5 MiB of the envelope.
+pub const MAX_SVG_STYLE_COPIES: u64 = 1 << 19;
 /// What `simplecss` and `usvg` spend on CSS, in units of about a nanosecond:
 /// rescans of every stylesheet and `style` attribute, selector tests, and
-/// declarations applied, across the expanded document.
-pub const MAX_SVG_STYLE_WORK: u64 = 1 << 28;
-/// Group layers (opacity, clip, blend, isolation) one render may stack.
+/// declarations applied, across the expanded document. 201 ms of the time
+/// envelope.
+pub const MAX_SVG_STYLE_WORK: u64 = 3 << 26;
+/// Group layers (opacity, clip, blend, isolation) one render may stack. Each
+/// is a raster charged to the slide's image budget with the output.
 pub const MAX_SVG_LAYER_DEPTH: usize = 8;
-/// Painted pixels, gradient stops weighted in, as a multiple of the output raster.
+/// Painted pixels, gradient stops weighted in, as a multiple of the output
+/// raster: a cheap first refusal before [`MAX_SVG_RENDER_WORK`] is summed.
 pub const MAX_SVG_OVERDRAW: u64 = 64;
-/// Painting work in painted-pixel units: four passes over the largest raster
-/// the image budget admits. Past it the raster supersamples less, and a render
-/// still past it at its intrinsic size is refused.
+/// Painting work in painted-pixel units, each about 4 ns: 537 ms, the rest of
+/// the time envelope. Past it the raster supersamples less, and a render still
+/// past it at its intrinsic size is refused.
 pub const MAX_SVG_RENDER_WORK: u64 = 4 * MAX_IMAGE_PIXELS;
-/// One rasterised SVG's longest side.
+/// One rasterised SVG's longest side. The raster is outside the envelope: the
+/// caller charges it, with its layers, to the slide's image budget.
 pub const MAX_SVG_RASTER_DIM: u32 = 8_192;
 /// How far above its intrinsic size an SVG rasterises, so a picture frame
 /// larger than the document still has pixels to stretch.
 const SVG_SUPERSAMPLE: u32 = 4;
+
+const _: () = assert!(
+    (MAX_SVG_NODES as u64 + MAX_SVG_ATTRIBUTES as u64) * XML_ITEM_BYTES
+        + MAX_SVG_EXPANDED_NODES * NODE_BYTES
+        + MAX_SVG_EXPANDED_BYTES * BYTE_BYTES
+        + MAX_SVG_PATH_BYTES as u64 * STROKE_BYTES
+        + MAX_SVG_PAINT_BYTES
+        + MAX_SVG_STYLE_COPIES * STYLE_COPY_BYTES
+        <= SVG_MEMORY_ENVELOPE
+);
+const _: () = assert!(
+    MAX_SVG_BYTES as u64 * SOURCE_NS
+        + MAX_SVG_EXPANDED_NODES * NODE_NS
+        + MAX_SVG_EXPANDED_BYTES * BYTE_NS
+        + MAX_SVG_STYLE_WORK
+        + MAX_SVG_COLLECT_WORK
+        + MAX_SVG_RENDER_WORK * RENDER_NS
+        <= SVG_TIME_ENVELOPE
+);
 
 /// Why the sandbox declined a document. Structural only: no markup, no
 /// attribute value and no reference target is carried out of the decoder.
@@ -72,7 +149,8 @@ const SVG_SUPERSAMPLE: u32 = 4;
 pub enum SvgRefusal {
     /// Not UTF-8, or the root element is not `svg`.
     NotSvg,
-    /// Past [`MAX_SVG_BYTES`].
+    /// Past [`MAX_SVG_BYTES`], or markup past [`MAX_SVG_ELEMENT_ATTRIBUTES`],
+    /// [`MAX_SVG_ATTRIBUTES`] or [`MAX_SVG_NAMESPACES`].
     DocumentTooLarge,
     /// Carries a `<!DOCTYPE>`, so it may declare entities.
     DoctypeDeclared,
@@ -89,13 +167,16 @@ pub enum SvgRefusal {
     /// audit skips, or a mask, filter, pattern, image or text node in the tree.
     UnsupportedElement,
     /// A stylesheet past [`MAX_SVG_STYLE_RULES`] or beyond plain type, class and
-    /// id rules, or a `filter` in any form.
+    /// id rules within [`MAX_SVG_SELECTOR_PARTS`] and [`MAX_SVG_SELECTOR_BYTES`],
+    /// a `filter` in any form, or a clip path inherited from whatever element a
+    /// copy lands under.
     UnsupportedStyle,
     /// A reference that leads back to itself.
     ReferenceCycle,
-    /// Past [`MAX_SVG_EXPANDED_NODES`], [`MAX_SVG_EXPANDED_BYTES`] or
-    /// [`MAX_SVG_STYLE_WORK`] once references are expanded, or a gradient past
-    /// [`MAX_SVG_GRADIENT_STOPS`].
+    /// Past [`MAX_SVG_EXPANDED_NODES`], [`MAX_SVG_EXPANDED_BYTES`],
+    /// [`MAX_SVG_STYLE_WORK`], [`MAX_SVG_STYLE_COPIES`], [`MAX_SVG_PAINT_BYTES`]
+    /// or [`MAX_SVG_COLLECT_WORK`] once references are expanded, or a gradient
+    /// past [`MAX_SVG_GRADIENT_STOPS`] or a shape past [`MAX_SVG_PATH_BYTES`].
     ExpansionTooLarge,
     /// Group layers past [`MAX_SVG_LAYER_DEPTH`], or a clip path that is
     /// itself clipped.
@@ -130,7 +211,7 @@ pub fn parse(bytes: &[u8]) -> Result<SvgImage, SvgRefusal> {
         return Err(SvgRefusal::DocumentTooLarge);
     }
     let text = std::str::from_utf8(bytes).map_err(|_| SvgRefusal::NotSvg)?;
-    audit_nesting(bytes)?;
+    markup::scan(bytes)?;
     let document = usvg::roxmltree::Document::parse_with_options(
         text,
         usvg::roxmltree::ParsingOptions {
@@ -242,65 +323,6 @@ fn raster(tree: &usvg::Tree) -> Result<(IntSize, u64), SvgRefusal> {
         }
         factor -= 1;
     }
-}
-
-/// Element nesting, bounded before any parser sees the document. Runs on the
-/// bytes because reaching it through a parsed tree is already too late.
-fn audit_nesting(bytes: &[u8]) -> Result<(), SvgRefusal> {
-    let mut index = 0;
-    let mut depth = 0usize;
-    while let Some(open) = bytes[index..].iter().position(|byte| *byte == b'<') {
-        index += open + 1;
-        let rest = &bytes[index..];
-        if rest.starts_with(b"!--") {
-            index = after(bytes, index, b"-->")?;
-        } else if rest.starts_with(b"![CDATA[") {
-            index = after(bytes, index, b"]]>")?;
-        } else if rest.starts_with(b"!") {
-            return Err(SvgRefusal::DoctypeDeclared);
-        } else if rest.starts_with(b"?") {
-            index = after(bytes, index, b"?>")?;
-        } else {
-            let closing = rest.starts_with(b"/");
-            let (end, empty) = tag_end(bytes, index)?;
-            index = end;
-            if closing {
-                depth = depth.saturating_sub(1);
-            } else if !empty {
-                depth += 1;
-                if depth > MAX_SVG_DEPTH {
-                    return Err(SvgRefusal::TooDeeplyNested);
-                }
-            }
-        }
-    }
-    Ok(())
-}
-
-/// Index just past `needle`.
-fn after(bytes: &[u8], from: usize, needle: &[u8]) -> Result<usize, SvgRefusal> {
-    bytes[from..]
-        .windows(needle.len())
-        .position(|window| window == needle)
-        .map(|at| from + at + needle.len())
-        .ok_or(SvgRefusal::Unparsable)
-}
-
-/// Index just past a tag's `>`, and whether the tag closed itself. A quoted
-/// attribute value may hold a `>` of its own.
-fn tag_end(bytes: &[u8], from: usize) -> Result<(usize, bool), SvgRefusal> {
-    let mut quote: Option<u8> = None;
-    let mut previous = 0u8;
-    for (offset, byte) in bytes[from..].iter().enumerate() {
-        match (quote, *byte) {
-            (Some(open), seen) if seen == open => quote = None,
-            (None, b'"' | b'\'') => quote = Some(*byte),
-            (None, b'>') => return Ok((from + offset + 1, previous == b'/')),
-            _ => {}
-        }
-        previous = *byte;
-    }
-    Err(SvgRefusal::Unparsable)
 }
 
 #[cfg(test)]
@@ -661,7 +683,7 @@ pub(crate) mod tests {
 
     #[test]
     fn the_audit_reads_a_long_reference_list_in_one_pass() {
-        let list = "url(#".repeat(500_000);
+        let list = "url(#".repeat(400_000);
         for (attribute, outcome) in [
             ("fill", Some(SvgRefusal::ExternalReference)),
             ("clip-path", Some(SvgRefusal::ExternalReference)),
@@ -685,6 +707,53 @@ pub(crate) mod tests {
                 "{attribute}: {elapsed:?}"
             );
         }
+    }
+
+    #[test]
+    fn attributes_are_bounded_before_roxmltree_compares_them_pairwise() {
+        let element = |count: usize| {
+            let attributes: String = (0..count).map(|index| format!(" a{index}=\"\"")).collect();
+            document(&format!(r##"<rect width="9" height="9"{attributes}/>"##))
+        };
+        assert!(parse(element(MAX_SVG_ELEMENT_ATTRIBUTES - 2).as_bytes()).is_ok());
+        let started = std::time::Instant::now();
+        assert_eq!(
+            refusal(element(150_000).as_bytes()),
+            Some(SvgRefusal::DocumentTooLarge)
+        );
+        assert!(started.elapsed() < std::time::Duration::from_secs(5));
+    }
+
+    #[test]
+    fn a_use_is_charged_for_walking_its_whole_target() {
+        for filler in ["<x:a/>", "<!---->", "x"] {
+            let source = document(&format!(
+                r##"<defs><g id="t" xmlns:x="urn:x">{}<rect width="1" height="1"/></g></defs>{}"##,
+                filler.repeat(20_000),
+                r##"<use href="#t"/>"##.repeat(10_000)
+            ));
+            assert_eq!(
+                refusal(source.as_bytes()),
+                Some(SvgRefusal::ExpansionTooLarge),
+                "{filler}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_shape_is_held_to_the_path_data_usvg_strokes_whole() {
+        let path = |segments: usize| {
+            document(&format!(
+                r##"<path d="M0 0{}" stroke="#000"/><polygon points="{}"/>"##,
+                "h1".repeat(segments),
+                "1 1 ".repeat(segments / 2)
+            ))
+        };
+        assert!(parse(path(MAX_SVG_PATH_BYTES / 2 - 4).as_bytes()).is_ok());
+        assert_eq!(
+            refusal(path(MAX_SVG_PATH_BYTES / 2).as_bytes()),
+            Some(SvgRefusal::ExpansionTooLarge)
+        );
     }
 
     #[test]
@@ -753,7 +822,7 @@ pub(crate) mod tests {
         let rules: String = (0..1_000)
             .map(|index| format!(".c{index}{{fill:red}}"))
             .collect();
-        let rects = r##"<rect width="9" height="9"/>"##.repeat(40_000);
+        let rects = r##"<rect width="9" height="9"/>"##.repeat(20_000);
         let wide = document(&format!("<style>{rules}</style>{rects}"));
         assert_eq!(
             refusal(wide.as_bytes()),
@@ -770,18 +839,21 @@ pub(crate) mod tests {
 
     #[test]
     fn a_selector_bomb_is_refused_before_anything_matches_it() {
-        let bomb = |parts: usize| {
+        let bomb = |parts: usize, elements: usize| {
             document(&format!(
                 "<style>{}{{fill:red}}</style>{}",
                 ".a".repeat(parts),
-                r##"<g class="a"/>"##.repeat(90_000)
+                r##"<g class="a"/>"##.repeat(elements)
             ))
         };
+        let started = std::time::Instant::now();
+        assert_ne!(refusal(bomb(1_000_000, 90_000).as_bytes()), None);
+        assert!(started.elapsed() < std::time::Duration::from_secs(5));
         for (parts, outcome) in [
-            (1_000_000, SvgRefusal::ExpansionTooLarge),
+            (800_000, SvgRefusal::ExpansionTooLarge),
             (5_000, SvgRefusal::UnsupportedStyle),
         ] {
-            let source = bomb(parts);
+            let source = bomb(parts, 20_000);
             assert!(source.len() < MAX_SVG_BYTES);
             let started = std::time::Instant::now();
             assert_eq!(refusal(source.as_bytes()), Some(outcome), "{parts}");
@@ -895,15 +967,19 @@ pub(crate) mod tests {
 
     #[test]
     fn an_inherited_gradient_is_charged_per_shape_that_paints_with_it() {
+        let started = std::time::Instant::now();
+        assert_ne!(
+            refusal(inherited("", MAX_SVG_GRADIENT_STOPS, "fill", 90_000).as_bytes()),
+            None
+        );
+        assert!(started.elapsed() < std::time::Duration::from_secs(5));
         for paint in ["fill", "stroke"] {
-            let source = inherited("", MAX_SVG_GRADIENT_STOPS, paint, 90_000);
-            let started = std::time::Instant::now();
+            let source = inherited("", MAX_SVG_GRADIENT_STOPS, paint, 3_000);
             assert_eq!(
                 refusal(source.as_bytes()),
                 Some(SvgRefusal::ExpansionTooLarge),
                 "{paint}"
             );
-            assert!(started.elapsed() < std::time::Duration::from_secs(5));
             assert!(parse(inherited("", MAX_SVG_GRADIENT_STOPS, paint, 16).as_bytes()).is_ok());
         }
         let shared = inherited(r##"gradientUnits="userSpaceOnUse""##, 2, "fill", 20_000);
@@ -936,7 +1012,7 @@ pub(crate) mod tests {
         };
         assert!(parse(copies(4).as_bytes()).is_ok());
         assert_eq!(
-            refusal(copies(20_000).as_bytes()),
+            refusal(copies(3_000).as_bytes()),
             Some(SvgRefusal::ExpansionTooLarge)
         );
     }

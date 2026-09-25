@@ -8,8 +8,9 @@ use resvg::usvg::roxmltree::{Document, Node};
 
 use super::style::StyleSheet;
 use super::{
-    MAX_SVG_DEPTH, MAX_SVG_EXPANDED_BYTES, MAX_SVG_EXPANDED_NODES, MAX_SVG_GRADIENT_STOPS,
-    MAX_SVG_PAINT_BYTES, MAX_SVG_PAINT_WORK, MAX_SVG_STYLE_WORK, SvgRefusal, reference,
+    MAX_SVG_COLLECT_WORK, MAX_SVG_DEPTH, MAX_SVG_EXPANDED_BYTES, MAX_SVG_EXPANDED_NODES,
+    MAX_SVG_GRADIENT_STOPS, MAX_SVG_PAINT_BYTES, MAX_SVG_PATH_BYTES, MAX_SVG_STYLE_WORK,
+    SvgRefusal, reference,
 };
 
 const SVG_NS: &str = "http://www.w3.org/2000/svg";
@@ -133,6 +134,8 @@ struct Expanded {
     copies: u64,
     stops: u64,
     paints: u64,
+    /// Clip paths `usvg` attaches, each collected against every other.
+    clips: u64,
 }
 
 /// An element's edges: the first `render` targets are the children and `use`
@@ -150,7 +153,8 @@ pub(super) fn audit(document: &Document<'_>) -> Result<(), SvgRefusal> {
     if !is_svg(root) {
         return Err(SvgRefusal::NotSvg);
     }
-    let mut slots: Vec<Option<Slot>> = vec![None; document.descendants().count()];
+    let subtrees = subtrees(document);
+    let mut slots: Vec<Option<Slot>> = vec![None; subtrees.len()];
     let mut ids: HashMap<&str, Vec<usize>> = HashMap::new();
     let mut elements: Vec<Element<'_>> = Vec::new();
     for node in root.descendants().filter(|node| node.is_element()) {
@@ -194,6 +198,7 @@ pub(super) fn audit(document: &Document<'_>) -> Result<(), SvgRefusal> {
             context: false,
         };
         audit_attributes(&mut element)?;
+        element.bytes += node.children().count() as u64;
         elements.push(element);
         if let Some(Slot::Element(parent)) = parent {
             elements[parent].children.push(index);
@@ -254,6 +259,7 @@ pub(super) fn audit(document: &Document<'_>) -> Result<(), SvgRefusal> {
     let mut total = 0usize;
     let mut edges = Vec::with_capacity(elements.len());
     let mut paints = Vec::with_capacity(elements.len());
+    let mut scans = Vec::with_capacity(elements.len());
     for element in &elements {
         let resolve = |link: Link, targets: &mut Vec<usize>| {
             resolve(&element.links, link, &ids, &slots, &elements, room, targets)
@@ -272,12 +278,20 @@ pub(super) fn audit(document: &Document<'_>) -> Result<(), SvgRefusal> {
         if total > room {
             return Err(SvgRefusal::ExpansionTooLarge);
         }
+        let scanned = targets[element.children.len()..render]
+            .iter()
+            .map(|target| subtrees[elements[*target].node.id().get_usize()])
+            .fold(0u64, u64::saturating_add);
+        scans.push(scanned);
         edges.push(Edges {
             targets,
             render,
             expand,
         });
         paints.push((painted, fills));
+    }
+    for (element, scanned) in elements.iter_mut().zip(scans) {
+        element.bytes = element.bytes.saturating_add(scanned);
     }
 
     chain_stops(&edges, &mut stops)?;
@@ -320,6 +334,32 @@ fn resolve(
         }
     }
     Ok(())
+}
+
+/// Nodes of every kind in each node's markup subtree, itself included, by node
+/// id: what `usvg` walks through a `use` target, text and foreign markup too,
+/// looking for a `use` inside that leads back.
+fn subtrees(document: &Document<'_>) -> Vec<u64> {
+    let mut parents = Vec::new();
+    for node in document.descendants() {
+        parents.push(node.parent().map(|parent| parent.id().get_usize()));
+    }
+    let mut sizes = vec![1u64; parents.len()];
+    for index in (0..parents.len()).rev() {
+        if let Some(parent) = parents[index] {
+            sizes[parent] += sizes[index];
+        }
+    }
+    sizes
+}
+
+/// Work collecting distinct paints and clip paths: `usvg` compares each one it
+/// meets against every one collected so far, about a quarter nanosecond each.
+fn collection(size: &Expanded, gradients: u64) -> u64 {
+    let paints = size
+        .paints
+        .saturating_mul(size.copies.saturating_add(gradients));
+    paints.saturating_add(size.clips.saturating_mul(size.clips)) / 4
 }
 
 fn role(name: &str) -> Role {
@@ -427,6 +467,9 @@ fn audit_attributes(element: &mut Element<'_>) -> Result<(), SvgRefusal> {
                     element.links.push((link, target));
                 }
             }
+            "d" | "points" if value.len() > MAX_SVG_PATH_BYTES => {
+                return Err(SvgRefusal::ExpansionTooLarge);
+            }
             "mask" | "marker-start" | "marker-mid" | "marker-end" => {
                 reference::func_iri(value)?;
             }
@@ -530,7 +573,7 @@ fn expand(elements: &[Element<'_>], edges: &[Edges], gradients: u64) -> Result<(
             || size.style > MAX_SVG_STYLE_WORK
             || size.stops.saturating_mul(STOP_BYTES) + size.copies.saturating_mul(PAINT_COPY_BYTES)
                 > MAX_SVG_PAINT_BYTES
-            || size.paints.saturating_mul(size.copies + gradients) / 4 > MAX_SVG_PAINT_WORK
+            || collection(&size, gradients) > MAX_SVG_COLLECT_WORK
         {
             return Err(SvgRefusal::ExpansionTooLarge);
         }
@@ -564,8 +607,15 @@ fn finish(own: &Element<'_>, edges: &Edges, sizes: &[Expanded]) -> Expanded {
         size.copies = size.copies.saturating_add(inner.copies);
         size.stops = size.stops.saturating_add(inner.stops);
         size.paints = size.paints.saturating_add(inner.paints);
+        size.clips = size.clips.saturating_add(inner.clips);
     }
     size.depth += 1;
+    let clipped = edges.expand > edges.render;
+    let viewport = own.role == Role::Use
+        || (own.node.tag_name().name() == "svg" && own.node.parent_element().is_some());
+    size.clips = size
+        .clips
+        .saturating_add(u64::from(clipped) + u64::from(viewport));
     let mut open = [0u64; 2];
     let mut forced = [0u64; 2];
     let mut context = 0u64;
