@@ -2584,6 +2584,7 @@ fn push_point_label<S: PlotSink + ?Sized>(
     baseline_y: f64,
     width: f64,
     percent_total: f64,
+    align: PlotTextAlign,
 ) {
     let Some(text) = point_label(family, series, index, percent_total) else {
         return;
@@ -2599,7 +2600,15 @@ fn push_point_label<S: PlotSink + ?Sized>(
     let step = style.font.size_px * 1.2;
     let top = baseline_y - step * (lines.len() as f64 - 1.0) / 2.0;
     for (line, text) in lines.iter().enumerate() {
-        push_text(ops, text.trim(), x, top + step * line as f64, width, &style);
+        push_text_aligned(
+            ops,
+            text.trim(),
+            x,
+            top + step * line as f64,
+            width,
+            &style,
+            align,
+        );
     }
 }
 
@@ -2793,6 +2802,7 @@ fn emit_bar<S: PlotSink + ?Sized>(
                     y + bands.bar,
                     48.0,
                     total,
+                    PlotTextAlign::Start,
                 );
             } else {
                 let (y0, y1) = (scale.y(plot, start), scale.y(plot, end));
@@ -2808,16 +2818,20 @@ fn emit_bar<S: PlotSink + ?Sized>(
                 let (fraction, offset) = bar_label_anchor(
                     point_label_spec(series, cat_idx).and_then(|labels| labels.position),
                 );
+                // PowerPoint centres a column's label on the bar it labels, and
+                // a bar too narrow for the label spills evenly to both sides.
+                let label_w = bands.bar.max(32.0);
                 push_point_label(
                     ops,
                     family,
                     series,
                     ser_idx,
                     cat_idx,
-                    x,
+                    x + (bands.bar - label_w) / 2.0,
                     y0 + (y1 - y0) * fraction - offset,
-                    bands.bar.max(32.0),
+                    label_w,
                     total,
+                    PlotTextAlign::Center,
                 );
             }
         }
@@ -2916,6 +2930,7 @@ fn emit_line<S: PlotSink + ?Sized>(
                 y - size,
                 48.0,
                 category_total(family, i),
+                PlotTextAlign::Start,
             );
             prev = Some((x, y));
         }
@@ -2993,6 +3008,7 @@ fn emit_area<S: PlotSink + ?Sized>(
                 *y - 3.0,
                 48.0,
                 category_total(family, i),
+                PlotTextAlign::Start,
             );
         }
     }
@@ -3149,6 +3165,7 @@ fn emit_scatter<S: PlotSink + ?Sized>(
                 y - 4.0,
                 48.0,
                 category_total(family, i),
+                PlotTextAlign::Start,
             );
             prev = Some((x, y));
         }
@@ -3223,6 +3240,7 @@ fn emit_bubble<S: PlotSink + ?Sized>(
                 y,
                 48.0,
                 category_total(family, i),
+                PlotTextAlign::Start,
             );
         }
     }
@@ -3335,6 +3353,7 @@ fn emit_radar<S: PlotSink + ?Sized>(
                 *y - 4.0,
                 48.0,
                 category_total(family, index),
+                PlotTextAlign::Start,
             );
         }
     }
@@ -3802,6 +3821,7 @@ fn emit_pie<S: PlotSink + ?Sized>(
             oy + reach * middle.sin(),
             48.0,
             total,
+            PlotTextAlign::Start,
         );
         angle += sweep;
     }
@@ -4009,30 +4029,26 @@ pub fn format_with_code(value: f64, code: &str) -> Option<String> {
         return Some(format_number(value));
     }
     let section = &strip_modifiers(section)?;
-    if section.contains(['y', 'd', 'h', 's', 'E', 'e', '?']) || section.contains("m/") {
+    if section.contains(['y', 'd', 'h', 's', 'E', 'e']) || section.contains("m/") {
         return None;
     }
     // A section with no digit placeholder writes only its literal text, which
     // is how `0;-0;"-"` draws a zero as a dash and `0;-0;` as nothing.
-    if !section.contains(['0', '#']) {
+    if !section.contains(['0', '#', '?']) {
         let (leading, trailing) = literals(section);
         return Some(leading + &trailing);
     }
-    let digits = section
-        .split('.')
-        .nth(1)
-        .map(|tail| {
-            tail.chars()
-                .take_while(|c| matches!(c, '0' | '#'))
-                .count()
-                .min(9)
-        })
-        .unwrap_or(0);
+    let pattern = placeholders(section);
+    let (whole_pattern, fraction_pattern) = match pattern.split_once('.') {
+        Some((whole, fraction)) => (whole, Some(fraction)),
+        None => (pattern.as_str(), None),
+    };
+    let digits = fraction_pattern.map_or(0, |fraction| fraction.len().min(9));
     let percent = section.contains('%');
     let scaled = if percent { value * 100.0 } else { value };
     let factor = 10_f64.powi(digits as i32);
     let rounded = (scaled.abs() * factor).round() / factor;
-    let mut body = format!("{rounded:.digits$}");
+    let mut body = placeholder_digits(rounded, whole_pattern, fraction_pattern, digits);
     if section.contains(',') {
         body = group_thousands(&body);
     }
@@ -4174,16 +4190,74 @@ fn literals(code: &str) -> (String, String) {
     (leading, trailing)
 }
 
+/// A section's digit placeholders and decimal point, its literal text skipped.
+fn placeholders(code: &str) -> String {
+    let mut pattern = String::new();
+    let mut chars = code.chars();
+    while let Some(character) = chars.next() {
+        match character {
+            '"' => chars.by_ref().take_while(|c| *c != '"').for_each(drop),
+            '\\' | '_' | '*' => {
+                chars.next();
+            }
+            '0' | '#' | '?' => pattern.push(character),
+            '.' if !pattern.contains('.') => pattern.push('.'),
+            _ => {}
+        }
+    }
+    pattern
+}
+
+/// `rounded` written through its placeholders: `0` always writes a digit, while
+/// `#` and `?` write one only where it is significant (a trailing `?` keeps its
+/// place as a space), so `#.##` shows 1.5 as `1.5` and zero as `.`, and an
+/// accounting zero section writes no figure.
+fn placeholder_digits(
+    rounded: f64,
+    whole_pattern: &str,
+    fraction_pattern: Option<&str>,
+    digits: usize,
+) -> String {
+    let fixed = format!("{rounded:.digits$}");
+    let (whole, fraction) = fixed.split_once('.').unwrap_or((fixed.as_str(), ""));
+    let least = whole_pattern.matches('0').count();
+    let mut out = if whole == "0" && least == 0 {
+        String::new()
+    } else {
+        format!("{whole:0>least$}")
+    };
+    if let Some(places) = fraction_pattern {
+        let places = places.as_bytes();
+        let mut kept = fraction.as_bytes().to_vec();
+        let mut end = kept.len();
+        while end > 0 && kept[end - 1] == b'0' && places.get(end - 1).is_some_and(|p| *p != b'0') {
+            if places[end - 1] == b'?' {
+                kept[end - 1] = b' ';
+            } else {
+                kept.remove(end - 1);
+            }
+            end -= 1;
+        }
+        out.push('.');
+        out.extend(kept.into_iter().map(char::from));
+    }
+    out
+}
+
 fn group_thousands(body: &str) -> String {
-    let (whole, rest) = body.split_once('.').unwrap_or((body, ""));
-    let mut grouped = String::with_capacity(whole.len() + whole.len() / 3 + rest.len() + 1);
+    let (whole, rest) = match body.split_once('.') {
+        Some((whole, rest)) => (whole, Some(rest)),
+        None => (body, None),
+    };
+    let mut grouped =
+        String::with_capacity(whole.len() + whole.len() / 3 + rest.map_or(0, str::len) + 1);
     for (index, digit) in whole.chars().enumerate() {
         if index > 0 && (whole.len() - index) % 3 == 0 {
             grouped.push(',');
         }
         grouped.push(digit);
     }
-    if !rest.is_empty() {
+    if let Some(rest) = rest {
         grouped.push('.');
         grouped.push_str(rest);
     }
@@ -6400,6 +6474,28 @@ mod tests {
         );
         assert_eq!(format_with_code(7.0, "0 \"kg\"").as_deref(), Some("7 kg"));
         assert_eq!(format_with_code(7.0, "yyyy-mm-dd"), None);
+        let ledger = "_(\"$\"* #,##0_);_(\"$\"* \\(#,##0\\);_(\"$\"* \"-\"??_);_(@_)";
+        assert_eq!(format_with_code(800.0, ledger).as_deref(), Some("$800"));
+        assert_eq!(format_with_code(0.0, ledger).as_deref(), Some("$-"));
+        for (value, code, want) in [
+            (0.0, "#.##", "."),
+            (1.5, "#.##", "1.5"),
+            (0.5, "#.##", ".5"),
+            (1.0, "0.0#", "1.0"),
+            (1.25, "0.0#", "1.25"),
+            (0.0, "#,##0.00", "0.00"),
+            (1234.5, "#,##0.##", "1,234.5"),
+            (7.0, "\"No.\" 0", "No. 7"),
+        ] {
+            assert_eq!(
+                format_with_code(value, code).as_deref(),
+                Some(want),
+                "{value} {code}"
+            );
+        }
+        assert_eq!(format_with_code(1.25, "?.??").as_deref(), Some("1.25"));
+        assert_eq!(format_with_code(0.5, "0.0?").as_deref(), Some("0.5 "));
+        assert_eq!(format_with_code(-40.0, ledger).as_deref(), Some("$(40)"));
         assert_eq!(format_with_code(f64::NAN, "0.0"), None);
         assert_eq!(format_percent(0.5), "50%");
     }
@@ -6748,6 +6844,34 @@ mod tests {
             })
             .expect("the title is emitted");
         assert_eq!(title.0 + title.1 / 2.0, rect().x + rect().w / 2.0);
+    }
+
+    #[test]
+    fn a_narrow_column_centres_its_label_on_the_bar() {
+        let mut space = labelled_space(
+            "column",
+            None,
+            Some(ChartDataLabels {
+                show_value: Some(true),
+                position: Some("ctr".to_owned()),
+                ..ChartDataLabels::default()
+            }),
+        );
+        let series = &mut space.plot_groups[0].series[0];
+        series.values = (1..=40).map(f64::from).collect();
+        series.categories = (1..=40).map(|index| format!("C{index}")).collect();
+        let chart = PlotChart::from(&space);
+        let ops = plot_chart(&chart, rect());
+        let bar = bars(&ops)[0];
+        assert!(bar.2 < 32.0, "the bar is narrower than a label: {}", bar.2);
+        let (x, width) = ops
+            .iter()
+            .find_map(|op| match op {
+                PlotOp::Text { text, x, width, .. } if text == "1" => Some((*x, *width)),
+                _ => None,
+            })
+            .expect("the first label is drawn");
+        assert!(((x + width / 2.0) - (bar.0 + bar.2 / 2.0)).abs() < 1e-6);
     }
 
     #[test]
