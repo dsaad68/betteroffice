@@ -394,12 +394,13 @@ fn shape_patch(
     source_children: &[ShapeNode],
 ) -> EditResult<ShapePatch> {
     let mut patch = ShapePatch::default();
-    let moved = (shape.x, shape.y) != (base.x, base.y);
+    let source_inherited = base.width <= 0 || base.height <= 0;
+    let materialized = source_inherited && shape.width > 0 && shape.height > 0;
+    let moved = materialized || (shape.x, shape.y) != (base.x, base.y);
     let resized = (shape.width, shape.height) != (base.width, base.height);
     if moved || resized {
         patch.offset = moved.then_some((shape.x, shape.y));
         patch.extent = resized.then_some((shape.width, shape.height));
-        let source_inherited = base.width <= 0 || base.height <= 0;
         patch.inherited = source_inherited.then(|| {
             base.inherited
                 .map(|transform| InheritedTransform {
