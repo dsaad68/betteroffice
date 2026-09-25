@@ -6,14 +6,15 @@ use std::collections::HashMap;
 
 use resvg::usvg::roxmltree::{Document, Node};
 
+use super::geometry::{self, Outline};
 use super::style::StyleSheet;
 use super::{
-    MAX_SVG_ATTRIBUTES, MAX_SVG_COLLECT_WORK, MAX_SVG_DEPTH, MAX_SVG_EXPANDED_BYTES,
-    MAX_SVG_EXPANDED_NODES, MAX_SVG_GRADIENT_STOPS, MAX_SVG_PAINT_BYTES, MAX_SVG_PATH_BYTES,
-    MAX_SVG_STYLE_WORK, SvgRefusal, reference,
+    ARC_CUBIC_BYTES, MAX_SVG_ATTRIBUTES, MAX_SVG_COLLECT_WORK, MAX_SVG_DEPTH,
+    MAX_SVG_EXPANDED_BYTES, MAX_SVG_EXPANDED_NODES, MAX_SVG_GRADIENT_STOPS, MAX_SVG_PAINT_BYTES,
+    MAX_SVG_PATH_BYTES, MAX_SVG_STYLE_WORK, SvgRefusal, reference,
 };
 
-const SVG_NS: &str = "http://www.w3.org/2000/svg";
+pub(super) const SVG_NS: &str = "http://www.w3.org/2000/svg";
 const XLINK_NS: &str = "http://www.w3.org/1999/xlink";
 const XML_NS: &str = "http://www.w3.org/XML/1998/namespace";
 
@@ -113,6 +114,7 @@ struct Element<'a> {
     paint: [Paint; 2],
     /// Paints with the context element's paint, as `context-fill` does.
     context: bool,
+    outline: Outline,
 }
 
 /// An element's instance as `usvg` expands it. Consumers are shapes that will
@@ -196,6 +198,7 @@ pub(super) fn audit(document: &Document<'_>) -> Result<(), SvgRefusal> {
             style: 0,
             paint: [Paint::default(); 2],
             context: false,
+            outline: Outline::default(),
         };
         audit_attributes(&mut element)?;
         element.bytes += node.children().count() as u64;
@@ -470,9 +473,6 @@ fn audit_attributes(element: &mut Element<'_>) -> Result<(), SvgRefusal> {
                     element.links.push((link, target));
                 }
             }
-            "d" | "points" if value.len() > MAX_SVG_PATH_BYTES => {
-                return Err(SvgRefusal::ExpansionTooLarge);
-            }
             "mask" | "marker-start" | "marker-mid" | "marker-end" => {
                 reference::func_iri(value)?;
             }
@@ -492,7 +492,36 @@ fn audit_attributes(element: &mut Element<'_>) -> Result<(), SvgRefusal> {
     for text in node.children().filter(|child| child.is_text()) {
         element.bytes += text.text().map_or(0, str::len) as u64;
     }
+    element.outline = outline(node)?;
+    let arcs = (element.outline.arc_cubics as u64).saturating_mul(ARC_CUBIC_BYTES);
+    let data = ["d", "points"]
+        .iter()
+        .flat_map(|name| geometry::attributes(node, name))
+        .map(str::len)
+        .sum::<usize>() as u64;
+    if data.saturating_add(arcs) > MAX_SVG_PATH_BYTES as u64 {
+        return Err(SvgRefusal::ExpansionTooLarge);
+    }
+    element.bytes = element.bytes.saturating_add(arcs);
     Ok(())
+}
+
+/// The outline `usvg` builds for a shape, every `d` it may read summed.
+fn outline(node: Node<'_, '_>) -> Result<Outline, SvgRefusal> {
+    if node.tag_name().name() != "path" {
+        return geometry::shape(node);
+    }
+    let mut sum = Outline::default();
+    for data in geometry::attributes(node, "d") {
+        let outline = geometry::path(data)?;
+        sum.segments += outline.segments;
+        sum.contours += outline.contours;
+        sum.curves += outline.curves;
+        sum.length += outline.length;
+        sum.reach = sum.reach.max(outline.reach);
+        sum.arc_cubics += outline.arc_cubics;
+    }
+    Ok(sum)
 }
 
 /// Style work per byte of declarations applied to one instance of `node`:

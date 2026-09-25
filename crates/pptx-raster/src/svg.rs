@@ -7,6 +7,7 @@
 
 mod audit;
 mod cost;
+mod geometry;
 mod markup;
 mod reference;
 mod style;
@@ -40,6 +41,10 @@ const STYLE_COPY_BYTES: u64 = 10;
 /// measure a shape: about 190 per segment with round joins, and at most one
 /// segment per byte.
 const STROKE_BYTES: u64 = 256;
+/// Bytes of path data each cubic an arc becomes is charged as: its 25 bytes
+/// of points, and the copies `svgtypes` makes draining up to 64 of them, stay
+/// within what 8 bytes buy at [`BYTE_BYTES`] and [`BYTE_NS`].
+const ARC_CUBIC_BYTES: u64 = 8;
 /// Time the byte scan, `roxmltree` and the audit take per source byte.
 const SOURCE_NS: u64 = 16;
 /// Time `usvg` takes to build one expanded element.
@@ -80,8 +85,9 @@ pub const MAX_SVG_EXPANDED_NODES: u64 = 1 << 15;
 /// and path data once per instance, and walks its markup once per `use`:
 /// 16 MiB of the memory envelope and 67 ms.
 pub const MAX_SVG_EXPANDED_BYTES: u64 = 1 << 21;
-/// Path data one shape may carry, which `usvg` strokes whole to measure it:
-/// 16 MiB of outline, the envelope's share for any one path's transients.
+/// Path data one shape may carry, each cubic its arcs become weighed as
+/// [`ARC_CUBIC_BYTES`], which `usvg` strokes whole to measure it: 16 MiB of
+/// outline, the envelope's share for any one path's transients.
 pub const MAX_SVG_PATH_BYTES: usize = 1 << 16;
 /// That share: what the edges, outline and dashes of any one path may take
 /// while `usvg` measures it or `resvg` paints it.
@@ -764,6 +770,40 @@ pub(crate) mod tests {
         assert_eq!(
             refusal(path(MAX_SVG_PATH_BYTES / 2).as_bytes()),
             Some(SvgRefusal::ExpansionTooLarge)
+        );
+    }
+
+    #[test]
+    fn an_arc_is_refused_before_kurbo_subdivides_it_by_its_radius() {
+        let fuzzed = format!(
+            r##"<path d="M0 0{}a{}1 1 0 0 0 1 1{}" fill="#f00"/>"##,
+            "a1 1 0 0 0 1 1".repeat(1_000),
+            "6".repeat(57) + "1",
+            "a1 1 0 0 0 1 1".repeat(1_000)
+        );
+        for body in [
+            fuzzed.as_str(),
+            r#"<path d="M0 0A1 1 0 0 0 1e12 0"/>"#,
+            r#"<circle r="1e30"/>"#,
+            r#"<ellipse rx="1" ry="1e20"/>"#,
+            r#"<rect width="1e30" height="1e30" rx="1e30"/>"#,
+            r#"<circle r="50%"/>"#,
+        ] {
+            let started = std::time::Instant::now();
+            assert_eq!(
+                refusal(document(body).as_bytes()),
+                Some(SvgRefusal::ExpansionTooLarge),
+                "{body}"
+            );
+            assert!(started.elapsed() < std::time::Duration::from_secs(1));
+        }
+        let arcs = format!(r#"<path d="M1 1{}"/>"#, "a4 4 0 0 1 8 0".repeat(1_000));
+        assert!(parse(document(&arcs).as_bytes()).is_ok());
+        let heavy = format!(r#"<path d="M1 1{}"/>"#, "a4 4 0 1 1 8 0".repeat(1_700));
+        assert_eq!(
+            refusal(document(&heavy).as_bytes()),
+            Some(SvgRefusal::ExpansionTooLarge),
+            "each large arc weighs four cubics"
         );
     }
 
