@@ -125,7 +125,7 @@ fn find_source_node(nodes: &[ShapeNode], source_id: u32) -> Option<&ShapeNode> {
 
 fn find_placeholder<'a>(nodes: &'a [ShapeNode], target: &Placeholder) -> Option<&'a ShapeNode> {
     for node in nodes {
-        if node_placeholder(node).is_some_and(|value| placeholders_match(value, target)) {
+        if node_placeholder(node).is_some_and(|value| value.matches(target)) {
             return Some(node);
         }
         if let ShapeNode::Group(group) = node
@@ -135,24 +135,6 @@ fn find_placeholder<'a>(nodes: &'a [ShapeNode], target: &Placeholder) -> Option<
         }
     }
     None
-}
-
-fn placeholders_match(left: &Placeholder, right: &Placeholder) -> bool {
-    match (left.index, right.index) {
-        (Some(left), Some(right)) => left == right,
-        _ => {
-            normalize_placeholder_type(left.placeholder_type.as_deref())
-                == normalize_placeholder_type(right.placeholder_type.as_deref())
-        }
-    }
-}
-
-fn normalize_placeholder_type(value: Option<&str>) -> &str {
-    match value.unwrap_or("body") {
-        "ctrTitle" => "title",
-        "obj" => "body",
-        value => value,
-    }
 }
 
 fn node_placeholder(node: &ShapeNode) -> Option<&Placeholder> {

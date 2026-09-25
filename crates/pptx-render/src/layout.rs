@@ -4161,7 +4161,7 @@ fn find_node(nodes: &[ShapeNode], id: u32) -> Option<&ShapeNode> {
 
 fn find_placeholder<'a>(nodes: &'a [ShapeNode], target: &Placeholder) -> Option<&'a ShapeNode> {
     for node in nodes {
-        if node_placeholder(node).is_some_and(|value| placeholders_match(value, target)) {
+        if node_placeholder(node).is_some_and(|value| value.matches(target)) {
             return Some(node);
         }
         if let ShapeNode::Group(group) = node
@@ -4171,23 +4171,6 @@ fn find_placeholder<'a>(nodes: &'a [ShapeNode], target: &Placeholder) -> Option<
         }
     }
     None
-}
-
-/// A slide holds one of each of these, so they inherit by type: PowerPoint
-/// writes a slide number as `idx="12"` over a master's `idx="4"` and still
-/// draws it where the master put it (#797).
-const SINGLETON_PLACEHOLDERS: [&str; 5] = ["title", "sldNum", "dt", "ftr", "hdr"];
-
-fn placeholders_match(left: &Placeholder, right: &Placeholder) -> bool {
-    let left_type = normalize_placeholder_type(left.placeholder_type.as_deref());
-    let right_type = normalize_placeholder_type(right.placeholder_type.as_deref());
-    if SINGLETON_PLACEHOLDERS.contains(&left_type) || SINGLETON_PLACEHOLDERS.contains(&right_type) {
-        return left_type == right_type;
-    }
-    match (left.index, right.index) {
-        (Some(left), Some(right)) => left == right,
-        _ => left_type == right_type,
-    }
 }
 
 fn normalize_placeholder_type(value: Option<&str>) -> &str {
@@ -9301,16 +9284,16 @@ mod tests {
             orientation: None,
             size: None,
         };
-        assert!(!placeholders_match(&indexed, &same_index));
-        assert!(placeholders_match(&centered_title, &title));
+        assert!(!indexed.matches(&same_index));
+        assert!(centered_title.matches(&title));
         let slide_number = |index| Placeholder {
             placeholder_type: Some("sldNum".to_owned()),
             index: Some(index),
             orientation: None,
             size: None,
         };
-        assert!(placeholders_match(&slide_number(12), &slide_number(4)));
-        assert!(!placeholders_match(&slide_number(12), &indexed));
+        assert!(slide_number(12).matches(&slide_number(4)));
+        assert!(!slide_number(12).matches(&indexed));
 
         let snapshot = ShapeSnapshot {
             id: "placeholder".to_owned(),
