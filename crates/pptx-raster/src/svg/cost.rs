@@ -135,7 +135,7 @@ impl Tally {
     /// Prices filling `data`, placed by `place`, into `surface`.
     fn fill(&mut self, data: &tiny_skia::Path, place: Transform, surface: Area, extra: f64) {
         let (steps, edges) = sorting(data, place, surface);
-        self.work += FILL_EDGE_WORK * length(data, place) + SORT_WORK * steps;
+        self.work += FILL_EDGE_WORK * length(closed(data), place) + SORT_WORK * steps;
         self.transient = self.transient.max(extra + edges * EDGE_BYTES);
     }
 
@@ -295,7 +295,7 @@ fn measure_stroke(
     let span = (outline.reach + radius) / tolerance;
     let far = span.is_nan() || span > MAX_SVG_STROKE_SPAN;
     if hairline(path, stroke, place) {
-        tally.work += HAIRLINE_WORK * length(path.data(), place);
+        tally.work += HAIRLINE_WORK * length(path.data().segments(), place);
         tally.transient = tally.transient.max(dashed);
         if far && dashes > 0.0 {
             tally.exceed();
@@ -448,9 +448,35 @@ fn outline(data: &tiny_skia::Path) -> Outline {
     outline
 }
 
-/// The control-polygon length of `data` under `transform`, which a curve never
-/// exceeds.
-fn length(data: &tiny_skia::Path, transform: Transform) -> f64 {
+/// A path's segments as `tiny-skia` fills them: every contour left open is
+/// closed by a line back to its start, before the next contour and at the end.
+fn closed(data: &tiny_skia::Path) -> impl Iterator<Item = PathSegment> + '_ {
+    let mut open = false;
+    data.segments()
+        .map(Some)
+        .chain(std::iter::once(None))
+        .flat_map(move |segment| {
+            let close = match segment {
+                Some(PathSegment::MoveTo(_)) | None => std::mem::take(&mut open),
+                Some(PathSegment::Close) => {
+                    open = false;
+                    false
+                }
+                Some(_) => {
+                    open = true;
+                    false
+                }
+            };
+            close
+                .then_some(PathSegment::Close)
+                .into_iter()
+                .chain(segment)
+        })
+}
+
+/// The control-polygon length of `segments` under `transform`, which a curve
+/// never exceeds.
+fn length(segments: impl Iterator<Item = PathSegment>, transform: Transform) -> f64 {
     let map = |point: Point| {
         (
             f64::from(transform.sx * point.x + transform.kx * point.y + transform.tx),
@@ -461,7 +487,7 @@ fn length(data: &tiny_skia::Path, transform: Transform) -> f64 {
         |(ax, ay): (f64, f64), (bx, by): (f64, f64)| ((bx - ax).powi(2) + (by - ay).powi(2)).sqrt();
     let (mut start, mut current) = ((0.0, 0.0), (0.0, 0.0));
     let mut total = 0.0;
-    for segment in data.segments() {
+    for segment in segments {
         let points: &[Point] = match &segment {
             PathSegment::MoveTo(point) => {
                 start = map(*point);
@@ -486,7 +512,8 @@ fn length(data: &tiny_skia::Path, transform: Transform) -> f64 {
     total
 }
 
-/// The edges `tiny-skia` builds to fill `data` into `surface`, and the steps
+/// The edges `tiny-skia` builds to fill `data` into `surface`, the lines
+/// closing each open contour included, and the steps
 /// it may take insertion-sorting its active edges. A segment wholly above or
 /// below a clipped surface is dropped. Sorting takes at most one step per pair
 /// of edges, since two monotone edges swap at most once, and at most every
@@ -503,7 +530,7 @@ fn sorting(data: &tiny_skia::Path, place: Transform, surface: Area) -> (f64, f64
     let mut spans = Vec::new();
     let mut edges = 0.0;
     let (mut start, mut current) = (Point::zero(), Point::zero());
-    for segment in data.segments() {
+    for segment in closed(data) {
         let points: &[Point] = match &segment {
             PathSegment::MoveTo(point) => {
                 start = *point;
@@ -605,5 +632,6 @@ fn dashes(data: &tiny_skia::Path, stroke: &usvg::Stroke) -> f64 {
         .segments()
         .filter(|segment| matches!(segment, PathSegment::MoveTo(_)))
         .count() as f64;
-    (array.len() / 2) as f64 * (length(data, Transform::identity()) / period + 2.0 * contours)
+    let length = length(data.segments(), Transform::identity());
+    (array.len() / 2) as f64 * (length / period + 2.0 * contours)
 }

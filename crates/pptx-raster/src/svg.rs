@@ -1670,6 +1670,25 @@ pub(crate) mod tests {
         );
     }
 
+    #[test]
+    fn the_line_closing_each_open_contour_is_priced() {
+        let price = |close: &str| {
+            let source = document(&format!(
+                r##"<path d="{}" fill="#000"/>"##,
+                format!("M0 0L96 48L0 96{close}").repeat(200)
+            ));
+            let image = parse(source.as_bytes()).expect("parse");
+            cost::measure(&image.tree, image.size, None)
+                .expect("price")
+                .work
+        };
+        assert_eq!(
+            price(""),
+            price("Z"),
+            "tiny-skia closes an open contour with the line Z draws"
+        );
+    }
+
     pub(crate) fn opacity_nest(depth: usize) -> String {
         document(&format!(
             r##"{}<rect width="96" height="96" fill="#0000ff"/>{}"##,
