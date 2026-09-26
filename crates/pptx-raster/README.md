@@ -61,35 +61,46 @@ it, and the shares are checked at compile time to sum within it.
   the `<` and `=` `roxmltree` reserves a node and an attribute for to
   `MAX_SVG_NODES` and `MAX_SVG_ATTRIBUTES`, and namespace declarations to
   `MAX_SVG_NAMESPACES`, and refuses any DTD.
-- **Before `usvg`.** Every reference is read with `svgtypes`, the parser `usvg`
-  resolves it with, and must name a fragment of the document; the graph they
-  form must be acyclic. No attribute may come from the SVG, XLink or XML
-  namespace, which `usvg` reads as if unprefixed, beyond `xlink:href`,
-  `xlink:title`, `xml:space` and `xml:lang`. The tree every `<use>` and clip path expands into is
-  sized first, to `MAX_SVG_EXPANDED_NODES` elements and
-  `MAX_SVG_EXPANDED_BYTES` of markup, with `MAX_SVG_PATH_BYTES` per shape and
-  `MAX_SVG_GRADIENT_STOPS` per gradient. Stylesheets are plain type, class and
-  id rules within `MAX_SVG_STYLE_RULES`, `MAX_SVG_SELECTOR_PARTS` and
+- **Re-serialised.** `usvg` never reads the source. The document is written
+  out again with only allowlisted elements and, on them, only allowlisted
+  attributes in no namespace, each value re-emitted from the parse `usvg`
+  makes of it: numbers, lengths, paints, transforms, path data and points in
+  canonical form, `href` as it resolves, and stylesheets and `style`
+  attributes as the declarations `simplecss` yields. Any attribute value but
+  path data, points and `style` is held to `MAX_SVG_VALUE_BYTES`, and the
+  sanitised document to `MAX_SVG_SANITIZED_BYTES`. Metadata, foreign markup,
+  text and embedded images are left out, and a reference into them, or to an
+  id that cannot be written back unchanged, is refused. An attribute on the
+  SVG, XLink or XML prefix other than `xlink:href`, `xlink:title`,
+  `xml:space` and `xml:lang` is refused too.
+- **Before `usvg`.** The audit reads the sanitised document, exactly what
+  `usvg` will. Every reference must name a fragment of the document, and the
+  graph they form must be acyclic; a gradient chain links at most four. The
+  tree every `<use>` and clip path expands into is sized first, to
+  `MAX_SVG_EXPANDED_NODES` elements and `MAX_SVG_EXPANDED_BYTES` of markup,
+  with `MAX_SVG_PATH_BYTES` per shape and `MAX_SVG_GRADIENT_STOPS` per
+  gradient. Stylesheets are plain type, class and id rules within
+  `MAX_SVG_STYLE_RULES`, `MAX_SVG_SELECTOR_PARTS` and
   `MAX_SVG_SELECTOR_BYTES`, and `MAX_SVG_STYLE_WORK` charges what `simplecss`
-  spends on them, text rescans included; declarations are read with its own
-  tokenizer, and CSS may not say `inherit`. Gradient
+  spends on them, text rescans included; CSS may not say `inherit`. Gradient
   copies for the shapes that inherit one are charged to `MAX_SVG_PAINT_BYTES`,
-  collecting them and the clip paths to `MAX_SVG_COLLECT_WORK`, and a dash list
-  to every shape that may stroke with it. Path data is read with `svgtypes`
-  too, positions tracked as `usvg` tracks them, so every arc is bounded from
-  its radii before `kurbo` subdivides it: at most 64 cubics, each weighed
+  collecting them and the clip paths to `MAX_SVG_COLLECT_WORK`, and a dash
+  list to every shape and `<use>` that may stroke with it. Every arc is bounded
+  from its radii before `kurbo` subdivides it: at most 64 cubics, each weighed
   against `MAX_SVG_PATH_BYTES`, as are the arcs of circles, ellipses and
   rounded rectangles, whose radii must be absolute. Where anything is stroked,
   every shape is charged the pieces the stroker may emit as `usvg` strokes it
   to measure it, within `MAX_SVG_STROKE_VERBS`; curves and widths must stay
   within `MAX_SVG_STROKE_SPAN` tolerances, and rotations and skews are refused.
-  The inherited-property lookups `usvg` makes through every ancestor are
+  The inherited-property lookups `usvg` makes through every ancestor, the
+  values it parses anew and the gradient chains it walks per shape are
   charged to `MAX_SVG_INHERIT_WORK`.
 - **Before `resvg`.** The converted tree is priced: group layers stack at most
   `MAX_SVG_LAYER_DEPTH` deep and are charged to the slide's image budget with
   the output raster, painted area stays within `MAX_SVG_OVERDRAW` times that
   raster, and painting work within `MAX_SVG_RENDER_WORK`: the edges the
-  clipper cuts and their sorting included, and each stroke's outline, which
+  clipper cuts, the lines closing open contours and their sorting included,
+  and each stroke's outline, which
   is stroked once here as `resvg` will stroke it. The raster renders at up to
   four times the document's intrinsic size and steps down when it would not
   fit, the slide's image budget left included; it and every layer stay within
