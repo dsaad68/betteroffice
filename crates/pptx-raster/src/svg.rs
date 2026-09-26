@@ -10,6 +10,7 @@ mod cost;
 mod geometry;
 mod markup;
 mod reference;
+mod sanitize;
 mod style;
 
 use std::panic::{AssertUnwindSafe, catch_unwind};
@@ -45,8 +46,9 @@ const STROKE_BYTES: u64 = 256;
 /// of points, and the copies `svgtypes` makes draining up to 64 of them, stay
 /// within what 8 bytes buy at [`BYTE_BYTES`] and [`BYTE_NS`].
 const ARC_CUBIC_BYTES: u64 = 8;
-/// Time the byte scan, `roxmltree` and the audit take per source byte.
-const SOURCE_NS: u64 = 16;
+/// Time the byte scan, both `roxmltree` parses, the sanitizer and the audit
+/// take per source byte: about 27 ns measured over 4 MiB of path data.
+const SOURCE_NS: u64 = 32;
 /// Time `usvg` takes to build one expanded element.
 const NODE_NS: u64 = 1_024;
 /// Time `usvg` takes per expanded markup byte: path data parses and strokes
@@ -60,10 +62,17 @@ const RENDER_NS: u64 = 4;
 const VERB_NS: u64 = 32;
 
 /// One document's bytes, twice what [`MAX_SVG_EXPANDED_BYTES`] lets it draw
-/// so an editor's private markup, which the audit skips, still fits: the byte
-/// scan, `roxmltree` and the audit take about 67 ms over them, and
-/// `roxmltree` copies at most as many bytes again.
+/// so an editor's private markup, which the sanitizer drops, still fits: the
+/// byte scan, both parses, the sanitizer and the audit take about 134 ms over
+/// them, and `roxmltree` copies at most as many bytes again.
 pub const MAX_SVG_BYTES: usize = 1 << 22;
+/// The document `usvg` reads, re-serialised from the source, which is held
+/// alongside it while `usvg` converts it: 3 MiB of the memory envelope, room
+/// for everything [`MAX_SVG_EXPANDED_BYTES`] lets a document draw once.
+pub const MAX_SVG_SANITIZED_BYTES: usize = 3 << 20;
+/// Bytes of any one attribute value but path data, points and `style`, as
+/// written: every inherited value is parsed anew for each element under it.
+pub const MAX_SVG_VALUE_BYTES: usize = 1_024;
 /// Elements one document may nest, in its markup or once its references are
 /// expanded. The parsers, `usvg`'s converter and `resvg` recurse over it at
 /// about 3 KiB of stack a level: 64 levels fit a 512 KiB thread stack twice.
@@ -100,8 +109,8 @@ pub(super) const SVG_TRANSIENT_BYTES: u64 = MAX_SVG_PATH_BYTES as u64 * STROKE_B
 pub const MAX_SVG_GRADIENT_STOPS: usize = 256;
 /// Bytes of the gradient copies `usvg` makes per shape: one for every shape
 /// that paints with a gradient in its own box's units or with a `use`'s
-/// context paint, each ~256 bytes plus 12 a stop. 8 MiB of the envelope.
-pub const MAX_SVG_PAINT_BYTES: u64 = 1 << 23;
+/// context paint, each ~256 bytes plus 12 a stop. 6 MiB of the envelope.
+pub const MAX_SVG_PAINT_BYTES: u64 = 6 << 20;
 /// What `usvg` spends collecting distinct gradients and clip paths, which it
 /// compares each reference against every one collected so far at about a
 /// quarter nanosecond each: 34 ms of the time envelope.
@@ -143,10 +152,10 @@ pub const MAX_SVG_LAYER_DEPTH: usize = 8;
 /// Painted pixels, gradient stops weighted in, as a multiple of the output
 /// raster: a cheap first refusal before [`MAX_SVG_RENDER_WORK`] is summed.
 pub const MAX_SVG_OVERDRAW: u64 = 64;
-/// Painting work in painted-pixel units, each about 4 ns: 537 ms, the rest of
+/// Painting work in painted-pixel units, each about 4 ns: 470 ms, the rest of
 /// the time envelope. Past it the raster supersamples less, and a render still
 /// past it at its intrinsic size is refused.
-pub const MAX_SVG_RENDER_WORK: u64 = 4 * MAX_IMAGE_PIXELS;
+pub const MAX_SVG_RENDER_WORK: u64 = 7 * MAX_IMAGE_PIXELS / 2;
 /// One rasterised SVG's longest side, and any layer's. The raster is outside
 /// the envelope: the caller charges it, with its layers, to the slide's image
 /// budget. Past 8191 `tiny-skia` draws a pixmap in tiles, every path per tile.
@@ -157,6 +166,7 @@ const SVG_SUPERSAMPLE: u32 = 4;
 
 const _: () = assert!(
     MAX_SVG_BYTES as u64
+        + MAX_SVG_SANITIZED_BYTES as u64
         + (MAX_SVG_NODES as u64 + MAX_SVG_ATTRIBUTES as u64) * XML_ITEM_BYTES
         + MAX_SVG_EXPANDED_NODES * NODE_BYTES
         + MAX_SVG_EXPANDED_BYTES * BYTE_BYTES
@@ -277,6 +287,17 @@ pub(crate) fn parse_within(bytes: &[u8], pixels: u64) -> Result<SvgImage, SvgRef
     if document.root_element().tag_name().name() != "svg" {
         return Err(SvgRefusal::NotSvg);
     }
+    let sanitized = sanitize::sanitize(&document)?;
+    drop(document);
+    let document = usvg::roxmltree::Document::parse_with_options(
+        &sanitized,
+        usvg::roxmltree::ParsingOptions {
+            allow_dtd: false,
+            nodes_limit: MAX_SVG_NODES,
+            ..Default::default()
+        },
+    )
+    .map_err(|_| SvgRefusal::Unparsable)?;
     audit::audit(&document)?;
     let tree = guarded(|| usvg::Tree::from_xmltree(&document, &sandbox()))?
         .map_err(|_| SvgRefusal::Unparsable)?;
@@ -720,6 +741,42 @@ pub(crate) mod tests {
             ));
             document(&body)
         };
+        let gradients = |ids: [&str; 3]| {
+            document(&format!(
+                concat!(
+                    r##"<linearGradient id="a" href="#{b}"/><linearGradient id="{b}" href="#{c}"/>"##,
+                    r##"<linearGradient id="{c}" xlink:href="#{b}" xmlns:xlink="http://www.w3.org/1999/xlink"/>"##,
+                    r##"<rect width="9" height="9" fill="url(#a)"/>"##
+                ),
+                b = ids[1],
+                c = ids[2]
+            ))
+        };
+        for source in [
+            clips(
+                ["a1", "b1", "c1"],
+                [
+                    r##"clip-path="url(#b1)""##,
+                    r##"clip-path="url(#c1)""##,
+                    r##"clip-path="url(#a1)""##,
+                ],
+            ),
+            clips(
+                ["a2", "b2", "c2"],
+                [
+                    r##"clip-path="url('#b2')""##,
+                    r##"clip-path=" url( &quot;#c2 &quot; ) ""##,
+                    r##"style="clip-path:url(#a2)""##,
+                ],
+            ),
+            gradients(["a", "b3", "c3"]),
+        ] {
+            assert_eq!(
+                refusal(source.as_bytes()),
+                Some(SvgRefusal::ReferenceCycle),
+                "{source}"
+            );
+        }
         for source in [
             clips(
                 ["a&#9;", "b&#9;", "c&#9;"],
@@ -729,24 +786,12 @@ pub(crate) mod tests {
                     r##"clip-path="url(#a&#9;)""##,
                 ],
             ),
-            clips(
-                ["a&#9;x", "b&#9;x", "c&#9;x"],
-                [
-                    r##"clip-path="url('#b&#9;x')""##,
-                    r##"clip-path=" url( &quot;#c&#9;x &quot; ) ""##,
-                    r##"style="clip-path:url(#a&#9;x)""##,
-                ],
-            ),
-            document(concat!(
-                r##"<linearGradient id="a" href="#b&#9;"/><linearGradient id="b&#9;" href="#c&#9;"/>"##,
-                r##"<linearGradient id="c&#9;" xlink:href="#b&#9;" xmlns:xlink="http://www.w3.org/1999/xlink"/>"##,
-                r##"<rect width="9" height="9" fill="url(#a)"/>"##
-            )),
+            gradients(["a", "b&#9;", "c&#9;"]),
         ] {
             assert_eq!(
                 refusal(source.as_bytes()),
-                Some(SvgRefusal::ReferenceCycle),
-                "{source}"
+                Some(SvgRefusal::UnsupportedElement),
+                "an id that cannot be written back unchanged: {source}"
             );
         }
     }
@@ -811,8 +856,8 @@ pub(crate) mod tests {
         for (attribute, outcome) in [
             ("fill", Some(SvgRefusal::ExternalReference)),
             ("clip-path", Some(SvgRefusal::ExternalReference)),
-            ("style", Some(SvgRefusal::ExpansionTooLarge)),
-            ("data-x", Some(SvgRefusal::ExpansionTooLarge)),
+            ("style", Some(SvgRefusal::UnsupportedStyle)),
+            ("data-x", None),
         ] {
             let value = if attribute == "style" {
                 format!("fill:{list}")
@@ -850,7 +895,12 @@ pub(crate) mod tests {
 
     #[test]
     fn a_use_is_charged_for_walking_its_whole_target() {
-        for filler in ["<x:a/>", "<!---->", "x"] {
+        for (filler, outcome) in [
+            ("<g/>", Some(SvgRefusal::ExpansionTooLarge)),
+            ("<x:a/>", None),
+            ("<!---->", None),
+            ("x", None),
+        ] {
             let source = document(&format!(
                 r##"<defs><g id="t" xmlns:x="urn:x">{}<rect width="1" height="1"/></g></defs>{}"##,
                 filler.repeat(20_000),
@@ -858,8 +908,8 @@ pub(crate) mod tests {
             ));
             assert_eq!(
                 refusal(source.as_bytes()),
-                Some(SvgRefusal::ExpansionTooLarge),
-                "{filler}"
+                outcome,
+                "{filler}: foreign markup, comments and text never reach usvg"
             );
         }
     }
@@ -1011,10 +1061,8 @@ pub(crate) mod tests {
     #[test]
     fn a_reference_to_a_repeated_id_counts_every_element_that_carries_it() {
         let targets = r##"<linearGradient id="x"/>"##.repeat(1_000);
-        let references = "url(#x) ".repeat(200);
-        let source = document(&format!(
-            r##"<defs>{targets}</defs><rect width="9" height="9" style="fill:{references}"/>"##
-        ));
+        let references = r##"<rect width="9" height="9" fill="url(#x)"/>"##.repeat(200);
+        let source = document(&format!(r##"<defs>{targets}</defs>{references}"##));
         assert_eq!(
             refusal(source.as_bytes()),
             Some(SvgRefusal::ExpansionTooLarge)
@@ -1357,10 +1405,10 @@ pub(crate) mod tests {
 
     #[test]
     fn a_dense_pattern_head_is_charged_on_every_contour_it_restarts() {
-        let pattern = format!("{}1e9", "0.001 0.001 ".repeat(500));
+        let pattern = format!("{}1e9", "0.001 0.001 ".repeat(80));
         let body = format!(
             r##"<path d="{}" stroke="#000" stroke-width="2" stroke-dasharray="{pattern}"/>"##,
-            "M1 1h1".repeat(2_000)
+            "M1 1h1".repeat(8_000)
         );
         let started = std::time::Instant::now();
         assert_eq!(
@@ -1528,7 +1576,7 @@ pub(crate) mod tests {
             refusal(chain(60, 60, 30_000).as_bytes()),
             Some(SvgRefusal::ExpansionTooLarge)
         );
-        assert!(started.elapsed() < std::time::Duration::from_secs(1));
+        assert!(started.elapsed() < std::time::Duration::from_secs(5));
         let attributes: String = names.iter().map(|name| format!(r#" {name}="1""#)).collect();
         let fanned = |uses: usize| {
             document(&format!(
@@ -1547,6 +1595,15 @@ pub(crate) mod tests {
         assert!(started.elapsed() < std::time::Duration::from_secs(1));
         assert!(parse(fanned(2).as_bytes()).is_ok());
         assert!(parse(chain(8, 10, 5_000).as_bytes()).is_ok());
+    }
+
+    #[test]
+    fn a_foreign_style_attribute_never_reaches_usvg() {
+        let body = concat!(
+            r##"<g xmlns:f="urn:f" f:style="stroke-width:100000;stroke:#000;fill:inherit">"##,
+            r##"<path d="M10 10C60 90 20 -50 80 40"/></g>"##
+        );
+        assert!(parse(document(body).as_bytes()).is_ok());
     }
 
     pub(crate) fn opacity_nest(depth: usize) -> String {

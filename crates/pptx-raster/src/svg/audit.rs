@@ -23,7 +23,7 @@ const XML_NS: &str = "http://www.w3.org/XML/1998/namespace";
 /// What a document may draw with. Office icons stay within `svg g defs style
 /// path linearGradient stop`; markers, filters, masks, patterns, scripts and
 /// animation are not here.
-const ALLOWED: [&str; 24] = [
+pub(super) const ALLOWED: [&str; 24] = [
     "svg",
     "g",
     "defs",

@@ -85,7 +85,25 @@ struct Rule<'a> {
     block: usize,
 }
 
+impl Rule<'_> {
+    fn write(&self, out: &mut String) {
+        if self.tag.is_none() && self.classes.is_empty() && self.ids.is_empty() {
+            out.push('*');
+        }
+        out.push_str(self.tag.unwrap_or_default());
+        for class in &self.classes {
+            out.push('.');
+            out.push_str(class);
+        }
+        for id in &self.ids {
+            out.push('#');
+            out.push_str(id);
+        }
+    }
+}
+
 struct Block<'a> {
+    declarations: &'a str,
     len: u64,
     /// Declarations at most, each an attribute `usvg` adds to the element.
     colons: u64,
@@ -95,7 +113,32 @@ struct Block<'a> {
 }
 
 impl<'a> StyleSheet<'a> {
-    /// Reads every `<style>` element `usvg` would apply, wherever it sits.
+    /// Writes every rule back out, each block's selectors joined as the text
+    /// listed them and its declarations re-emitted by `declarations`.
+    pub(super) fn write(
+        &self,
+        out: &mut String,
+        mut declarations: impl FnMut(&str, &mut String) -> Result<(), SvgRefusal>,
+    ) -> Result<(), SvgRefusal> {
+        let mut rules = self.rules.iter().peekable();
+        for (index, block) in self.blocks.iter().enumerate() {
+            let mut first = true;
+            while let Some(rule) = rules.next_if(|rule| rule.block == index) {
+                if !first {
+                    out.push(',');
+                }
+                first = false;
+                rule.write(out);
+            }
+            out.push('{');
+            declarations(block.declarations, out)?;
+            out.push('}');
+        }
+        Ok(())
+    }
+
+    /// Reads every `<style>` element `usvg` would apply, wherever it sits: its
+    /// first text node, all `usvg` reads.
     pub(super) fn collect(document: &'a Document<'a>) -> Result<Self, SvgRefusal> {
         let mut sheet = StyleSheet::default();
         let mut sheets = 0;
@@ -109,8 +152,7 @@ impl<'a> StyleSheet<'a> {
                 continue;
             }
             sheets += 1;
-            for text in node.children().filter(|child| child.is_text()) {
-                let text = text.text().unwrap_or_default();
+            if let Some(text) = node.text() {
                 sheet.work = sheet.work.saturating_add(rescans(text.len()));
                 if sheet.work > MAX_SVG_STYLE_WORK {
                     return Err(SvgRefusal::ExpansionTooLarge);
@@ -211,6 +253,7 @@ impl<'a> StyleSheet<'a> {
             super::reference::css(declarations, &mut references)?;
             let block = self.blocks.len();
             self.blocks.push(Block {
+                declarations,
                 len: declarations.len() as u64,
                 colons: declarations.bytes().filter(|byte| *byte == b':').count() as u64,
                 references,
