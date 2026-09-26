@@ -55,6 +55,16 @@ pub(super) const ALLOWED: [&str; 24] = [
 /// and 1.6 ns, measured over 60-deep chains of 62 attributes.
 const ANCESTOR_NS: u64 = 20;
 const ANCESTOR_ATTRIBUTE_NS: u64 = 2;
+/// Time per byte of an ancestor's values, which `usvg` parses anew for each
+/// instance that inherits one: about 2.5 ns measured for the nearest, charged
+/// for every ancestor.
+const ANCESTOR_VALUE_NS: u64 = 2;
+/// Gradients one `href` chain may link: `usvg` walks the chain again for every
+/// shape that paints with its head, and does not remember one that failed.
+const MAX_GRADIENT_CHAIN: u64 = 4;
+/// Time `usvg` spends on each gradient of a chain per shape painting with it,
+/// looking its attributes up through the chain: about 50 ns measured.
+const CHAIN_LINK_NS: u64 = 128;
 /// Attributes `usvg` keeps on one element at most, one per name it knows.
 const KEPT_ATTRIBUTES: u64 = 256;
 
@@ -111,6 +121,8 @@ struct Paint {
     /// Whether that gradient may be in `objectBoundingBox` units, which
     /// `usvg` copies for every shape that paints with it.
     per_shape: bool,
+    /// Gradients the longest chain it names links, stops or none.
+    chain: u64,
 }
 
 struct Element<'a> {
@@ -128,6 +140,9 @@ struct Element<'a> {
     parent: Option<usize>,
     /// Attributes `usvg` may keep on the element, its CSS included.
     kept: u64,
+    /// Bytes of the element's values `usvg` may parse for an inheriting
+    /// instance: its presentation attributes and the CSS applied to it.
+    values: u64,
     /// What looking through the element's markup ancestors costs.
     above: u64,
     /// Bytes of the longest dash list the element declares.
@@ -230,6 +245,16 @@ pub(super) fn audit(document: &Document<'_>) -> Result<(), SvgRefusal> {
                 _ => None,
             },
             kept: node.attributes().len() as u64,
+            values: node
+                .attributes()
+                .filter(|attribute| {
+                    !matches!(
+                        attribute.name(),
+                        "id" | "class" | "style" | "href" | "d" | "points"
+                    )
+                })
+                .map(|attribute| attribute.value().len() as u64)
+                .sum(),
             above: 0,
             dash: 0,
             strokes: Strokes::default(),
@@ -276,7 +301,7 @@ pub(super) fn audit(document: &Document<'_>) -> Result<(), SvgRefusal> {
         .fold(sheet.dash(), u64::max);
     for element in elements
         .iter_mut()
-        .filter(|element| element.role == Role::Shape)
+        .filter(|element| matches!(element.role, Role::Shape | Role::Use))
     {
         element.bytes = element.bytes.saturating_add(dash);
     }
@@ -291,6 +316,7 @@ pub(super) fn audit(document: &Document<'_>) -> Result<(), SvgRefusal> {
                 .style
                 .saturating_add(declarations.saturating_mul(insert));
             element.kept = element.kept.saturating_add(colons);
+            element.values = element.values.saturating_add(declarations);
             element.context |= context;
             if element.links.len() + 3 * references.len() > room {
                 overflow = true;
@@ -353,7 +379,7 @@ pub(super) fn audit(document: &Document<'_>) -> Result<(), SvgRefusal> {
         element.bytes = element.bytes.saturating_add(scanned);
     }
 
-    chain_stops(&edges, &mut stops)?;
+    let chains = chain_stops(&edges, &mut stops)?;
     let per_shape: Vec<bool> = elements
         .iter()
         .map(|element| is_gradient(element.node) && !user_units(element.node))
@@ -362,6 +388,7 @@ pub(super) fn audit(document: &Document<'_>) -> Result<(), SvgRefusal> {
         for (at, &target) in painted.iter().enumerate() {
             let paint = &mut element.paint[usize::from(at >= *fills)];
             paint.stops = paint.stops.max(stops[target]);
+            paint.chain = paint.chain.max(chains[target]);
             paint.per_shape |= per_shape[target];
         }
     }
@@ -508,6 +535,7 @@ fn audit_attributes(element: &mut Element<'_>, css: &mut u64) -> Result<(), SvgR
                 return Err(SvgRefusal::ExpansionTooLarge);
             }
             element.kept += value.bytes().filter(|byte| *byte == b':').count() as u64;
+            element.values += value.len() as u64;
             let applied = (value.len() as u64).saturating_mul(declaration_work(node));
             element.style = element
                 .style
@@ -644,7 +672,9 @@ fn outline(node: Node<'_, '_>) -> Result<Outline, SvgRefusal> {
 /// Time `usvg` spends on `element` as an ancestor of one instance it looks
 /// up inherited properties for.
 fn weight(element: &Element<'_>) -> u64 {
-    ANCESTOR_NS + ANCESTOR_ATTRIBUTE_NS * element.kept.min(KEPT_ATTRIBUTES)
+    ANCESTOR_NS
+        + ANCESTOR_ATTRIBUTE_NS * element.kept.min(KEPT_ATTRIBUTES)
+        + ANCESTOR_VALUE_NS.saturating_mul(element.values)
 }
 
 /// Style work per byte of declarations applied to one instance of `node`:
@@ -655,13 +685,16 @@ fn declaration_work(node: Node<'_, '_>) -> u64 {
 }
 
 /// Raises each gradient's stops to the most any gradient its `href` chain
-/// reaches carries, since `usvg` takes the stops of the first one with any.
-/// A chain that returns to itself is refused: `usvg` would walk it forever.
-fn chain_stops(edges: &[Edges], stops: &mut [u64]) -> Result<(), SvgRefusal> {
+/// reaches carries, since `usvg` takes the stops of the first one with any,
+/// and returns how many gradients each chain links. A chain that returns to
+/// itself is refused, `usvg` would walk it forever, and so is one linking more
+/// than [`MAX_GRADIENT_CHAIN`].
+fn chain_stops(edges: &[Edges], stops: &mut [u64]) -> Result<Vec<u64>, SvgRefusal> {
     const NEW: u8 = 0;
     const OPEN: u8 = 1;
     const DONE: u8 = 2;
     let mut state = vec![NEW; stops.len()];
+    let mut chains = vec![1u64; stops.len()];
     for start in 0..stops.len() {
         if state[start] != NEW || edges[start].targets.len() == edges[start].expand {
             continue;
@@ -688,11 +721,19 @@ fn chain_stops(edges: &[Edges], stops: &mut [u64]) -> Result<(), SvgRefusal> {
                 .max()
                 .unwrap_or(0);
             stops[index] = stops[index].max(chained);
+            chains[index] = 1 + edges[index].targets[edges[index].expand..]
+                .iter()
+                .map(|target| chains[*target])
+                .max()
+                .unwrap_or(0);
+            if chains[index] > MAX_GRADIENT_CHAIN {
+                return Err(SvgRefusal::ExpansionTooLarge);
+            }
             state[index] = DONE;
             stack.pop();
         }
     }
-    Ok(())
+    Ok(chains)
 }
 
 /// Sizes the tree `usvg` would build, where every reference instantiates its
@@ -812,6 +853,10 @@ fn finish(elements: &[Element<'_>], index: usize, edges: &Edges, sizes: &[Expand
         context = 0;
     }
     for (slot, paint) in own.paint.iter().enumerate() {
+        let consumers = open[slot].saturating_add(forced[slot]);
+        size.looks = size
+            .looks
+            .saturating_add(consumers.saturating_mul(paint.chain.saturating_mul(CHAIN_LINK_NS)));
         if paint.stops > 0 {
             let copies = forced[slot].saturating_add(if paint.per_shape { open[slot] } else { 0 });
             size.copies = size.copies.saturating_add(copies);

@@ -1606,6 +1606,70 @@ pub(crate) mod tests {
         assert!(parse(document(body).as_bytes()).is_ok());
     }
 
+    #[test]
+    fn a_dash_list_is_charged_to_every_use_that_resolves_a_stroke() {
+        let uses = |count: usize| {
+            document(&format!(
+                r##"<defs><g id="e"/></defs><g stroke="#000" stroke-dasharray="{}">{}</g>"##,
+                "1 ".repeat(500),
+                r##"<use href="#e"/>"##.repeat(count)
+            ))
+        };
+        assert!(parse(uses(10).as_bytes()).is_ok());
+        assert_eq!(
+            refusal(uses(4_000).as_bytes()),
+            Some(SvgRefusal::ExpansionTooLarge)
+        );
+    }
+
+    #[test]
+    fn inherited_values_are_capped_and_charged_per_inheriting_shape() {
+        let padded = format!(r##"<g fill="{}red"/>"##, " ".repeat(1 << 20));
+        let started = std::time::Instant::now();
+        assert_eq!(
+            refusal(document(&padded).as_bytes()),
+            Some(SvgRefusal::ExpansionTooLarge),
+            "a value past MAX_SVG_VALUE_BYTES"
+        );
+        assert!(started.elapsed() < std::time::Duration::from_secs(1));
+        let long = |shapes: usize| {
+            let target = "i".repeat(250);
+            document(&format!(
+                r##"<g fill="url(#{target}) #f00" stroke="url(#{target}) #00f" clip-path="url(#{target})" mask="url(#{target})">{}</g>"##,
+                r##"<rect width="1" height="1"/>"##.repeat(shapes)
+            ))
+        };
+        assert!(parse(long(3_000).as_bytes()).is_ok());
+        assert_eq!(
+            refusal(long(20_000).as_bytes()),
+            Some(SvgRefusal::ExpansionTooLarge)
+        );
+    }
+
+    #[test]
+    fn a_gradient_chain_is_capped_and_charged_per_shape() {
+        let chain = |links: usize, shapes: usize| {
+            let gradients: String = (0..links)
+                .map(|index| {
+                    format!(
+                        r##"<linearGradient id="g{index}" href="#g{}"/>"##,
+                        index + 1
+                    )
+                })
+                .collect();
+            document(&format!(
+                "{gradients}{}",
+                r##"<rect width="1" height="1" fill="url(#g0)"/>"##.repeat(shapes)
+            ))
+        };
+        assert!(parse(chain(4, 10_000).as_bytes()).is_ok());
+        assert_eq!(
+            refusal(chain(5, 1).as_bytes()),
+            Some(SvgRefusal::ExpansionTooLarge),
+            "past the chain bound"
+        );
+    }
+
     pub(crate) fn opacity_nest(depth: usize) -> String {
         document(&format!(
             r##"{}<rect width="96" height="96" fill="#0000ff"/>{}"##,
