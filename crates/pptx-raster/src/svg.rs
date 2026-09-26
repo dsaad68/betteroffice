@@ -289,6 +289,7 @@ pub(crate) fn parse_within(bytes: &[u8], pixels: u64) -> Result<SvgImage, SvgRef
     }
     let sanitized = sanitize::sanitize(&document)?;
     drop(document);
+    markup::scan(sanitized.as_bytes())?;
     let document = usvg::roxmltree::Document::parse_with_options(
         &sanitized,
         usvg::roxmltree::ParsingOptions {
@@ -1686,6 +1687,19 @@ pub(crate) mod tests {
             price(""),
             price("Z"),
             "tiny-skia closes an open contour with the line Z draws"
+        );
+    }
+
+    #[test]
+    fn a_sanitised_document_is_held_to_the_byte_bounds_again() {
+        let class = "&#61;".repeat(200);
+        let body = format!(r#"<g class="{class}"/>"#).repeat(700);
+        let source = document(&body);
+        assert!(source.bytes().filter(|byte| *byte == b'=').count() < MAX_SVG_ATTRIBUTES);
+        assert_eq!(
+            refusal(source.as_bytes()),
+            Some(SvgRefusal::DocumentTooLarge),
+            "each reference becomes an `=` roxmltree reserves an attribute for"
         );
     }
 
