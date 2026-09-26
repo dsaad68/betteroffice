@@ -464,7 +464,7 @@ fn canonical(
             Err(_) => out.push('x'),
         },
         Kind::StopColor => match raw {
-            "currentColor" => out.push_str(raw),
+            "currentColor" => return Err(SvgRefusal::UnsupportedStyle),
             _ => match Color::from_str(raw) {
                 Ok(value) => color(value, out),
                 Err(_) => out.push('x'),
@@ -843,6 +843,28 @@ mod tests {
             r##"<rect clip-path="url(#c)" fill="url(#g)" stroke="url(#missing) red"/><use href="#c"/></svg>"##
         );
         assert!(sanitized(fine).is_ok());
+    }
+
+    #[test]
+    fn a_stop_coloured_from_its_ancestors_is_refused() {
+        for stop in [
+            r#"<stop offset="0" stop-color="currentColor"/>"#,
+            r#"<stop offset="0" style="stop-color:currentColor"/>"#,
+        ] {
+            let source = format!(
+                r#"<svg xmlns="http://www.w3.org/2000/svg"><linearGradient id="g">{stop}</linearGradient></svg>"#
+            );
+            assert_eq!(
+                sanitized(&source).err(),
+                Some(SvgRefusal::UnsupportedStyle),
+                "{stop}"
+            );
+        }
+        let sheet = concat!(
+            r#"<svg xmlns="http://www.w3.org/2000/svg"><style>stop{stop-color:currentColor}</style>"#,
+            r#"<linearGradient id="g"><stop offset="0"/></linearGradient></svg>"#
+        );
+        assert_eq!(sanitized(sheet).err(), Some(SvgRefusal::UnsupportedStyle));
     }
 
     #[test]
