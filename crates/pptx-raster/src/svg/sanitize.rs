@@ -154,7 +154,9 @@ enum Fate {
     Skipped,
 }
 
-/// An element's fate, from its parent's.
+/// An element's fate, from its parent's. A gradient keeps only its stops, and
+/// a stop nothing: `usvg` scans a gradient's children again for every shape it
+/// paints, and remembers nothing for one that fails.
 fn fate(node: Node<'_, '_>, parent: Fate) -> Result<Fate, SvgRefusal> {
     if parent == Fate::Skipped || !matches!(node.tag_name().namespace(), None | Some(SVG_NS)) {
         return Ok(Fate::Skipped);
@@ -166,7 +168,13 @@ fn fate(node: Node<'_, '_>, parent: Fate) -> Result<Fate, SvgRefusal> {
     if !ALLOWED.contains(&name) {
         return Err(SvgRefusal::UnsupportedElement);
     }
-    if parent == Fate::Undrawn || UNDRAWN.contains(&name) || name == "style" {
+    let within = node.parent_element().map(|parent| parent.tag_name().name());
+    let unpainted = match within {
+        Some("linearGradient" | "radialGradient") => name != "stop",
+        Some("stop") => true,
+        _ => false,
+    };
+    if parent == Fate::Undrawn || UNDRAWN.contains(&name) || name == "style" || unpainted {
         return Ok(Fate::Undrawn);
     }
     Ok(Fate::Written)
@@ -789,6 +797,18 @@ mod tests {
                 r##"<svg xmlns="http://www.w3.org/2000/svg"><style>.a,rect{fill:#ff0000 !important}g{stroke:#0000ff}</style>"##,
                 r##"<rect class="a" style="stroke-width:2"/></svg>"##
             )
+        );
+    }
+
+    #[test]
+    fn a_gradient_is_written_with_its_stops_alone() {
+        let source = concat!(
+            r##"<svg xmlns="http://www.w3.org/2000/svg"><linearGradient id="g"><g/><stop offset="0"><g/></stop>"##,
+            r##"<rect/></linearGradient></svg>"##
+        );
+        assert_eq!(
+            sanitized(source).unwrap(),
+            r##"<svg xmlns="http://www.w3.org/2000/svg"><linearGradient id="g"><stop offset="0"></stop></linearGradient></svg>"##
         );
     }
 

@@ -1703,6 +1703,29 @@ pub(crate) mod tests {
     }
 
     #[test]
+    fn a_gradient_is_charged_its_stops_for_every_shape_and_use_resolving_it() {
+        let stops: String = (0..MAX_SVG_GRADIENT_STOPS)
+            .map(|index| format!(r##"<stop offset="{index}" stop-color="#f00"/>"##))
+            .collect();
+        let radial = |users: &str, count: usize| {
+            document(&format!(
+                r##"<radialGradient id="g" gradientUnits="userSpaceOnUse" r="0">{stops}</radialGradient><defs><g id="e"/></defs>{}"##,
+                users.repeat(count)
+            ))
+        };
+        let shape = r##"<rect width="1" height="1" fill="url(#g)"/>"##;
+        let user = r##"<use href="#e" fill="url(#g)"/>"##;
+        assert!(parse(radial(shape, 100).as_bytes()).is_ok());
+        for users in [shape, user] {
+            assert_eq!(
+                refusal(radial(users, 5_000).as_bytes()),
+                Some(SvgRefusal::ExpansionTooLarge),
+                "{users}"
+            );
+        }
+    }
+
+    #[test]
     fn a_sanitised_document_is_held_to_the_byte_bounds_again() {
         let class = "&#61;".repeat(200);
         let body = format!(r#"<g class="{class}"/>"#).repeat(700);

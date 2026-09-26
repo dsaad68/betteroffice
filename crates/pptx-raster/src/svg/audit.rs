@@ -65,6 +65,10 @@ const MAX_GRADIENT_CHAIN: u64 = 4;
 /// Time `usvg` spends on each gradient of a chain per shape painting with it,
 /// looking its attributes up through the chain: about 50 ns measured.
 const CHAIN_LINK_NS: u64 = 128;
+/// Time per stop `usvg` spends converting a gradient for one shape or `use`
+/// resolving it, which it repeats for a conversion that fails or yields only
+/// a colour, as a radial with no radius does: about 32 ns measured.
+const STOP_NS: u64 = 64;
 /// Attributes `usvg` keeps on one element at most, one per name it knows.
 const KEPT_ATTRIBUTES: u64 = 256;
 
@@ -851,12 +855,17 @@ fn finish(elements: &[Element<'_>], index: usize, edges: &Edges, sizes: &[Expand
             *slot = slot.saturating_add(context);
         }
         context = 0;
+        for slot in &mut open {
+            *slot = slot.saturating_add(1);
+        }
     }
     for (slot, paint) in own.paint.iter().enumerate() {
         let consumers = open[slot].saturating_add(forced[slot]);
-        size.looks = size
-            .looks
-            .saturating_add(consumers.saturating_mul(paint.chain.saturating_mul(CHAIN_LINK_NS)));
+        let convert = paint
+            .chain
+            .saturating_mul(CHAIN_LINK_NS)
+            .saturating_add(paint.stops.saturating_mul(STOP_NS));
+        size.looks = size.looks.saturating_add(consumers.saturating_mul(convert));
         if paint.stops > 0 {
             let copies = forced[slot].saturating_add(if paint.per_shape { open[slot] } else { 0 });
             size.copies = size.copies.saturating_add(copies);
