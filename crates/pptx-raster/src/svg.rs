@@ -1754,6 +1754,25 @@ pub(crate) mod tests {
         );
     }
 
+    #[test]
+    fn an_id_carried_by_many_elements_is_checked_at_the_cost_of_one() {
+        let body = format!(
+            "{}{}",
+            r##"<linearGradient id="g"/>"##.repeat(40_000),
+            r##"<rect style="fill:url(#g);stroke:url(#g);fill:url(#g);stroke:url(#g)"/>"##
+                .repeat(40_000)
+        );
+        let source = document(&body);
+        assert!(source.len() <= MAX_SVG_BYTES);
+        let started = std::time::Instant::now();
+        assert_eq!(
+            refusal(source.as_bytes()),
+            Some(SvgRefusal::DocumentTooLarge),
+            "the sanitised text outgrows its bound after every reference is checked"
+        );
+        assert!(started.elapsed() < std::time::Duration::from_secs(30));
+    }
+
     pub(crate) fn opacity_nest(depth: usize) -> String {
         document(&format!(
             r##"{}<rect width="96" height="96" fill="#0000ff"/>{}"##,

@@ -103,8 +103,17 @@ struct Ids<'a> {
     /// Ids of elements not written: a reference to one is refused, as `usvg`
     /// would have reached content the audit never read.
     dropped: HashSet<&'a str>,
-    /// The element names each written id is carried by.
-    written: HashMap<&'a str, Vec<&'a str>>,
+    /// The kinds of element each written id is carried by, one bit per name
+    /// in [`ALLOWED`], so a check costs the same however many carry it.
+    written: HashMap<&'a str, u32>,
+}
+
+/// The bit [`Ids::written`] records a kind of element under.
+fn kind_bit(name: &str) -> u32 {
+    ALLOWED
+        .iter()
+        .position(|allowed| *allowed == name)
+        .map_or(0, |index| 1 << index)
 }
 
 struct Sanitizer<'a> {
@@ -190,8 +199,8 @@ impl<'a> Sanitizer<'a> {
                 .filter(|attribute| attribute.name() == "id")
             {
                 if fate == Fate::Written && attribute.namespace().is_none() {
-                    let names = self.ids.written.entry(attribute.value()).or_default();
-                    names.push(node.tag_name().name());
+                    let kinds = self.ids.written.entry(attribute.value()).or_default();
+                    *kinds |= kind_bit(node.tag_name().name());
                 } else {
                     self.ids.dropped.insert(attribute.value());
                 }
@@ -718,10 +727,11 @@ fn check_link(target: &str, property: &str, ids: &Ids<'_>) -> Result<(), SvgRefu
     if !safe(target) || ids.dropped.contains(target) {
         return Err(SvgRefusal::UnsupportedElement);
     }
-    if let (Some(expected), Some(names)) = (expected(property), ids.written.get(target))
-        && names.iter().any(|name| !expected.contains(name))
-    {
-        return Err(SvgRefusal::UnsupportedElement);
+    if let (Some(expected), Some(kinds)) = (expected(property), ids.written.get(target)) {
+        let allowed = expected.iter().fold(0, |mask, name| mask | kind_bit(name));
+        if kinds & !allowed != 0 {
+            return Err(SvgRefusal::UnsupportedElement);
+        }
     }
     Ok(())
 }
