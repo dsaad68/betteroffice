@@ -69,10 +69,12 @@ it, and the shares are checked at compile time to sum within it.
   attributes as the declarations `simplecss` yields. Any attribute value but
   path data, points and `style` is held to `MAX_SVG_VALUE_BYTES`, and the
   sanitised document to `MAX_SVG_SANITIZED_BYTES`. Metadata, foreign markup,
-  text and embedded images are left out, and a reference into them, or to an
-  id that cannot be written back unchanged, is refused. An attribute on the
-  SVG, XLink or XML prefix other than `xlink:href`, `xlink:title`,
-  `xml:space` and `xml:lang` is refused too.
+  text, embedded images and anything in a gradient but its stops are left out,
+  and a reference into them, to an id that cannot be written back unchanged,
+  or to an existing element of another kind than the property converts is
+  refused. So is context paint, and an attribute on the SVG, XLink or XML
+  prefix other than `xlink:href`, `xlink:title`, `xml:space` and
+  `xml:lang`. The sanitised bytes pass the same pre-parse scan as the source.
 - **Before `usvg`.** The audit reads the sanitised document, exactly what
   `usvg` will. Every reference must name a fragment of the document, and the
   graph they form must be acyclic; a gradient chain links at most four. The
@@ -93,8 +95,8 @@ it, and the shares are checked at compile time to sum within it.
   to measure it, within `MAX_SVG_STROKE_VERBS`; curves and widths must stay
   within `MAX_SVG_STROKE_SPAN` tolerances, and rotations and skews are refused.
   The inherited-property lookups `usvg` makes through every ancestor, the
-  values it parses anew and the gradient chains it walks per shape are
-  charged to `MAX_SVG_INHERIT_WORK`.
+  values it parses anew, and the gradient chains and stops it converts again
+  for every shape and `use` are charged to `MAX_SVG_INHERIT_WORK`.
 - **Before `resvg`.** The converted tree is priced: group layers stack at most
   `MAX_SVG_LAYER_DEPTH` deep and are charged to the slide's image budget with
   the output raster, painted area stays within `MAX_SVG_OVERDRAW` times that
