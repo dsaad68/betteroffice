@@ -339,6 +339,9 @@ impl<'a> Sanitizer<'a> {
                     let Some(kind) = attribute_kind(element, name) else {
                         continue;
                     };
+                    if font_relative(element, name, raw) {
+                        return Err(SvgRefusal::ExpansionTooLarge);
+                    }
                     canonical(kind, name, raw, &mut value, &self.ids)?;
                 }
             }
@@ -567,6 +570,19 @@ fn canonical(
         Kind::Path | Kind::Points => unreachable!(),
     }
     Ok(())
+}
+
+/// Whether a gradient coordinate or radius is in `em` or `ex`: `usvg` walks
+/// and re-reads the gradient's ancestors for a font size every time a shape
+/// resolves the gradient, and keeps nothing when the result is a solid colour.
+fn font_relative(element: &str, name: &str, raw: &str) -> bool {
+    matches!(element, "linearGradient" | "radialGradient")
+        && matches!(
+            name,
+            "x1" | "y1" | "x2" | "y2" | "cx" | "cy" | "r" | "fx" | "fy" | "fr"
+        )
+        && Length::from_str(raw)
+            .is_ok_and(|length| matches!(length.unit, LengthUnit::Em | LengthUnit::Ex))
 }
 
 /// Path data as `svgtypes` parses it for `usvg`, up to its first error, each
@@ -841,6 +857,27 @@ mod tests {
         let fine = concat!(
             r##"<svg xmlns="http://www.w3.org/2000/svg"><clipPath id="c"/><linearGradient id="g"/>"##,
             r##"<rect clip-path="url(#c)" fill="url(#g)" stroke="url(#missing) red"/><use href="#c"/></svg>"##
+        );
+        assert!(sanitized(fine).is_ok());
+    }
+
+    #[test]
+    fn a_gradient_placed_in_font_units_is_refused() {
+        for gradient in [
+            r#"<radialGradient id="g" gradientUnits="userSpaceOnUse" r="0em"/>"#,
+            r#"<radialGradient id="g" fx=" 1ex"/>"#,
+            r#"<linearGradient id="g" x2="2em"/>"#,
+        ] {
+            let source = format!(r#"<svg xmlns="http://www.w3.org/2000/svg">{gradient}</svg>"#);
+            assert_eq!(
+                sanitized(&source).err(),
+                Some(SvgRefusal::ExpansionTooLarge),
+                "{gradient}"
+            );
+        }
+        let fine = concat!(
+            r#"<svg xmlns="http://www.w3.org/2000/svg"><radialGradient id="g" r="50%" cx="1in"/>"#,
+            r#"<rect x="1em" width="2ex" style="x1:1em"/></svg>"#
         );
         assert!(sanitized(fine).is_ok());
     }
