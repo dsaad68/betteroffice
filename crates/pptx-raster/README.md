@@ -72,9 +72,10 @@ it, and the shares are checked at compile time to sum within it.
   text, embedded images and anything in a gradient but its stops are left out,
   and a reference into them, to an id that cannot be written back unchanged,
   or to an existing element of another kind than the property converts is
-  refused. So is context paint, and an attribute on the SVG, XLink or XML
-  prefix other than `xlink:href`, `xlink:title`, `xml:space` and
-  `xml:lang`. The sanitised bytes pass the same pre-parse scan as the source.
+  refused. So are context paint, a stop coloured `currentColor`, and an
+  attribute on the SVG, XLink or XML prefix other than `xlink:href`,
+  `xlink:title`, `xml:space` and `xml:lang`. The sanitised bytes pass the
+  same pre-parse scan as the source.
 - **Before `usvg`.** The audit reads the sanitised document, exactly what
   `usvg` will. Every reference must name a fragment of the document, and the
   graph they form must be acyclic; a gradient chain links at most four. The
