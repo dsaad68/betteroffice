@@ -6,7 +6,7 @@
 //! A value `usvg` would fail to parse is written as `x`, which it fails to
 //! parse the same way, so presence and fallback are kept.
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::fmt::Write as _;
 use std::str::FromStr;
 
@@ -97,13 +97,35 @@ fn attribute_kind(element: &str, name: &str) -> Option<Kind> {
     })
 }
 
-struct Sanitizer<'a> {
-    out: String,
+/// What each id names, for the references written into the document.
+#[derive(Default)]
+struct Ids<'a> {
     /// Ids of elements not written: a reference to one is refused, as `usvg`
     /// would have reached content the audit never read.
     dropped: HashSet<&'a str>,
+    /// The element names each written id is carried by.
+    written: HashMap<&'a str, Vec<&'a str>>,
+}
+
+struct Sanitizer<'a> {
+    out: String,
+    ids: Ids<'a>,
     /// Style work spent tokenizing CSS text here.
     work: u64,
+}
+
+/// The elements a reference from `property` may name. `usvg` walks whatever it
+/// names looking for a cycle before it checks the kind, so a reference to any
+/// other element that exists is refused. `None` for a `use`, which takes any.
+fn expected(property: &str) -> Option<&'static [&'static str]> {
+    Some(match property {
+        "fill" | "stroke" | "gradient" => &["linearGradient", "radialGradient"],
+        "clip-path" => &["clipPath"],
+        "mask" => &["mask"],
+        "marker" | "marker-start" | "marker-mid" | "marker-end" => &["marker"],
+        "filter" => &["filter"],
+        _ => return None,
+    })
 }
 
 /// The document as `usvg` may read it, or a refusal.
@@ -114,10 +136,10 @@ pub(super) fn sanitize(document: &Document<'_>) -> Result<String, SvgRefusal> {
     }
     let mut sanitizer = Sanitizer {
         out: String::with_capacity(document.input_text().len().min(MAX_SVG_SANITIZED_BYTES)),
-        dropped: HashSet::new(),
+        ids: Ids::default(),
         work: 0,
     };
-    sanitizer.collect_dropped(root);
+    sanitizer.collect_ids(root);
     sanitizer.write_tree(root, document)?;
     Ok(sanitizer.out)
 }
@@ -132,6 +154,7 @@ enum Fate {
     Skipped,
 }
 
+/// An element's fate, from its parent's.
 fn fate(node: Node<'_, '_>, parent: Fate) -> Result<Fate, SvgRefusal> {
     if parent == Fate::Skipped || !matches!(node.tag_name().namespace(), None | Some(SVG_NS)) {
         return Ok(Fate::Skipped);
@@ -150,16 +173,19 @@ fn fate(node: Node<'_, '_>, parent: Fate) -> Result<Fate, SvgRefusal> {
 }
 
 impl<'a> Sanitizer<'a> {
-    fn collect_dropped(&mut self, root: Node<'a, 'a>) {
+    fn collect_ids(&mut self, root: Node<'a, 'a>) {
         let mut stack = vec![(root, Fate::Written)];
         while let Some((node, parent)) = stack.pop() {
             let fate = fate(node, parent).unwrap_or(Fate::Skipped);
-            if fate != Fate::Written {
-                for attribute in node
-                    .attributes()
-                    .filter(|attribute| attribute.name() == "id")
-                {
-                    self.dropped.insert(attribute.value());
+            for attribute in node
+                .attributes()
+                .filter(|attribute| attribute.name() == "id")
+            {
+                if fate == Fate::Written && attribute.namespace().is_none() {
+                    let names = self.ids.written.entry(attribute.value()).or_default();
+                    names.push(node.tag_name().name());
+                } else {
+                    self.ids.dropped.insert(attribute.value());
                 }
             }
             for child in node.children().filter(|child| child.is_element()) {
@@ -233,10 +259,10 @@ impl<'a> Sanitizer<'a> {
     fn write_styles(&mut self, document: &'a Document<'a>) -> Result<(), SvgRefusal> {
         let sheet = StyleSheet::collect(document)?;
         let mut rules = String::new();
-        let dropped = &self.dropped;
+        let ids = &self.ids;
         let mut work = self.work;
         sheet.write(&mut rules, |text, out| {
-            declarations(text, out, dropped, &mut work)
+            declarations(text, out, ids, &mut work)
         })?;
         self.work = work;
         if !rules.is_empty() {
@@ -287,7 +313,7 @@ impl<'a> Sanitizer<'a> {
                     style::screen(raw)?;
                     let mut found = Vec::new();
                     reference::css(raw, &mut found)?;
-                    declarations(raw, &mut value, &self.dropped, &mut self.work)?;
+                    declarations(raw, &mut value, &self.ids, &mut self.work)?;
                     if value.is_empty() {
                         continue;
                     }
@@ -296,7 +322,7 @@ impl<'a> Sanitizer<'a> {
                     let Some(kind) = attribute_kind(element, name) else {
                         continue;
                     };
-                    canonical(kind, raw, &mut value, &self.dropped)?;
+                    canonical(kind, name, raw, &mut value, &self.ids)?;
                 }
             }
             self.write_attribute(name, &value);
@@ -305,7 +331,8 @@ impl<'a> Sanitizer<'a> {
         if let (true, Some(raw)) = (followed, href.or(xlink_href))
             && let Some(target) = reference::href(raw)?
         {
-            check_link(target, &self.dropped)?;
+            let property = if element == "use" { "use" } else { "gradient" };
+            check_link(target, property, &self.ids)?;
             value.clear();
             value.push('#');
             value.push_str(target);
@@ -328,7 +355,7 @@ impl<'a> Sanitizer<'a> {
 fn declarations(
     text: &str,
     out: &mut String,
-    dropped: &HashSet<&str>,
+    ids: &Ids<'_>,
     work: &mut u64,
 ) -> Result<(), SvgRefusal> {
     *work = work.saturating_add(style::rescans(text.len()));
@@ -341,7 +368,7 @@ fn declarations(
             continue;
         };
         value.clear();
-        canonical(kind, token.value, &mut value, dropped)?;
+        canonical(kind, token.name, token.value, &mut value, ids)?;
         if !out.is_empty() && !out.ends_with('{') {
             out.push(';');
         }
@@ -355,12 +382,13 @@ fn declarations(
     Ok(())
 }
 
-/// Writes `raw`, read as `kind`, in canonical form.
+/// Writes `raw`, the value of `name` read as `kind`, in canonical form.
 fn canonical(
     kind: Kind,
+    name: &str,
     raw: &str,
     out: &mut String,
-    dropped: &HashSet<&str>,
+    ids: &Ids<'_>,
 ) -> Result<(), SvgRefusal> {
     match kind {
         Kind::Path => return path(raw, out),
@@ -395,11 +423,12 @@ fn canonical(
         Kind::Paint => match Paint::from_str(raw) {
             Ok(Paint::None | Paint::Inherit) => out.push_str("none"),
             Ok(Paint::CurrentColor) => out.push_str("currentColor"),
-            Ok(Paint::ContextFill) => out.push_str("context-fill"),
-            Ok(Paint::ContextStroke) => out.push_str("context-stroke"),
+            Ok(Paint::ContextFill | Paint::ContextStroke) => {
+                return Err(SvgRefusal::UnsupportedStyle);
+            }
             Ok(Paint::Color(value)) => color(value, out),
             Ok(Paint::FuncIRI(target, fallback)) => {
-                check_link(target, dropped)?;
+                check_link(target, name, ids)?;
                 let _ = write!(out, "url(#{target})");
                 match fallback {
                     None => {}
@@ -428,7 +457,7 @@ fn canonical(
             "none" => out.push_str(raw),
             _ => match FuncIRI::from_str(raw) {
                 Ok(FuncIRI(target)) => {
-                    check_link(target, dropped)?;
+                    check_link(target, name, ids)?;
                     let _ = write!(out, "url(#{target})");
                 }
                 Err(_) => out.push('x'),
@@ -674,10 +703,16 @@ fn safe(id: &str) -> bool {
             .all(|c| !c.is_whitespace() && !c.is_control() && !"()'\"\\;,<>&{}".contains(c))
 }
 
-/// Refuses a reference that could not be written back unchanged, or that
-/// names content left out of the document.
-fn check_link(target: &str, dropped: &HashSet<&str>) -> Result<(), SvgRefusal> {
-    if !safe(target) || dropped.contains(target) {
+/// Refuses a reference from `property` that could not be written back
+/// unchanged, that names content left out of the document, or that names an
+/// element of another kind than `property` converts.
+fn check_link(target: &str, property: &str, ids: &Ids<'_>) -> Result<(), SvgRefusal> {
+    if !safe(target) || ids.dropped.contains(target) {
+        return Err(SvgRefusal::UnsupportedElement);
+    }
+    if let (Some(expected), Some(names)) = (expected(property), ids.written.get(target))
+        && names.iter().any(|name| !expected.contains(name))
+    {
         return Err(SvgRefusal::UnsupportedElement);
     }
     Ok(())
@@ -755,6 +790,38 @@ mod tests {
                 r##"<rect class="a" style="stroke-width:2"/></svg>"##
             )
         );
+    }
+
+    #[test]
+    fn a_reference_to_another_kind_of_element_is_refused() {
+        for body in [
+            r##"<g id="g"/><rect clip-path="url(#g)"/>"##,
+            r##"<g id="g"/><rect fill="url(#g) red"/>"##,
+            r##"<g id="g"/><rect style="stroke:url(#g)"/>"##,
+            r##"<clipPath id="c"/><rect mask="url(#c)"/>"##,
+            r##"<rect id="r"/><linearGradient href="#r"/>"##,
+        ] {
+            let source = format!(r#"<svg xmlns="http://www.w3.org/2000/svg">{body}</svg>"#);
+            assert_eq!(
+                sanitized(&source).err(),
+                Some(SvgRefusal::UnsupportedElement),
+                "{body}"
+            );
+        }
+        let fine = concat!(
+            r##"<svg xmlns="http://www.w3.org/2000/svg"><clipPath id="c"/><linearGradient id="g"/>"##,
+            r##"<rect clip-path="url(#c)" fill="url(#g)" stroke="url(#missing) red"/><use href="#c"/></svg>"##
+        );
+        assert!(sanitized(fine).is_ok());
+    }
+
+    #[test]
+    fn context_paint_is_refused() {
+        for paint in ["fill=\"context-fill\"", "style=\"stroke: context-stroke\""] {
+            let source =
+                format!(r#"<svg xmlns="http://www.w3.org/2000/svg"><rect {paint}/></svg>"#);
+            assert_eq!(sanitized(&source).err(), Some(SvgRefusal::UnsupportedStyle));
+        }
     }
 
     #[test]

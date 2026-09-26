@@ -842,13 +842,23 @@ pub(crate) mod tests {
     }
 
     #[test]
-    fn a_reference_only_reaches_the_kind_of_element_usvg_converts_for_it() {
+    fn a_reference_reaches_only_the_kind_of_element_usvg_converts_for_it() {
         let body = concat!(
-            r##"<g id="x"><rect width="96" height="96" fill="url(#x)" clip-path="url(#x)"/></g>"##,
             r##"<linearGradient id="g"><stop offset="0" stop-color="#0f0"/></linearGradient>"##,
-            r##"<clipPath id="c"><rect width="96" height="96" fill="url(#g)"/></clipPath>"##
+            r##"<clipPath id="c"><rect width="96" height="96" fill="url(#g)"/></clipPath>"##,
+            r##"<rect width="96" height="96" fill="url(#g)" clip-path="url(#c)"/>"##
         );
         assert!(parse(document(body).as_bytes()).is_ok());
+        let wrong = format!(
+            r##"<clipPath id="c">{}</clipPath><g id="x">{}</g><rect clip-path="url(#c)"/>"##,
+            r##"<rect width="1" height="1" clip-path="url(#x)"/>"##.repeat(2_000),
+            "<g/>".repeat(10_000)
+        );
+        assert_eq!(
+            refusal(document(&wrong).as_bytes()),
+            Some(SvgRefusal::UnsupportedElement),
+            "usvg walks a group named as a clip path before it checks its kind"
+        );
     }
 
     #[test]
@@ -997,7 +1007,7 @@ pub(crate) mod tests {
     fn an_id_many_elements_share_is_walked_within_a_bound() {
         let source = document(&format!(
             "{}{}",
-            r##"<g id="x"/>"##.repeat(12_000),
+            r##"<clipPath id="x"/>"##.repeat(12_000),
             r##"<rect width="1" height="1" clip-path="url(#x)"/>"##.repeat(12_000)
         ));
         let started = std::time::Instant::now();
@@ -1301,11 +1311,13 @@ pub(crate) mod tests {
                 r##"<use href="#r" fill="url(#g)"/>"##.repeat(uses)
             ))
         };
-        assert!(parse(copies(4).as_bytes()).is_ok());
-        assert_eq!(
-            refusal(copies(3_000).as_bytes()),
-            Some(SvgRefusal::ExpansionTooLarge)
-        );
+        for uses in [4, 3_000] {
+            assert_eq!(
+                refusal(copies(uses).as_bytes()),
+                Some(SvgRefusal::UnsupportedStyle),
+                "context paint is refused outright"
+            );
+        }
     }
 
     #[test]
