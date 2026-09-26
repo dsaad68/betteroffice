@@ -138,8 +138,6 @@ struct Element<'a> {
     bytes: u64,
     style: u64,
     paint: [Paint; 2],
-    /// Paints with the context element's paint, as `context-fill` does.
-    context: bool,
     outline: Outline,
     parent: Option<usize>,
     /// Attributes `usvg` may keep on the element, its CSS included.
@@ -171,11 +169,6 @@ struct Expanded {
     depth: u64,
     /// Consumers inheriting the paint set above.
     open: [u64; 2],
-    /// Consumers that copy that paint whatever its units: a context paint
-    /// `usvg` resolves against a `use`.
-    forced: [u64; 2],
-    /// Shapes waiting for the nearest `use` to hand them its paint.
-    context: u64,
     /// Gradient copies, the stops they carry, and every gradient paint.
     copies: u64,
     stops: u64,
@@ -242,7 +235,6 @@ pub(super) fn audit(document: &Document<'_>) -> Result<(), SvgRefusal> {
             bytes: 0,
             style: 0,
             paint: [Paint::default(); 2],
-            context: false,
             outline: Outline::default(),
             parent: match parent {
                 Some(Slot::Element(parent)) => Some(parent),
@@ -315,13 +307,12 @@ pub(super) fn audit(document: &Document<'_>) -> Result<(), SvgRefusal> {
     for element in &mut elements {
         let mut overflow = false;
         let insert = declaration_work(element.node);
-        sheet.each_match(element.node, |declarations, colons, references, context| {
+        sheet.each_match(element.node, |declarations, colons, references| {
             element.style = element
                 .style
                 .saturating_add(declarations.saturating_mul(insert));
             element.kept = element.kept.saturating_add(colons);
             element.values = element.values.saturating_add(declarations);
-            element.context |= context;
             if element.links.len() + 3 * references.len() > room {
                 overflow = true;
                 return;
@@ -547,7 +538,6 @@ fn audit_attributes(element: &mut Element<'_>, css: &mut u64) -> Result<(), SvgR
                 .saturating_add(applied);
             super::style::screen(value)?;
             element.dash = element.dash.max(element.strokes.read(value)?);
-            element.context |= value.contains("context-");
             let mut targets = Vec::new();
             reference::css(value, &mut targets)?;
             for target in targets {
@@ -571,7 +561,6 @@ fn audit_attributes(element: &mut Element<'_>, css: &mut u64) -> Result<(), SvgR
                 };
                 element.paint[slot].set |= value != "inherit";
                 element.strokes.stroked |= slot == 1 && value.trim() != "none";
-                element.context |= reference::context_paint(value);
                 if let Some(target) = reference::paint(value)? {
                     element.links.push((link, target));
                 }
@@ -794,7 +783,7 @@ fn expand(elements: &[Element<'_>], edges: &[Edges], gradients: u64) -> Result<(
 /// a clip path's content also through the clip path's own ancestors. A
 /// shape's fill and stroke resolve at the nearest element up its instance
 /// that sets them, and a gradient there is copied per shape when its units are
-/// the shape's box, or always when a `use` hands it down as context paint.
+/// the shape's box. A `use` resolves both itself, for any context paint inside.
 fn finish(elements: &[Element<'_>], index: usize, edges: &Edges, sizes: &[Expanded]) -> Expanded {
     let own = &elements[index];
     let mut size = Expanded {
@@ -834,64 +823,43 @@ fn finish(elements: &[Element<'_>], index: usize, edges: &Edges, sizes: &[Expand
         .clips
         .saturating_add(u64::from(clipped) + u64::from(viewport));
     let mut open = [0u64; 2];
-    let mut forced = [0u64; 2];
-    let mut context = 0u64;
     match own.role {
         Role::Shape => open = [1, 1],
         Role::Group | Role::Use => {
             for &target in &edges.targets[..edges.render] {
-                let inner = &sizes[target];
-                for slot in 0..2 {
-                    open[slot] = open[slot].saturating_add(inner.open[slot]);
-                    forced[slot] = forced[slot].saturating_add(inner.forced[slot]);
+                for (slot, inner) in open.iter_mut().zip(sizes[target].open) {
+                    *slot = slot.saturating_add(inner);
                 }
-                context = context.saturating_add(inner.context);
             }
         }
         Role::Inert => {}
     }
     if own.role == Role::Use {
-        for slot in &mut forced {
-            *slot = slot.saturating_add(context);
-        }
-        context = 0;
         for slot in &mut open {
             *slot = slot.saturating_add(1);
         }
     }
     for (slot, paint) in own.paint.iter().enumerate() {
-        let consumers = open[slot].saturating_add(forced[slot]);
+        let consumers = open[slot];
         let convert = paint
             .chain
             .saturating_mul(CHAIN_LINK_NS)
             .saturating_add(paint.stops.saturating_mul(STOP_NS));
         size.looks = size.looks.saturating_add(consumers.saturating_mul(convert));
         if paint.stops > 0 {
-            let copies = forced[slot].saturating_add(if paint.per_shape { open[slot] } else { 0 });
+            let copies = if paint.per_shape { open[slot] } else { 0 };
             size.copies = size.copies.saturating_add(copies);
             size.stops = size
                 .stops
                 .saturating_add(copies.saturating_mul(paint.stops));
-            size.paints = size
-                .paints
-                .saturating_add(open[slot].saturating_add(forced[slot]));
+            size.paints = size.paints.saturating_add(open[slot]);
         }
     }
-    if own.context {
-        let waiting = open
-            .iter()
-            .chain(&forced)
-            .fold(0u64, |sum, count| sum.saturating_add(*count));
-        context = context.saturating_add(waiting);
-    }
     for (slot, paint) in own.paint.iter().enumerate() {
-        if paint.set || own.context {
+        if paint.set {
             open[slot] = 0;
-            forced[slot] = 0;
         }
     }
     size.open = open;
-    size.forced = forced;
-    size.context = context;
     size
 }

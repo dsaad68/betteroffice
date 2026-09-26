@@ -108,8 +108,8 @@ pub(super) const SVG_TRANSIENT_BYTES: u64 = MAX_SVG_PATH_BYTES as u64 * STROKE_B
 /// list, quadratic in its length, and `tiny-skia` tests every stop per pixel.
 pub const MAX_SVG_GRADIENT_STOPS: usize = 256;
 /// Bytes of the gradient copies `usvg` makes per shape: one for every shape
-/// that paints with a gradient in its own box's units or with a `use`'s
-/// context paint, each ~256 bytes plus 12 a stop. 6 MiB of the envelope.
+/// or `use` that paints with a gradient in its own box's units, each ~256
+/// bytes plus 12 a stop. 6 MiB of the envelope.
 pub const MAX_SVG_PAINT_BYTES: u64 = 6 << 20;
 /// What `usvg` spends collecting distinct gradients and clip paths, which it
 /// compares each reference against every one collected so far at about a
@@ -1735,6 +1735,22 @@ pub(crate) mod tests {
             refusal(source.as_bytes()),
             Some(SvgRefusal::DocumentTooLarge),
             "each reference becomes an `=` roxmltree reserves an attribute for"
+        );
+    }
+
+    #[test]
+    fn a_reference_mentioning_context_does_not_hide_inherited_paint() {
+        let stops: String = (0..MAX_SVG_GRADIENT_STOPS)
+            .map(|index| format!(r##"<stop offset="{index}" stop-color="#f00"/>"##))
+            .collect();
+        let body = format!(
+            r##"<linearGradient id="g">{stops}</linearGradient><g stroke="url(#g)">{}</g>"##,
+            r##"<rect width="1" height="1" style="fill:url(#context-missing)"/>"##.repeat(3_000)
+        );
+        assert_eq!(
+            refusal(document(&body).as_bytes()),
+            Some(SvgRefusal::ExpansionTooLarge),
+            "every shape still copies the stroke gradient it inherits"
         );
     }
 

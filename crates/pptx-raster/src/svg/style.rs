@@ -108,8 +108,6 @@ struct Block<'a> {
     /// Declarations at most, each an attribute `usvg` adds to the element.
     colons: u64,
     references: Vec<&'a str>,
-    /// Whether a declaration may paint with the context element's paint.
-    context: bool,
 }
 
 impl<'a> StyleSheet<'a> {
@@ -199,13 +197,13 @@ impl<'a> StyleSheet<'a> {
             .saturating_add(self.parts.saturating_mul(4 + 2 * attributes + values / 2))
     }
 
-    /// Calls `matched` with the block length, its declarations at most, its
-    /// same-document references and context paint, for every rule that may
-    /// apply to `node`: a superset of what `simplecss` matches.
+    /// Calls `matched` with the block length, its declarations at most and its
+    /// same-document references, for every rule that may apply to `node`: a
+    /// superset of what `simplecss` matches.
     pub(super) fn each_match(
         &self,
         node: Node<'_, '_>,
-        mut matched: impl FnMut(u64, u64, &[&'a str], bool),
+        mut matched: impl FnMut(u64, u64, &[&'a str]),
     ) {
         if self.rules.is_empty() {
             return;
@@ -226,7 +224,7 @@ impl<'a> StyleSheet<'a> {
                 && rule.ids.iter().all(|name| id == Some(*name));
             if applies {
                 let block = &self.blocks[rule.block];
-                matched(block.len, block.colons, &block.references, block.context);
+                matched(block.len, block.colons, &block.references);
             }
         }
     }
@@ -257,7 +255,6 @@ impl<'a> StyleSheet<'a> {
                 len: declarations.len() as u64,
                 colons: declarations.bytes().filter(|byte| *byte == b':').count() as u64,
                 references,
-                context: declarations.contains("context-"),
             });
             for selector in rest[..open].split(',') {
                 let rule = compound(

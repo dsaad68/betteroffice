@@ -35,15 +35,6 @@ pub(super) fn paint(value: &str) -> Result<Option<&str>, SvgRefusal> {
     local(value, target)
 }
 
-/// Whether a `fill` or `stroke` value paints with the context element's
-/// paint, which `usvg` copies for every shape that uses it.
-pub(super) fn context_paint(value: &str) -> bool {
-    matches!(
-        Paint::from_str(value),
-        Ok(Paint::ContextFill | Paint::ContextStroke)
-    )
-}
-
 /// Refuses a value that mentions `url(` but does not parse as a same-document
 /// reference: `usvg` would follow nothing, and nothing outside is fetched,
 /// but such a document is declined rather than drawn half-resolved.
